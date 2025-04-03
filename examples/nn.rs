@@ -1,3 +1,4 @@
+use open_hypergraphs::prelude::Arrow;
 use safetensors;
 use std::collections::HashMap;
 
@@ -6,7 +7,7 @@ use catgrad::{
         eval::EvalState,
         ndarray::{NdArray, TaggedNdArray},
     },
-    core::{identity, Dtype, NdArrayType, Operation, Shape, Term, Type},
+    core::{identity, Dtype, NdArrayType, Operation, Shape, Term},
 };
 
 #[cfg(test)]
@@ -119,8 +120,85 @@ fn tanh(x: &NdArray<f32>) -> TaggedNdArray {
     result.clone()
 }
 
-// Linear layer function
+#[allow(unused)]
+fn show(name: &str, term: &Term) {
+    println!(
+        "{name} sources: {:?}\n{name} targets: {:?}",
+        term.source(),
+        term.target()
+    );
+}
+
+fn linear_layer(
+    // batch_size: usize,
+    input_features: usize,
+    output_features: usize,
+    dtype: Dtype,
+) -> Term {
+    let batch_size = 1;
+
+    // Input
+    let x_type = NdArrayType {
+        shape: Shape(vec![batch_size, input_features]),
+        dtype: dtype.clone(),
+    };
+    // Weights
+    let w_type = NdArrayType {
+        shape: Shape(vec![output_features, input_features]),
+        dtype: dtype.clone(),
+    };
+    // Result
+    let out_type = NdArrayType {
+        shape: Shape(vec![batch_size, output_features]),
+        dtype: dtype.clone(),
+    };
+
+    let id_x = identity(vec![x_type.clone()]);
+    let id_b = identity(vec![out_type.clone()]);
+
+    let transpose = Operation::Transpose {
+        x: w_type.clone(),
+        dim0: 0,
+        dim1: 1,
+    }
+    .term();
+
+    let matmul = Operation::MatrixMultiply {
+        n: Shape::empty(),
+        a: batch_size,
+        b: input_features,
+        c: output_features,
+        dtype: dtype.clone(),
+    }
+    .term();
+
+    let add = Operation::Add(out_type.clone()).term();
+
+    let step1 = &(&id_x | &transpose) | &id_b;
+    let step2 = &matmul | &id_b;
+    let step3 = add;
+
+    let term = (&(&step1 >> &step2).unwrap() >> &step3).unwrap();
+
+    term
+}
+
 fn linear(x: &NdArray<f32>, w: &NdArray<f32>, b: &NdArray<f32>) -> TaggedNdArray {
+    let lin = linear_layer(x.shape.0[1], w.shape.0[0], Dtype::F32);
+    // Evaluate add step
+    let mut add_state = EvalState::new(lin);
+    let [result] =
+        add_state.eval_with(vec![x.clone().into(), w.clone().into(), b.clone().into()])[..]
+    else {
+        panic!("unexpected linear layer result")
+    };
+
+    result.clone()
+}
+
+// Linear layer function
+#[allow(unused)]
+fn linear_with_evals(x: &NdArray<f32>, w: &NdArray<f32>, b: &NdArray<f32>) -> TaggedNdArray {
     // Create operations for nn linear layer
     let matmul = Operation::MatrixMultiply {
         n: Shape::empty(),
@@ -139,7 +217,7 @@ fn linear(x: &NdArray<f32>, w: &NdArray<f32>, b: &NdArray<f32>) -> TaggedNdArray
 
     let transpose = Operation::Transpose {
         x: NdArrayType {
-            shape: Shape(vec![x.shape.0[0], w.shape.0[1]]),
+            shape: Shape(vec![w.shape.0[0], w.shape.0[1]]),
             dtype: Dtype::F32,
         },
         dim0: 0,
