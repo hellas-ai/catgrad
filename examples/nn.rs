@@ -6,8 +6,37 @@ use catgrad::{
         eval::EvalState,
         ndarray::{NdArray, TaggedNdArray},
     },
-    core::{Dtype, NdArrayType, Operation, Shape},
+    core::{identity, Dtype, NdArrayType, Operation, Shape, Term, Type},
 };
+
+#[cfg(test)]
+fn chained(x: &NdArray<f32>, y: &NdArray<f32>) -> TaggedNdArray {
+    let typ = NdArrayType {
+        shape: x.shape.clone(),
+        dtype: Dtype::F32,
+    };
+
+    let ones = Operation::Const {
+        x: typ.clone(),
+        k: 1.0,
+    }
+    .term();
+    let neg = Operation::Negate(typ.clone()).term();
+    let add = Operation::Add(typ.clone()).term();
+    let mul = Operation::Mul(typ.clone()).term();
+
+    let id = identity(vec![typ.clone()]);
+
+    // -(x+1)*(y+1)
+    let op = (&(&(&(&ones | &id) | &(&ones | &id)) >> &(&add | &add)).unwrap() >> &mul).unwrap();
+    let op = (&op >> &neg).unwrap();
+    let mut state = EvalState::new(op);
+    let [result] = state.eval_with(vec![x.clone().into(), y.clone().into()])[..] else {
+        panic!("unexpected result")
+    };
+
+    result.clone()
+}
 
 fn sigmoid(x: &NdArray<f32>) -> TaggedNdArray {
     let len = x.shape.size();
@@ -246,6 +275,25 @@ pub fn main() {
     let result = model.run(&input);
     println!("input {:?}", input);
     println!("Result: {:?}", result);
+}
+
+#[test]
+fn test_chained() {
+    // Create test input data
+    let x = NdArray::new(vec![1.0, 2.0, 3.0], Shape(vec![1, 3]));
+    let y = NdArray::new(vec![1.0, 2.0, 3.0], Shape(vec![1, 3]));
+
+    // Calculate -(x+1)*(y+1)
+    let result = chained(&x, &y);
+
+    // Check result shape
+    match result {
+        TaggedNdArray::F32(arr) => {
+            assert_eq!(arr.shape.0, vec![1, 3]);
+            assert_eq!(arr.data, vec![-4.0, -9.0, -16.0]);
+        }
+        _ => panic!("wrong type"),
+    }
 }
 
 #[cfg(test)]
