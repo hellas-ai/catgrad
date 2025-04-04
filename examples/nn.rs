@@ -39,6 +39,7 @@ fn chained(x: &NdArray<f32>, y: &NdArray<f32>) -> TaggedNdArray {
     result.clone()
 }
 
+#[cfg(test)]
 fn sigmoid(x: &NdArray<f32>) -> TaggedNdArray {
     let typ = NdArrayType {
         shape: x.shape.clone(),
@@ -79,41 +80,40 @@ fn sigmoid_layer(typ: NdArrayType) -> Term {
     f
 }
 
-fn tanh(x: &NdArray<f32>) -> TaggedNdArray {
-    let len = x.shape.size();
+fn tanh_layer(typ: NdArrayType) -> Term {
+    let one = Operation::Const {
+        x: typ.clone(),
+        k: 1.0,
+    }
+    .term();
 
+    let two = Operation::Const {
+        x: typ.clone(),
+        k: 2.0,
+    }
+    .term();
+
+    let id = identity(vec![typ.clone()]);
+    let mul = Operation::Mul(typ.clone()).term();
+    let sub = Operation::Sub(typ.clone()).term();
+
+    let f = (&(&id | &two) >> &mul).unwrap(); // 2*x
+    let f = (&f >> &sigmoid_layer(typ)).unwrap(); // sigmoid(2*x)
+    let f = (&(&f | &two) >> &mul).unwrap(); // 2*sigmoid(2*x)
+    let f = (&(&f | &one) >> &sub).unwrap();
+
+    f
+}
+
+fn tanh(x: &NdArray<f32>) -> TaggedNdArray {
     let typ = NdArrayType {
         shape: x.shape.clone(),
         dtype: Dtype::F32,
     };
 
-    let twos = NdArray::new(vec![2.; len], Shape(vec![len]));
-
-    let mul = Operation::Mul(typ.clone()).term();
-    let sub = Operation::Sub(typ.clone()).term();
-
-    let mut state = EvalState::new(mul.clone());
-    let [result] = state.eval_with(vec![twos.clone().into(), x.clone().into()])[..] else {
-        panic!("unexpected mul result")
-    };
-
-    let result = match result {
-        TaggedNdArray::F32(arr) => arr,
-        _ => panic!("Unimplemented"),
-    };
-
-    // sigmoid(2*x)
-    let sig = sigmoid(result);
-
-    let mut state = EvalState::new(mul);
-    let [result] = state.eval_with(vec![twos.clone().into(), sig.clone()])[..] else {
-        panic!("unexpected mul result")
-    };
-
-    let ones = NdArray::new(vec![1.; len], Shape(vec![len]));
-
-    let mut state = EvalState::new(sub);
-    let [result] = state.eval_with(vec![result.clone(), ones.clone().into()])[..] else {
+    let tl = tanh_layer(typ);
+    let mut state = EvalState::new(tl);
+    let [result] = state.eval_with(vec![x.clone().into()])[..] else {
         panic!("unexpected sub result")
     };
 
