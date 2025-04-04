@@ -40,42 +40,43 @@ fn chained(x: &NdArray<f32>, y: &NdArray<f32>) -> TaggedNdArray {
 }
 
 fn sigmoid(x: &NdArray<f32>) -> TaggedNdArray {
-    let len = x.shape.size();
     let typ = NdArrayType {
         shape: x.shape.clone(),
         dtype: Dtype::F32,
     };
 
-    let e = std::f32::consts::E;
-    let es = NdArray::new(vec![e; len], Shape(vec![len]));
-    let ones = NdArray::new(vec![1.; len], Shape(vec![len]));
+    let sl = sigmoid_layer(typ);
+    let mut state = EvalState::new(sl);
+    let [result] = state.eval_with(vec![x.clone().into()])[..] else {
+        panic!("unexpected neg result")
+    };
+
+    result.clone()
+}
+
+fn sigmoid_layer(typ: NdArrayType) -> Term {
+    let one = Operation::Const {
+        x: typ.clone(),
+        k: 1.0,
+    }
+    .term();
+
+    let e = Operation::Const {
+        x: typ.clone(),
+        k: std::f32::consts::E,
+    }
+    .term();
 
     let pow = Operation::Pow(typ.clone()).term();
     let neg = Operation::Negate(typ.clone()).term();
     let add = Operation::Add(typ.clone()).term();
     let div = Operation::Div(typ.clone()).term();
 
-    let mut state = EvalState::new(neg);
-    let [result] = state.eval_with(vec![x.clone().into()])[..] else {
-        panic!("unexpected neg result")
-    };
+    let f = (&(&e | &neg) >> &pow).unwrap();
+    let f = (&(&one | &f) >> &add).unwrap();
+    let f = (&(&one | &f) >> &div).unwrap();
 
-    let mut state = EvalState::new(pow);
-    let [result] = state.eval_with(vec![es.into(), result.clone()])[..] else {
-        panic!("unexpected pow result")
-    };
-
-    let mut state = EvalState::new(add);
-    let [result] = state.eval_with(vec![ones.clone().into(), result.clone()])[..] else {
-        panic!("unexpected add result")
-    };
-
-    let mut state = EvalState::new(div);
-    let [result] = state.eval_with(vec![ones.clone().into(), result.clone()])[..] else {
-        panic!("unexpected div result")
-    };
-
-    result.clone()
+    f
 }
 
 fn tanh(x: &NdArray<f32>) -> TaggedNdArray {
