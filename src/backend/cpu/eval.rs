@@ -215,6 +215,7 @@ impl EvalState {
                         Some(F32(a)) => {
                             let p = parameters.get(name);
                             if let Some(TaggedNdArray::F32(x)) = p {
+                                println!("param: {name} {:?} {:?}", a.shape, x.shape);
                                 a.copy_from(x);
                             } else {
                                 panic!("Parameters loaded, parameter '{name}'::F32 not found.")

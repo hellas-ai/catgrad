@@ -178,7 +178,7 @@ impl<T: Clone> NdArray<T> {
     /// Panics if the shapes don't match.
     pub fn copy_from(&mut self, other: &NdArray<T>) {
         // Check that shapes match
-        if self.shape != other.shape {
+        if self.len() != other.len() {
             panic!(
                 "Shape mismatch in copy_from: destination shape {:?} != source shape {:?}",
                 self.shape, other.shape
