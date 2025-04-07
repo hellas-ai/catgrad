@@ -71,19 +71,27 @@ fn show(name: &str, term: &Term) {
 
 // linear + tanh + linear
 fn mlp_layer(input_features: usize, output_features: usize, dtype: Dtype, name: &str) -> Term {
-    let typ = NdArrayType {
+    let type_in = NdArrayType {
+        shape: Shape(vec![1, input_features]),
+        dtype: dtype.clone(),
+    };
+    let type_out = NdArrayType {
         shape: Shape(vec![1, output_features]),
         dtype: dtype.clone(),
     };
+
+    let copy = Operation::Copy(type_in.clone()).term();
+    let add = Operation::Add(type_in.clone()).term();
+    let id_x = identity(vec![type_in.clone()]);
 
     let l1 = (&linear_layer(
         input_features,
         output_features,
         dtype.clone(),
         format!("{name}.lin1").as_str(),
-    ) >> &tanh_layer(typ))
+    ) >> &tanh_layer(type_out))
         .unwrap();
-    return (&l1
+    let l2 = (&l1
         >> &linear_layer(
             output_features,
             input_features,
@@ -91,6 +99,11 @@ fn mlp_layer(input_features: usize, output_features: usize, dtype: Dtype, name: 
             format!("{name}.lin2").as_str(),
         ))
         .unwrap();
+
+    let term = (&copy >> &(&id_x | &l2)).unwrap();
+    let term = (&term >> &add).unwrap();
+
+    term
 }
 
 fn linear_layer(
