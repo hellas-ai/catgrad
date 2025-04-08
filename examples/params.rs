@@ -170,6 +170,7 @@ fn linear_layer(
     term
 }
 
+#[derive(Debug)]
 struct Model {
     pub term: Term,
 }
@@ -234,6 +235,7 @@ fn read_safetensors(path: &str) -> HashMap<String, TaggedNdArray> {
 pub fn main() {
     let input = NdArray::new(vec![1.0; 8], Shape(vec![1, 8]));
     let model = Model::build(8, 24);
+    println!("Model {:#?}", &model);
     let result = model.run(&input);
     println!("input {:?}", input);
     println!("Result: {:?}", result);
