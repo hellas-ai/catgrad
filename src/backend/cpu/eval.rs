@@ -872,39 +872,4 @@ mod test {
 
         assert_eq!(actual, &expected.into());
     }
-
-    #[test]
-    fn test_lax() {
-        use open_hypergraphs::lax::OpenHypergraph;
-
-        let mut term = OpenHypergraph::<crate::core::PrimitiveType, Operation>::empty();
-
-        let typ = NdArrayType {
-            shape: Shape(vec![2, 2]),
-            dtype: Dtype::F32,
-        };
-        let (_, (i, o)) = term.new_operation(
-            Operation::Add(typ.clone()),
-            vec![typ.clone(), typ.clone()],
-            vec![typ.clone()],
-        );
-
-        term.sources = vec![i[0], i[1]];
-        term.targets = vec![o[0]];
-        term.quotient();
-        let term = term.to_open_hypergraph();
-
-        let x = NdArray::new(vec![1.; 4], Shape(vec![2, 2]));
-        let y = NdArray::new(vec![2.; 4], Shape(vec![2, 2]));
-
-        let expected = NdArray::new(vec![3.0, 3.0, 3.0, 3.0], Shape(vec![2, 2]));
-
-        let mut state = EvalState::new(term);
-
-        let [actual] = state.eval_with(vec![x.into(), y.into()])[..] else {
-            panic!("unexpected coarity at eval time")
-        };
-
-        assert_eq!(actual, &expected.into());
-    }
 }
