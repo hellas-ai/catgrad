@@ -7,7 +7,7 @@ use catgrad::{
         eval::EvalState,
         ndarray::{NdArray, TaggedNdArray},
     },
-    core::{identity, Dtype, NdArrayType, Operation, Shape, Term},
+    core::{Dtype, NdArrayType, Operation, Shape, Term},
 };
 
 #[cfg(test)]
@@ -17,21 +17,17 @@ fn chained(x: &NdArray<f32>, y: &NdArray<f32>) -> TaggedNdArray {
         dtype: Dtype::F32,
     };
 
-    let ones = Operation::Const {
-        x: typ.clone(),
-        k: 1.0,
-    }
-    .term();
-    let neg = Operation::Negate(typ.clone()).term();
-    let add = Operation::Add(typ.clone()).term();
-    let mul = Operation::Mul(typ.clone()).term();
+    let ones = Operation::constop(typ.clone(), 1.0);
+    let neg = Operation::negate(typ.clone());
+    let add = Operation::add(typ.clone());
+    let mul = Operation::mul(typ.clone());
 
-    let id = identity(vec![typ.clone()]);
+    let id = Operation::identity(vec![typ.clone()]);
 
     // -(x+1)*(y+1)
     let op = (&(&(&(&ones | &id) | &(&ones | &id)) >> &(&add | &add)).unwrap() >> &mul).unwrap();
     let op = (&op >> &neg).unwrap();
-    let mut state = EvalState::new(op);
+    let mut state = EvalState::from_lax(op);
     let [result] = state.eval_with(vec![x.clone().into(), y.clone().into()])[..] else {
         panic!("unexpected result")
     };
@@ -47,7 +43,7 @@ fn sigmoid(x: &NdArray<f32>) -> TaggedNdArray {
     };
 
     let sl = sigmoid_layer(typ);
-    let mut state = EvalState::new(sl);
+    let mut state = EvalState::from_lax(sl);
     let [result] = state.eval_with(vec![x.clone().into()])[..] else {
         panic!("unexpected neg result")
     };
@@ -56,22 +52,13 @@ fn sigmoid(x: &NdArray<f32>) -> TaggedNdArray {
 }
 
 fn sigmoid_layer(typ: NdArrayType) -> Term {
-    let one = Operation::Const {
-        x: typ.clone(),
-        k: 1.0,
-    }
-    .term();
+    let one = Operation::constop(typ.clone(), 1.0);
+    let e = Operation::constop(typ.clone(), std::f32::consts::E);
 
-    let e = Operation::Const {
-        x: typ.clone(),
-        k: std::f32::consts::E,
-    }
-    .term();
-
-    let pow = Operation::Pow(typ.clone()).term();
-    let neg = Operation::Negate(typ.clone()).term();
-    let add = Operation::Add(typ.clone()).term();
-    let div = Operation::Div(typ.clone()).term();
+    let pow = Operation::pow(typ.clone());
+    let neg = Operation::negate(typ.clone());
+    let add = Operation::add(typ.clone());
+    let div = Operation::div(typ.clone());
 
     let f = (&(&e | &neg) >> &pow).unwrap();
     let f = (&(&one | &f) >> &add).unwrap();
@@ -81,21 +68,12 @@ fn sigmoid_layer(typ: NdArrayType) -> Term {
 }
 
 fn tanh_layer(typ: NdArrayType) -> Term {
-    let one = Operation::Const {
-        x: typ.clone(),
-        k: 1.0,
-    }
-    .term();
+    let one = Operation::constop(typ.clone(), 1.0);
+    let two = Operation::constop(typ.clone(), 2.0);
 
-    let two = Operation::Const {
-        x: typ.clone(),
-        k: 2.0,
-    }
-    .term();
-
-    let id = identity(vec![typ.clone()]);
-    let mul = Operation::Mul(typ.clone()).term();
-    let sub = Operation::Sub(typ.clone()).term();
+    let id = Operation::identity(vec![typ.clone()]);
+    let mul = Operation::mul(typ.clone());
+    let sub = Operation::sub(typ.clone());
 
     let f = (&(&id | &two) >> &mul).unwrap(); // 2*x
     let f = (&f >> &sigmoid_layer(typ)).unwrap(); // sigmoid(2*x)
@@ -112,7 +90,7 @@ fn tanh(x: &NdArray<f32>) -> TaggedNdArray {
     };
 
     let tl = tanh_layer(typ);
-    let mut state = EvalState::new(tl);
+    let mut state = EvalState::from_lax(tl);
     let [result] = state.eval_with(vec![x.clone().into()])[..] else {
         panic!("unexpected sub result")
     };
@@ -154,26 +132,20 @@ fn linear_layer(
         dtype: dtype.clone(),
     };
 
-    let id_x = identity(vec![x_type.clone()]);
-    let id_b = identity(vec![out_type.clone()]);
+    let id_x = Operation::identity(vec![x_type.clone()]);
+    let id_b = Operation::identity(vec![out_type.clone()]);
 
-    let transpose = Operation::Transpose {
-        x: w_type.clone(),
-        dim0: 0,
-        dim1: 1,
-    }
-    .term();
+    let transpose = Operation::transpose(w_type.clone(), 0, 1);
 
-    let matmul = Operation::MatrixMultiply {
-        n: Shape::empty(),
-        a: batch_size,
-        b: input_features,
-        c: output_features,
-        dtype: dtype.clone(),
-    }
-    .term();
+    let matmul = Operation::matmul(
+        Shape::empty(),
+        batch_size,
+        input_features,
+        output_features,
+        dtype.clone(),
+    );
 
-    let add = Operation::Add(out_type.clone()).term();
+    let add = Operation::add(out_type.clone());
 
     let step1 = &(&id_x | &transpose) | &id_b;
     let step2 = &matmul | &id_b;
@@ -187,7 +159,7 @@ fn linear_layer(
 fn linear(x: &NdArray<f32>, w: &NdArray<f32>, b: &NdArray<f32>) -> TaggedNdArray {
     let lin = linear_layer(x.shape.0[1], w.shape.0[0], Dtype::F32);
     // Evaluate add step
-    let mut add_state = EvalState::new(lin);
+    let mut add_state = EvalState::from_lax(lin);
     let [result] =
         add_state.eval_with(vec![x.clone().into(), w.clone().into(), b.clone().into()])[..]
     else {
@@ -201,45 +173,42 @@ fn linear(x: &NdArray<f32>, w: &NdArray<f32>, b: &NdArray<f32>) -> TaggedNdArray
 #[allow(unused)]
 fn linear_with_evals(x: &NdArray<f32>, w: &NdArray<f32>, b: &NdArray<f32>) -> TaggedNdArray {
     // Create operations for nn linear layer
-    let matmul = Operation::MatrixMultiply {
-        n: Shape::empty(),
-        a: x.shape.0[0],
-        b: x.shape.0[1],
-        c: w.shape.0[0],
-        dtype: Dtype::F32,
-    }
-    .term();
+    let matmul = Operation::matmul(
+        Shape::empty(),
+        x.shape.0[0],
+        x.shape.0[1],
+        w.shape.0[0],
+        Dtype::F32,
+    );
 
-    let add = Operation::Add(NdArrayType {
+    let add = Operation::add(NdArrayType {
         shape: Shape(vec![x.shape.0[0], w.shape.0[0]]),
         dtype: Dtype::F32,
-    })
-    .term();
+    });
 
-    let transpose = Operation::Transpose {
-        x: NdArrayType {
+    let transpose = Operation::transpose(
+        NdArrayType {
             shape: Shape(vec![w.shape.0[0], w.shape.0[1]]),
             dtype: Dtype::F32,
         },
-        dim0: 0,
-        dim1: 1,
-    }
-    .term();
+        0,
+        1,
+    );
 
     // Transpose w
-    let mut state = EvalState::new(transpose);
+    let mut state = EvalState::from_lax(transpose);
     let [wt] = state.eval_with(vec![w.clone().into()])[..] else {
         panic!("unexpected transpose result")
     };
 
     // Evaluate matmul step
-    let mut state = EvalState::new(matmul);
+    let mut state = EvalState::from_lax(matmul);
     let [result] = state.eval_with(vec![x.clone().into(), wt.clone()])[..] else {
         panic!("unexpected matmul result")
     };
 
     // Evaluate add step
-    let mut add_state = EvalState::new(add);
+    let mut add_state = EvalState::from_lax(add);
     let [result] = add_state.eval_with(vec![result.clone(), b.clone().into()])[..] else {
         panic!("unexpected add result")
     };

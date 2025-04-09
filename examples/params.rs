@@ -7,26 +7,18 @@ use catgrad::{
         eval::EvalState,
         ndarray::{NdArray, TaggedNdArray},
     },
-    core::{identity, Dtype, NdArrayType, Operation, Shape, Term},
+    core::{Dtype, NdArrayType, Operation, Shape, Term},
 };
 
 fn sigmoid_layer(typ: NdArrayType) -> Term {
-    let one = Operation::Const {
-        x: typ.clone(),
-        k: 1.0,
-    }
-    .term();
+    let one = Operation::constop(typ.clone(), 1.0);
 
-    let e = Operation::Const {
-        x: typ.clone(),
-        k: std::f32::consts::E,
-    }
-    .term();
+    let e = Operation::constop(typ.clone(), std::f32::consts::E);
 
-    let pow = Operation::Pow(typ.clone()).term();
-    let neg = Operation::Negate(typ.clone()).term();
-    let add = Operation::Add(typ.clone()).term();
-    let div = Operation::Div(typ.clone()).term();
+    let pow = Operation::pow(typ.clone());
+    let neg = Operation::negate(typ.clone());
+    let add = Operation::add(typ.clone());
+    let div = Operation::div(typ.clone());
 
     let f = (&(&e | &neg) >> &pow).unwrap();
     let f = (&(&one | &f) >> &add).unwrap();
@@ -36,21 +28,12 @@ fn sigmoid_layer(typ: NdArrayType) -> Term {
 }
 
 fn tanh_layer(typ: NdArrayType) -> Term {
-    let one = Operation::Const {
-        x: typ.clone(),
-        k: 1.0,
-    }
-    .term();
+    let one = Operation::constop(typ.clone(), 1.0);
+    let two = Operation::constop(typ.clone(), 2.0);
 
-    let two = Operation::Const {
-        x: typ.clone(),
-        k: 2.0,
-    }
-    .term();
-
-    let id = identity(vec![typ.clone()]);
-    let mul = Operation::Mul(typ.clone()).term();
-    let sub = Operation::Sub(typ.clone()).term();
+    let id = Operation::identity(vec![typ.clone()]);
+    let mul = Operation::mul(typ.clone());
+    let sub = Operation::sub(typ.clone());
 
     let f = (&(&id | &two) >> &mul).unwrap(); // 2*x
     let f = (&f >> &sigmoid_layer(typ)).unwrap(); // sigmoid(2*x)
@@ -80,9 +63,9 @@ fn mlp_layer(input_features: usize, output_features: usize, dtype: Dtype, name: 
         dtype: dtype.clone(),
     };
 
-    let copy = Operation::Copy(type_in.clone()).term();
-    let add = Operation::Add(type_in.clone()).term();
-    let id_x = identity(vec![type_in.clone()]);
+    let copy = Operation::copy(type_in.clone());
+    let add = Operation::add(type_in.clone());
+    let id_x = Operation::identity(vec![type_in.clone()]);
 
     let l1 = (&linear_layer(
         input_features,
@@ -131,37 +114,22 @@ fn linear_layer(
         dtype: dtype.clone(),
     };
 
-    let id_x = identity(vec![x_type.clone()]);
+    let id_x = Operation::identity(vec![x_type.clone()]);
 
-    let param_w = Operation::Parameter {
-        x: w_type.clone(),
-        name: format!("{name}.weight"),
-    }
-    .term();
+    let param_w = Operation::parameter(w_type.clone(), format!("{name}.weight"));
+    let param_b = Operation::parameter(out_type.clone(), format!("{name}.bias"));
 
-    let param_b = Operation::Parameter {
-        x: out_type.clone(),
-        name: format!("{name}.bias"),
-    }
-    .term();
+    let transpose = Operation::transpose(w_type.clone(), 0, 1);
 
-    let transpose = Operation::Transpose {
-        x: w_type.clone(),
-        dim0: 0,
-        dim1: 1,
-    }
-    .term();
+    let matmul = Operation::matmul(
+        Shape::empty(),
+        batch_size,
+        input_features,
+        output_features,
+        dtype.clone(),
+    );
 
-    let matmul = Operation::MatrixMultiply {
-        n: Shape::empty(),
-        a: batch_size,
-        b: input_features,
-        c: output_features,
-        dtype: dtype.clone(),
-    }
-    .term();
-
-    let add = Operation::Add(out_type.clone()).term();
+    let add = Operation::add(out_type.clone());
 
     let trans = (&param_w >> &transpose).unwrap();
     let mm = (&(&id_x | &trans) >> &matmul).unwrap();
@@ -186,7 +154,7 @@ impl Model {
     }
 
     pub fn run(&self, x: &NdArray<f32>) -> TaggedNdArray {
-        let mut state = EvalState::new(self.term.clone());
+        let mut state = EvalState::from_lax(self.term.clone());
         let tensors = read_safetensors("model.safetensors");
         state.set_parameters(tensors);
         let [result] = state.eval_with(vec![x.clone().into()])[..] else {
@@ -234,7 +202,7 @@ fn read_safetensors(path: &str) -> HashMap<String, TaggedNdArray> {
 
 pub fn main() {
     let input = NdArray::new(vec![1.0; 8], Shape(vec![1, 8]));
-    let model = Model::build(8, 24);
+    let model = Model::build(8, 16);
     println!("Model {:#?}", &model);
     let result = model.run(&input);
     println!("input {:?}", input);
