@@ -628,8 +628,8 @@ mod test {
             dtype: Dtype::F32,
         };
 
-        let param_a = Operation::parameter(typ.clone(), "param_a");
-        let param_b = Operation::parameter(typ.clone(), "param_b");
+        let param_a = Operation::parameter(typ.clone(), "param_a".to_string());
+        let param_b = Operation::parameter(typ.clone(), "param_b".to_string());
 
         let add = Operation::add(NdArrayType {
             shape: Shape(vec![2, 2]),
@@ -664,7 +664,7 @@ mod test {
             dtype: Dtype::F16,
         };
 
-        let param_a = Operation::parameter(typ.clone(), "param_a");
+        let param_a = Operation::parameter(typ.clone(), "param_a".to_string());
 
         let mut state = EvalState::from_lax(param_a);
         let parameters = HashMap::new();
@@ -681,7 +681,7 @@ mod test {
             dtype: Dtype::F32,
         };
 
-        let param_a = Operation::parameter(typ.clone(), "param_a");
+        let param_a = Operation::parameter(typ.clone(), "param_a".to_string());
 
         let mut state = EvalState::from_lax(param_a);
 

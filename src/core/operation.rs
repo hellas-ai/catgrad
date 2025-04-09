@@ -167,8 +167,8 @@ impl Operation {
     }
 
     // Make an OpenHypergraph for the Parameter operation
-    pub fn parameter(x: NdArrayType, name: &str) -> Term {
-        let op = Operation::Parameter(name.to_string());
+    pub fn parameter(x: NdArrayType, name: String) -> Term {
+        let op = Operation::Parameter(name);
         Operation::term(op, vec![], vec![x.clone()])
     }
 
