@@ -223,3 +223,67 @@ impl Operation {
         Operation::reduceop(x, Operation::Max)
     }
 }
+
+use open_hypergraphs::lax::var;
+impl var::HasVar for Operation {
+    fn var() -> Self {
+        Operation::Copy
+    }
+}
+
+impl var::HasAdd<PrimitiveType, Operation> for Operation {
+    fn add(_lhs: PrimitiveType, rhs: PrimitiveType) -> (PrimitiveType, Operation) {
+        (rhs, Operation::Add)
+    }
+}
+
+impl var::HasSub<PrimitiveType, Operation> for Operation {
+    fn sub(_lhs: PrimitiveType, rhs: PrimitiveType) -> (PrimitiveType, Operation) {
+        (rhs, Operation::Sub)
+    }
+}
+
+use std::cell::RefCell;
+use std::rc::Rc;
+type Builder = Rc<RefCell<Term>>;
+type Var = var::Var<PrimitiveType, Operation>;
+
+#[test]
+fn test_var_add() {
+    use crate::backend::cpu::eval::EvalState;
+    use crate::backend::cpu::ndarray::{NdArray, TaggedNdArray};
+    let typ = NdArrayType {
+        shape: Shape(vec![2, 2]),
+        dtype: Dtype::F32,
+    };
+
+    let state = Rc::new(RefCell::new(Term::empty()));
+
+    let a = Var::new(state.clone(), typ.clone());
+    let b = Var::new(state.clone(), typ.clone());
+
+    // println!("A: {:#?}", &a);
+    // println!("B: {:#?}", &b);
+
+    let c = a.clone() + b.clone();
+
+    {
+        state.borrow_mut().sources = vec![a.new_source(), b.new_source()];
+        state.borrow_mut().targets = vec![c.new_target()];
+    }
+    // println!("C: {:#?}", c);
+    let f = Rc::try_unwrap(state).unwrap().into_inner();
+
+    let x = NdArray::new(vec![1., 2., 3., 4.], Shape(vec![2, 2]));
+    let y = NdArray::new(vec![1., 1., 1., 1.], Shape(vec![2, 2]));
+    let exp = NdArray::new(vec![2., 3., 4., 5.], Shape(vec![2, 2]));
+
+    let mut state = EvalState::from_lax(f);
+
+    let [actual] = state.eval_with(vec![x.into(), y.into()])[..] else {
+        panic!("unexpected coarity at eval time")
+    };
+
+    let tagged: TaggedNdArray = exp.into();
+    assert_eq!(&tagged, actual);
+}
