@@ -1,6 +1,12 @@
-use crate::core::{NdArrayType, Operation, PrimitiveType, Shape, Term, Var};
+#[cfg(test)]
+use crate::backend::cpu::eval::EvalState;
+#[cfg(test)]
+use crate::backend::cpu::ndarray::{NdArray, TaggedNdArray};
+use crate::core::{Dtype, NdArrayType, Operation, PrimitiveType, Shape, Term, Var};
 use open_hypergraphs::lax::var::operation;
 use std::cell::RefCell;
+#[cfg(test)]
+use std::collections::HashMap;
 use std::rc::Rc;
 
 type Builder = Rc<RefCell<Term>>;
@@ -43,11 +49,114 @@ pub fn mat_mul(builder: &Builder, f: Var, g: Var) -> Var {
     operation(builder, &[f, g], output_type, op)
 }
 
+pub fn parameter(builder: &Builder, param_type: NdArrayType, name: String) -> Var {
+    let op: Operation = Operation::Parameter(name);
+    operation(builder, &[], param_type, op)
+}
+
+pub fn transpose(builder: &Builder, x: Var, dim0: usize, dim1: usize) -> Var {
+    let in_t = x.label.clone();
+
+    // Create new shape with swapped dimensions
+    let mut new_shape = in_t.shape.0.clone();
+    new_shape.swap(dim0, dim1);
+
+    let out_t = NdArrayType {
+        shape: Shape(new_shape),
+        dtype: in_t.dtype,
+    };
+    let op: Operation = Operation::Transpose { dim0, dim1 };
+    operation(builder, &[x.clone()], out_t, op)
+}
+
+pub fn linear(
+    builder: &Builder,
+    x: Var,
+    input_features: usize,
+    output_features: usize,
+    dtype: Dtype,
+    name: &str,
+) -> Var {
+    // let batch_size = 1;
+    // Input
+    // let in_type = NdArrayType {
+    // shape: Shape(vec![batch_size, input_features]),
+    // dtype,
+    // };
+    // Weights
+    let w_type = NdArrayType {
+        shape: Shape(vec![output_features, input_features]),
+        dtype,
+    };
+    // Bias
+    let b_type = NdArrayType {
+        shape: Shape(vec![1, output_features]),
+        dtype,
+    };
+    // Result
+    // let out_type = NdArrayType {
+    // shape: Shape(vec![batch_size, output_features]),
+    // dtype,
+    // };
+
+    // let x = Var::new(builder.clone(), in_type.clone());
+
+    let w = parameter(builder, w_type.clone(), format!("{name}.weight"));
+    let b = parameter(builder, b_type.clone(), format!("{name}.bias"));
+
+    let w_t = transpose(builder, w, 0, 1);
+    mat_mul(builder, x, w_t) + b
+}
+
+#[test]
+fn test_linear() {
+    let in_type = NdArrayType {
+        shape: Shape(vec![1, 3]),
+        dtype: Dtype::F32,
+    };
+    let builder = Rc::new(RefCell::new(Term::empty()));
+    {
+        let x = Var::new(builder.clone(), in_type.clone());
+        // Run linear layer (x * w^T + b)
+        let result = linear(&builder, x.clone(), 3, 2, Dtype::F32, "l");
+
+        builder.borrow_mut().sources = vec![x.new_source()];
+        builder.borrow_mut().targets = vec![result.new_target()];
+    }
+
+    let f = Rc::try_unwrap(builder).unwrap().into_inner();
+
+    let mut state = EvalState::from_lax(f);
+
+    // Create test input data
+    let x = NdArray::new(vec![1.0, 2.0, 3.0], Shape(vec![1, 3]));
+
+    // Parameter values
+    let w = NdArray::new(vec![0.2, 0.4, 0.2, 0.5, 0.3, 0.6], Shape(vec![2, 3]));
+    let b = NdArray::new(vec![0.1, 0.1], Shape(vec![1, 2]));
+
+    let mut parameters = HashMap::new();
+    parameters.insert("l.weight".to_string(), w.into());
+    parameters.insert("l.bias".to_string(), b.into());
+
+    state.set_parameters(parameters);
+
+    let [actual] = state.eval_with(vec![x.into()])[..] else {
+        panic!("unexpected coarity at eval time")
+    };
+
+    // Check result shape
+    match actual {
+        TaggedNdArray::F32(arr) => {
+            assert_eq!(arr.shape.0, vec![1, 2]);
+            assert_eq!(arr.data, vec![1.6, 3.3]);
+        }
+        _ => panic!("wrong type"),
+    }
+}
+
 #[test]
 fn test_matmul() {
-    use crate::backend::cpu::eval::EvalState;
-    use crate::backend::cpu::ndarray::{NdArray, TaggedNdArray};
-    use crate::core::Dtype;
     let type_a = NdArrayType {
         shape: Shape(vec![1, 2]),
         dtype: Dtype::F32,
