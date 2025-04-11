@@ -54,6 +54,15 @@ pub fn parameter(builder: &Builder, param_type: NdArrayType, name: String) -> Va
     operation(builder, &[], param_type, op)
 }
 
+pub fn constant(builder: &Builder, param_type: NdArrayType, k: f32) -> Var {
+    let op: Operation = Operation::Const(k);
+    operation(builder, &[], param_type, op)
+}
+
+pub fn power(builder: &Builder, base: Var, power: Var) -> Var {
+    let op: Operation = Operation::Pow;
+    operation(builder, &[base.clone(), power.clone()], base.label, op)
+}
 pub fn transpose(builder: &Builder, x: Var, dim0: usize, dim1: usize) -> Var {
     let in_t = x.label.clone();
 
@@ -106,6 +115,43 @@ pub fn linear(
 
     let w_t = transpose(builder, w, 0, 1);
     mat_mul(builder, x, w_t) + b
+}
+
+#[allow(unused)]
+fn mlp_layer(
+    builder: &Builder,
+    x: Var,
+    input_features: usize,
+    output_features: usize,
+    dtype: Dtype,
+    name: &str,
+) -> Var {
+    let res = x.clone();
+    let l1 = linear(
+        builder,
+        x,
+        input_features,
+        output_features,
+        dtype,
+        &format!("{name}.l1"),
+    );
+    let a = sigmoid(builder, l1);
+    let l2 = linear(
+        builder,
+        a,
+        input_features,
+        output_features,
+        dtype,
+        &format!("{name}.l2"),
+    );
+    l2 + res
+}
+
+fn sigmoid(builder: &Builder, x: Var) -> Var {
+    let one = constant(builder, x.label.clone(), 1.0);
+    let e = constant(builder, x.label.clone(), std::f32::consts::E);
+
+    one.clone() / (one + power(builder, x, -e))
 }
 
 #[test]
