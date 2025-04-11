@@ -59,11 +59,11 @@ fn show(name: &str, term: &Term) {
 fn mlp_layer(input_features: usize, output_features: usize, dtype: Dtype, name: &str) -> Term {
     let type_in = NdArrayType {
         shape: Shape(vec![1, input_features]),
-        dtype: dtype.clone(),
+        dtype,
     };
     let type_out = NdArrayType {
         shape: Shape(vec![1, output_features]),
-        dtype: dtype.clone(),
+        dtype,
     };
 
     let copy = Operation::copy(type_in.clone());
@@ -73,7 +73,7 @@ fn mlp_layer(input_features: usize, output_features: usize, dtype: Dtype, name: 
     let l1 = (&linear_layer(
         input_features,
         output_features,
-        dtype.clone(),
+        dtype,
         &format!("{name}.lin1"),
     ) >> &tanh_layer(type_out))
         .unwrap();
@@ -104,22 +104,22 @@ fn linear_layer(
     // Input
     let x_type = NdArrayType {
         shape: Shape(vec![batch_size, input_features]),
-        dtype: dtype.clone(),
+        dtype,
     };
     // Weights
     let w_type = NdArrayType {
         shape: Shape(vec![output_features, input_features]),
-        dtype: dtype.clone(),
+        dtype,
     };
     // Bias
     let b_type = NdArrayType {
         shape: Shape(vec![output_features]),
-        dtype: dtype.clone(),
+        dtype,
     };
     // Result
     let out_type = NdArrayType {
         shape: Shape(vec![batch_size, output_features]),
-        dtype: dtype.clone(),
+        dtype,
     };
 
     let id_x = Operation::identity(vec![x_type.clone()]);
@@ -135,7 +135,7 @@ fn linear_layer(
         batch_size,
         input_features,
         output_features,
-        dtype.clone(),
+        dtype,
     );
 
     let add = Operation::add(out_type.clone());
