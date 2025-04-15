@@ -40,30 +40,47 @@ pub fn mat_mul(builder: &Builder, f: Var, g: Var) -> Var {
 
     assert_eq!(b, b_prime);
 
-    let op: Operation = Operation::MatrixMultiply;
+    let op = Operation::MatrixMultiply;
     operation(builder, &[f, g], output_type, op)
 }
 
 pub fn parameter(builder: &Builder, param_type: NdArrayType, name: String) -> Var {
-    let op: Operation = Operation::Parameter(name);
+    let op = Operation::Parameter(name);
     operation(builder, &[], param_type, op)
 }
 
 pub fn constant(builder: &Builder, param_type: NdArrayType, k: f32) -> Var {
-    let op: Operation = Operation::Const(k);
+    let op = Operation::Const(k);
     operation(builder, &[], param_type, op)
 }
 
 pub fn broadcast(builder: &Builder, n: Shape, x: Var) -> Var {
     let in_t = x.label.clone();
     let out_t = &n + &in_t;
-    let op: Operation = Operation::Broadcast(n);
+    let op = Operation::Broadcast(n);
     operation(builder, &[x.clone()], out_t, op)
 }
 
 pub fn power(builder: &Builder, base: Var, power: Var) -> Var {
-    let op: Operation = Operation::Pow;
+    let op = Operation::Pow;
     operation(builder, &[base.clone(), power.clone()], base.label, op)
+}
+
+pub fn reduceop(builder: &Builder, op: Operation, x: Var) -> Var {
+    let source = x.label.clone();
+    let target = NdArrayType {
+        shape: Shape(source.shape.0[..source.shape.0.len() - 1].to_vec()),
+        dtype: source.dtype,
+    };
+    operation(builder, &[x.clone()], target, op)
+}
+
+pub fn sum(builder: &Builder, x: Var) -> Var {
+    reduceop(builder, Operation::Sum, x)
+}
+
+pub fn max(builder: &Builder, x: Var) -> Var {
+    reduceop(builder, Operation::Max, x)
 }
 
 pub fn transpose(builder: &Builder, dim0: usize, dim1: usize, x: Var) -> Var {
@@ -77,7 +94,7 @@ pub fn transpose(builder: &Builder, dim0: usize, dim1: usize, x: Var) -> Var {
         shape: Shape(new_shape),
         dtype: in_t.dtype,
     };
-    let op: Operation = Operation::Transpose { dim0, dim1 };
+    let op = Operation::Transpose { dim0, dim1 };
     operation(builder, &[x.clone()], out_t, op)
 }
 
