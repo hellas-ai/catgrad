@@ -243,14 +243,7 @@ mod test {
             panic!("unexpected coarity at eval time")
         };
 
-        // Check result shape
-        match actual {
-            TaggedNdArray::F32(arr) => {
-                assert_eq!(arr.shape.0, vec![1, 2]);
-                assert_eq!(arr.data, vec![1.5, 3.3]);
-            }
-            _ => panic!("wrong type"),
-        }
+        assert_eq!(actual.approx(6), &[1.5, 3.3]);
     }
 
     #[test]
