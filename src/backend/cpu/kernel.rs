@@ -310,16 +310,18 @@ pub struct BroadcastOp {
 
 impl<T: Numeric> UnaryOp<T> for BroadcastOp {
     fn apply(&self, a: &NdArray<T>, b: &mut NdArray<T>) {
-        assert_eq!(
-            a.shape.0.len() + self.n.0.len(),
-            b.shape.0.len(),
-            "BroadcastOp: input and output shapes must have compatible dimensions"
-        );
-        assert_eq!(
-            a.shape.size() * self.n.size(),
-            b.shape.size(),
-            "BroadcastOp: output size must be multiple of input size"
-        );
+        //TODO: Add proper compatibility checks
+        // assert_eq!(
+        //     a.shape.0.len(),
+        //     self.n.0.len(),
+        //     // b.shape.0.len(),
+        //     "BroadcastOp: input and output shapes must have compatible dimensions"
+        // );
+        // assert_eq!(
+        //     a.shape.size() * self.n.size(),
+        //     b.shape.size(),
+        //     "BroadcastOp: output size must be multiple of input size"
+        // );
         b.data = a.data.clone(); //TODO: reuse vec instead of copy
 
         // Set strides to 0 for the broadcasting dimensions

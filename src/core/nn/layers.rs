@@ -61,11 +61,29 @@ pub fn broadcast(builder: &Builder, n: Shape, x: Var) -> Var {
     operation(builder, &[x.clone()], out_t, op)
 }
 
+pub fn expand(builder: &Builder, shape: Shape, x: Var) -> Var {
+    let out_t = NdArrayType {
+        shape: shape.clone(),
+        dtype: x.label.dtype,
+    };
+    let op = Operation::Broadcast(shape);
+    operation(builder, &[x.clone()], out_t, op)
+}
+
 pub fn power(builder: &Builder, base: Var, power: Var) -> Var {
     let op = Operation::Pow;
     operation(builder, &[base.clone(), power.clone()], base.label, op)
 }
 
+pub fn sqrt(builder: &Builder, x: Var) -> Var {
+    let mh = constant(builder, x.label.clone(), 0.5);
+    power(builder, x, mh)
+}
+
+pub fn exp(builder: &Builder, x: Var) -> Var {
+    let e = constant(builder, x.label.clone(), E);
+    power(builder, e, x)
+}
 pub fn reduceop(builder: &Builder, op: Operation, x: Var) -> Var {
     let source = x.label.clone();
     let target = NdArrayType {
@@ -120,16 +138,15 @@ pub fn linear(
     let w = parameter(builder, w_type.clone(), format!("{name}.weight"));
     let b = parameter(builder, b_type.clone(), format!("{name}.bias"));
 
-    let b_b = broadcast(builder, Shape(vec![1]), b);
+    let b_b = expand(builder, Shape(vec![1, output_features]), b);
     let w_t = transpose(builder, 0, 1, w);
     mat_mul(builder, x, w_t) + b_b
 }
 
 pub fn sigmoid(builder: &Builder, x: Var) -> Var {
     let one = constant(builder, x.label.clone(), 1.0);
-    let e = constant(builder, x.label.clone(), E);
 
-    one.clone() / (one + power(builder, e, -x))
+    one.clone() / (one + exp(builder, -x))
 }
 
 pub fn tanh(builder: &Builder, x: Var) -> Var {
@@ -150,9 +167,67 @@ pub fn gelu(builder: &Builder, x: Var) -> Var {
     half * x.clone() * (one + tanh(builder, c * (x.clone() + k * (power(builder, x, three)))))
 }
 
+fn layernorm_raw(builder: &Builder, x: Var) -> Var {
+    let scalar = NdArrayType {
+        shape: Shape(vec![1]),
+        dtype: x.label.dtype,
+    };
+    let n = x.label.shape.0[x.label.shape.0.len() - 1];
+    let constn = constant(builder, scalar.clone(), n as f32);
+
+    let mean = sum(builder, x.clone()) / constn.clone();
+    let nom = x.clone() - expand(builder, x.label.shape.clone(), mean.clone());
+
+    let epsilon = constant(builder, scalar.clone(), 1e-5);
+    let var = sum(builder, nom.clone() * nom.clone()) / constn;
+    let stddev = sqrt(builder, var + epsilon);
+    let denom = expand(builder, x.label.shape, stddev);
+
+    nom / denom
+}
+
+pub fn layernorm(builder: &Builder, name: &str, x: Var) -> Var {
+    let gamma = parameter(builder, x.label.clone(), format!("{name}.weight"));
+    let beta = parameter(builder, x.label.clone(), format!("{name}.bias"));
+    layernorm_raw(builder, x) * gamma + beta
+}
+
+fn rmsnorm_raw(builder: &Builder, x: Var) -> Var {
+    let scalar = NdArrayType {
+        shape: Shape(vec![1]),
+        dtype: x.label.dtype,
+    };
+    let epsilon = constant(builder, scalar.clone(), 1e-5);
+    let n = x.label.shape.0[x.label.shape.0.len() - 1];
+    let constn = constant(builder, scalar.clone(), n as f32);
+    let ms = sum(builder, x.clone() * x.clone()) / constn;
+    let rms = sqrt(builder, ms + epsilon);
+    let b = expand(builder, x.label.shape.clone(), rms);
+
+    x / b
+}
+
+// rmsnorm(x) = x / √(E[x²] + ε) × γ
+pub fn rmsnorm(builder: &Builder, name: &str, x: Var) -> Var {
+    let gamma = parameter(builder, x.label.clone(), format!("{name}.weight"));
+    rmsnorm_raw(builder, x) * gamma
+}
+
+pub fn softmax(builder: &Builder, x: Var) -> Var {
+    let m = max(builder, x.clone());
+    let bmax = expand(builder, x.label.shape.clone(), m);
+    let x = x - bmax;
+    let ex = exp(builder, x.clone());
+    let s = sum(builder, ex.clone());
+    let bsum = expand(builder, x.label.shape.clone(), s);
+    ex / bsum
+}
+
 #[cfg(test)]
 mod test {
-    use super::{gelu, linear, mat_mul, sigmoid, tanh, Builder};
+    use super::{
+        gelu, layernorm_raw, linear, mat_mul, rmsnorm_raw, sigmoid, softmax, tanh, Builder,
+    };
     use crate::backend::cpu::eval::EvalState;
     use crate::backend::cpu::ndarray::{NdArray, TaggedNdArray};
     use crate::core::{Dtype, NdArrayType, Shape, Term, Var};
@@ -204,6 +279,34 @@ mod test {
     #[test]
     fn test_sigmoid() {
         test_activation(&[1.0, 2.0, 3.0], &[0.731059, 0.880797, 0.952574], sigmoid);
+    }
+
+    #[test]
+    fn test_softmax() {
+        test_activation(&[1.0, 2.0, 3.0], &[0.090031, 0.244728, 0.665241], softmax);
+        test_activation(
+            &[100.1, 100.2, 100.3],
+            &[0.300609, 0.332224, 0.367167],
+            softmax,
+        );
+    }
+
+    #[test]
+    fn test_rmsnorm() {
+        test_activation(
+            &[0., 1., 2., 3., 4.],
+            &[0.0, 0.408248, 0.816496, 1.224744, 1.632992],
+            rmsnorm_raw,
+        )
+    }
+
+    #[test]
+    fn test_layernorm() {
+        test_activation(
+            &[0., 1., 2., 3., 4.],
+            &[-1.414210, -0.707105, 0.000000, 0.707105, 1.414210],
+            layernorm_raw,
+        )
     }
 
     #[test]

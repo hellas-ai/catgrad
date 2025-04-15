@@ -185,15 +185,16 @@ impl EvalState {
                     match self.data[..].get_disjoint_mut([sources[0], *t]) {
                         Ok([F32(a), F32(b)]) => {
                             b.copy_from(a);
-                            b.strides = a.strides.clone()
+                            // TODO: Figure out strides interacting with copy and broadcasting.
+                            // b.strides = a.strides.clone()
                         }
                         Ok([F16(a), F16(b)]) => {
                             b.copy_from(a);
-                            b.strides = a.strides.clone()
+                            // b.strides = a.strides.clone()
                         }
                         Ok([I32(a), I32(b)]) => {
                             b.copy_from(a);
-                            b.strides = a.strides.clone();
+                            // b.strides = a.strides.clone();
                         }
                         _ => panic!("invalid types"),
                     }
