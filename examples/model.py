@@ -12,27 +12,52 @@ import torch.nn.functional as F
 class MLP(nn.Module):
     def __init__(self, dim=8, exp=2):
         super().__init__()
-        self.lin1 = nn.Linear(dim, dim * exp, bias=True, dtype=args.dtype)
+        self.lin1 = nn.Linear(dim, dim * exp, bias=True)
         self.lin2 = nn.Linear(dim * exp, dim, bias=True)
         self.act = nn.Tanh()
         # self.act = nn.GELU(approximate="tanh")
 
     def forward(self, x):
-        res = x
         x = self.lin1(x)
         x = self.act(x)
         x = self.lin2(x)
-        return x + res
+        return x
 
-
-class Model(nn.Module):
-    def __init__(self, layers=4, dim=8, exp=2):
-        super().__init__()
-        self.layers = nn.Sequential(*[MLP(dim, exp) for _ in range(layers)])
+class Attention(nn.Module):
+    def __init__(self, dim):
+        self.q = nn.Linear(dim, dim, bias=False)
+        self.k = nn.Linear(dim, dim, bias=False)
+        self.v = nn.Linear(dim, dim, bias=False)
+        self.proj = nn.Linear(dim, dim, bias=False)
 
     def forward(self, x):
+        B, T, D = x.size()
+        return self.proj(x)
+
+class Layer(nn.Module):
+    def __init__(self, dim=8, exp=2):
+        super().__init__()
+        self.mlp = MLP(dim, exp)
+
+    def forward(self, x):
+        res = x
+        x = self.mlp(x)
+        return x + res
+
+class Model(nn.Module):
+    def __init__(self, vocab_size, layers, dim, exp):
+        super().__init__()
+        self.token_embeddings = nn.Embedding(vocab_size, dim)
+        self.prenorm = nn.LayerNorm(dim)
+        self.layers = nn.Sequential(*[Layer(dim, exp) for _ in range(layers)])
+        self.postnorm = nn.LayerNorm(dim)
+
+    def forward(self, x):
+        # x = self.token_embeddings(x)
+        x = self.prenorm(x)
         x = self.layers(x)
-        # x = F.softmax(x, dim=-1)
+        x = self.postnorm(x)
+        x = F.softmax(x, dim=-1)
         return x
 
 
@@ -42,11 +67,10 @@ def main(args):
     torch.manual_seed(args.seed)
 
     torch.set_printoptions(precision=6)
-    # x = torch.rand(args.dim, dtype=args.dtype)
     x = torch.full((args.dim,), 1.0)
     print(x)
 
-    model = Model(args.layers, args.dim, args.exp)
+    model = Model(args.vocab_size, args.layers, args.dim, args.exp)
 
     print(model)
     y = model(x)
@@ -60,6 +84,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--model_path", "-m", type=str, default="model.safetensors")
     parser.add_argument("--layers", "-l", type=int, default=4)
+    parser.add_argument("--vocab-size", "-v", type=int, default=128)
     parser.add_argument("--dim", "-d", type=int, default=8)
     parser.add_argument("--exp", "-e", type=int, default=2)
     parser.add_argument("--dtype", type=str, default="float32")

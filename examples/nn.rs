@@ -1,8 +1,8 @@
 // Example NN model inference
 // Terms built using the var API
 
-use std::cell::RefCell;
 use std::rc::Rc;
+use std::{cell::RefCell, f64::NAN};
 
 use catgrad::{
     backend::cpu::{
@@ -11,7 +11,7 @@ use catgrad::{
     },
     core::{
         nn::{
-            layers::{linear, tanh, Builder},
+            layers::{gelu, layernorm, linear, rmsnorm, softmax, tanh, Builder},
             utils::read_safetensors,
         },
         Dtype, NdArrayType, Shape, Term, Var,
@@ -28,8 +28,7 @@ struct Model {
     pub term: Term,
 }
 
-#[allow(unused)]
-pub fn mlp_layer(
+pub fn layer(
     builder: &Builder,
     input_features: usize,
     output_features: usize,
@@ -38,6 +37,26 @@ pub fn mlp_layer(
     x: Var,
 ) -> Var {
     let res = x.clone();
+    let x = mlp_layer(
+        builder,
+        input_features,
+        output_features,
+        dtype,
+        &format!("{name}.mlp"),
+        x,
+    );
+    x + res
+}
+
+pub fn mlp_layer(
+    builder: &Builder,
+    input_features: usize,
+    output_features: usize,
+    dtype: Dtype,
+    name: &str,
+    x: Var,
+) -> Var {
+    // let res = x.clone();
     let l1 = linear(
         builder,
         input_features,
@@ -56,7 +75,7 @@ pub fn mlp_layer(
         &format!("{name}.lin2"),
         a,
     );
-    l2 + res
+    l2
 }
 
 impl Model {
@@ -70,8 +89,9 @@ impl Model {
         {
             let x = Var::new(builder.clone(), in_type.clone());
             let mut result = x.clone();
+            result = layernorm(&builder, "prenorm", result);
             for i in 0..4 {
-                result = mlp_layer(
+                result = layer(
                     &builder,
                     in_dim,
                     out_dim,
@@ -80,6 +100,8 @@ impl Model {
                     result,
                 );
             }
+            result = layernorm(&builder, "postnorm", result);
+            result = softmax(&builder, result);
 
             builder.borrow_mut().sources = vec![x.new_source()];
             builder.borrow_mut().targets = vec![result.new_target()];
