@@ -1,6 +1,7 @@
 # The model saved by this run with default arguments
 # can be loaded by the example apps.
 
+import math
 import argparse
 from safetensors.torch import save_model
 
@@ -14,33 +15,48 @@ class MLP(nn.Module):
         super().__init__()
         self.lin1 = nn.Linear(dim, dim * exp, bias=True)
         self.lin2 = nn.Linear(dim * exp, dim, bias=True)
-        self.act = nn.Tanh()
-        # self.act = nn.GELU(approximate="tanh")
+        self.tanh = nn.Tanh()
+        self.gelu = nn.GELU(approximate="tanh")
 
     def forward(self, x):
         x = self.lin1(x)
-        x = self.act(x)
+        x = self.tanh(x)
         x = self.lin2(x)
+        x = self.gelu(x)
         return x
 
 class Attention(nn.Module):
     def __init__(self, dim):
-        self.q = nn.Linear(dim, dim, bias=False)
-        self.k = nn.Linear(dim, dim, bias=False)
-        self.v = nn.Linear(dim, dim, bias=False)
-        self.proj = nn.Linear(dim, dim, bias=False)
+        super().__init__()
+        self.key = nn.Linear(dim, dim)
+        self.query = nn.Linear(dim, dim)
+        self.value = nn.Linear(dim, dim)
+        self.proj = nn.Linear(dim, dim)
 
     def forward(self, x):
-        B, T, D = x.size()
-        return self.proj(x)
+        # print(x)
+        # B, T, D = x.size()
+        k = self.key(x)
+        q = self.query(x)
+        v = self.value(x)
+        attn = q@k.T
+        attn = attn / math.sqrt(k.size(-1))
+        s = k+q+v
+        return self.proj(s)
 
 class Layer(nn.Module):
     def __init__(self, dim=8, exp=2):
         super().__init__()
+        self.prenorm = nn.RMSNorm(dim)
+        self.attention = Attention(dim)
+        self.postnorm = nn.RMSNorm(dim)
         self.mlp = MLP(dim, exp)
 
     def forward(self, x):
         res = x
+        x = self.prenorm(x)
+        x = self.attention(x)
+        x = self.postnorm(x)
         x = self.mlp(x)
         return x + res
 

@@ -1,4 +1,4 @@
-use crate::core::{Dtype, NdArrayType, Operation, PrimitiveType, Shape, Term, Var};
+use crate::core::{NdArrayType, Operation, PrimitiveType, Shape, Term, Var};
 use open_hypergraphs::lax::var::operation;
 use std::cell::RefCell;
 use std::f32::consts::{E, PI};
@@ -120,25 +120,24 @@ pub fn linear(
     builder: &Builder,
     input_features: usize,
     output_features: usize,
-    dtype: Dtype,
     name: &str,
     x: Var,
 ) -> Var {
     // let batch_size = 1;
     let w_type = NdArrayType {
         shape: Shape(vec![output_features, input_features]),
-        dtype,
+        dtype: x.label.dtype,
     };
     // Bias
     let b_type = NdArrayType {
         shape: Shape(vec![output_features]),
-        dtype,
+        dtype: x.label.dtype,
     };
 
     let w = parameter(builder, w_type.clone(), format!("{name}.weight"));
     let b = parameter(builder, b_type.clone(), format!("{name}.bias"));
 
-    let b_b = expand(builder, Shape(vec![1, output_features]), b);
+    let b_b = broadcast(builder, Shape(vec![1]), b);
     let w_t = transpose(builder, 0, 1, w);
     mat_mul(builder, x, w_t) + b_b
 }
@@ -186,10 +185,14 @@ fn layernorm_raw(builder: &Builder, x: Var) -> Var {
     nom / denom
 }
 
-pub fn layernorm(builder: &Builder, name: &str, x: Var) -> Var {
-    let gamma = parameter(builder, x.label.clone(), format!("{name}.weight"));
-    let beta = parameter(builder, x.label.clone(), format!("{name}.bias"));
-    layernorm_raw(builder, x) * gamma + beta
+pub fn layernorm(builder: &Builder, _name: &str, x: Var) -> Var {
+    // let _gamma = parameter(builder, x.label.clone(), format!("{name}.weight"));
+    // let gamma = broadcast(builder, Shape(vec![2]), gamma);
+    // let _beta = parameter(builder, x.label.clone(), format!("{name}.bias"));
+    // let beta = broadcast(builder, Shape(vec![2]), beta);
+    //layernorm_raw(builder, x) * gamma + beta
+    let gamma = constant(builder, x.label.clone(), 1.0);
+    layernorm_raw(builder, x) * gamma
 }
 
 fn rmsnorm_raw(builder: &Builder, x: Var) -> Var {
@@ -208,8 +211,9 @@ fn rmsnorm_raw(builder: &Builder, x: Var) -> Var {
 }
 
 // rmsnorm(x) = x / √(E[x²] + ε) × γ
-pub fn rmsnorm(builder: &Builder, name: &str, x: Var) -> Var {
-    let gamma = parameter(builder, x.label.clone(), format!("{name}.weight"));
+pub fn rmsnorm(builder: &Builder, _name: &str, x: Var) -> Var {
+    // let gamma = parameter(builder, x.label.clone(), format!("{name}.weight"));
+    let gamma = constant(builder, x.label.clone(), 1.0);
     rmsnorm_raw(builder, x) * gamma
 }
 
@@ -319,7 +323,7 @@ mod test {
         {
             let x = Var::new(builder.clone(), in_type.clone());
             // Run linear layer (x * w^T + b)
-            let result = linear(&builder, 3, 2, Dtype::F32, "l", x.clone());
+            let result = linear(&builder, 3, 2, "l", x.clone());
 
             builder.borrow_mut().sources = vec![x.new_source()];
             builder.borrow_mut().targets = vec![result.new_target()];
