@@ -39,10 +39,14 @@ class Attention(nn.Module):
         k = self.key(x)
         q = self.query(x)
         v = self.value(x)
-        attn = q@k.T
-        attn = attn / math.sqrt(k.size(-1))
-        s = k+q+v
-        return self.proj(s)
+        if False: # these are equivalent
+            attn = torch.nn.functional.scaled_dot_product_attention(q, k, v)
+        else:
+            attn = q@k.T
+            attn = attn / math.sqrt(k.size(-1))
+            attn = torch.nn.functional.softmax(attn,dim=-1)
+            attn = attn@v;
+        return self.proj(attn)
 
 class Layer(nn.Module):
     def __init__(self, dim=8, exp=2):
@@ -83,12 +87,12 @@ def main(args):
     torch.manual_seed(args.seed)
 
     torch.set_printoptions(precision=6)
-    x = torch.full((args.dim,), 1.0)
+    x = torch.full((args.batches, args.dim,), 1.0)
     print(x)
 
     model = Model(args.vocab_size, args.layers, args.dim, args.exp)
 
-    print(model)
+    # print(model)
     y = model(x)
 
     print(y)
@@ -99,6 +103,7 @@ def main(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--model_path", "-m", type=str, default="model.safetensors")
+    parser.add_argument("--batches", "-b", type=int, default=1)
     parser.add_argument("--layers", "-l", type=int, default=4)
     parser.add_argument("--vocab-size", "-v", type=int, default=128)
     parser.add_argument("--dim", "-d", type=int, default=8)

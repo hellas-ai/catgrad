@@ -12,7 +12,8 @@ use catgrad::{
     core::{
         nn::{
             layers::{
-                gelu, layernorm, linear, mat_mul, rmsnorm, softmax, tanh, transpose, Builder,
+                constant, gelu, layernorm, linear, mat_mul, rmsnorm, softmax, tanh, transpose,
+                Builder,
             },
             utils::read_safetensors,
         },
@@ -61,10 +62,13 @@ pub fn attention(builder: &Builder, dim: usize, name: &str, x: Var) -> Var {
     let q = linear(builder, dim, dim, &format!("{name}.query"), x.clone());
     let v = linear(builder, dim, dim, &format!("{name}.value"), x.clone());
 
-    let bu = mat_mul(builder, q.clone(), transpose(builder, 0, 1, k.clone()));
-    let s = k + q + v;
-    let s = s;
-    let o = linear(builder, dim, dim, &format!("{name}.proj"), s);
+    let tk = transpose(builder, 0, 1, k); // TODO: dims
+    let attn = mat_mul(builder, q.clone(), tk);
+    let denom = constant(builder, attn.label.clone(), f32::sqrt(dim as f32));
+    let attn = attn / denom;
+    let attn = softmax(builder, attn);
+    let attn = mat_mul(builder, attn, v);
+    let o = linear(builder, dim, dim, &format!("{name}.proj"), attn);
     o
 }
 
@@ -134,7 +138,8 @@ impl Model {
 }
 
 pub fn main() {
-    let input = NdArray::new(vec![1.0; 8], Shape(vec![1, 8]));
+    let batches = 1;
+    let input = NdArray::new(vec![1.0; 8 * batches], Shape(vec![batches, 8]));
     let model = Model::build(8, 16);
     // println!("Model {:#?}", &model);
     let result = model.run(&input);
