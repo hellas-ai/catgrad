@@ -123,7 +123,7 @@ pub fn linear(
     name: &str,
     x: Var,
 ) -> Var {
-    // let batch_size = 1;
+    let batch_size = x.label.shape.0[0];
     let w_type = NdArrayType {
         shape: Shape(vec![output_features, input_features]),
         dtype: x.label.dtype,
@@ -137,7 +137,8 @@ pub fn linear(
     let w = parameter(builder, w_type.clone(), format!("{name}.weight"));
     let b = parameter(builder, b_type.clone(), format!("{name}.bias"));
 
-    let b_b = broadcast(builder, Shape(vec![1]), b);
+    let b_b = broadcast(builder, Shape(vec![batch_size]), b);
+    // let b_b = expand(builder, Shape(vec![batch_size, output_features]), b);
     let w_t = transpose(builder, 0, 1, w);
     mat_mul(builder, x, w_t) + b_b
 }
@@ -316,7 +317,7 @@ mod test {
     #[test]
     fn test_linear() {
         let in_type = NdArrayType {
-            shape: Shape(vec![1, 3]),
+            shape: Shape(vec![2, 3]),
             dtype: Dtype::F32,
         };
         let builder = Rc::new(RefCell::new(Term::empty()));
@@ -334,7 +335,7 @@ mod test {
         let mut state = EvalState::from_lax(f);
 
         // Create test input data
-        let x = NdArray::new(vec![1.0, 2.0, 3.0], Shape(vec![1, 3]));
+        let x = NdArray::new(vec![1.0, 2.0, 3.0, 2.0, 3.0, 1.0], Shape(vec![2, 3]));
 
         // Parameter values
         let w = NdArray::new(vec![0.1, 0.2, 0.3, 0.4, 0.5, 0.6], Shape(vec![2, 3]));
@@ -350,7 +351,7 @@ mod test {
             panic!("unexpected coarity at eval time")
         };
 
-        assert_eq!(actual.approx(6), &[1.5, 3.3]);
+        assert_eq!(actual.approx(6), &[1.5, 3.3, 1.2, 3.0]);
     }
 
     #[test]
