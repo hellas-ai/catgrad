@@ -52,6 +52,9 @@ class Layer(nn.Module):
     def __init__(self, dim=8, exp=2):
         super().__init__()
         self.prenorm = nn.RMSNorm(dim)
+        # Init to something other than the default 1
+        # to see that catgrad is using the norm weights
+        nn.init.constant_(self.prenorm.weight, .43)
         self.attention = Attention(dim)
         self.postnorm = nn.RMSNorm(dim)
         self.mlp = MLP(dim, exp)

@@ -183,14 +183,18 @@ fn layernorm_raw(builder: &Builder, x: Var) -> Var {
     nom / denom
 }
 
-pub fn layernorm(builder: &Builder, _name: &str, x: Var) -> Var {
-    // let _gamma = parameter(builder, x.label.clone(), format!("{name}.weight"));
-    // let gamma = broadcast(builder, Shape(vec![2]), gamma);
-    // let _beta = parameter(builder, x.label.clone(), format!("{name}.bias"));
-    // let beta = broadcast(builder, Shape(vec![2]), beta);
-    //layernorm_raw(builder, x) * gamma + beta
-    let gamma = constant(builder, x.label.clone(), 1.0);
-    layernorm_raw(builder, x) * gamma
+pub fn layernorm(builder: &Builder, name: &str, x: Var) -> Var {
+    let shape = x.label.shape.0[1..].to_vec();
+    let t = NdArrayType {
+        shape: Shape(shape),
+        dtype: x.label.dtype,
+    };
+    let gamma = parameter(builder, t.clone(), format!("{name}.weight"));
+    let beta = parameter(builder, t, format!("{name}.bias"));
+    let lr = layernorm_raw(builder, x);
+    let gamma = expand(builder, lr.label.shape.clone(), gamma);
+    let beta = expand(builder, lr.label.shape.clone(), beta);
+    lr * gamma + beta
 }
 
 fn rmsnorm_raw(builder: &Builder, x: Var) -> Var {
@@ -206,10 +210,16 @@ fn rmsnorm_raw(builder: &Builder, x: Var) -> Var {
 }
 
 // rmsnorm(x) = x / √(E[x²] + ε) × γ
-pub fn rmsnorm(builder: &Builder, _name: &str, x: Var) -> Var {
-    // let gamma = parameter(builder, x.label.clone(), format!("{name}.weight"));
-    let gamma = constant(builder, x.label.clone(), 1.0);
-    rmsnorm_raw(builder, x) * gamma
+pub fn rmsnorm(builder: &Builder, name: &str, x: Var) -> Var {
+    let shape = x.label.shape.0[1..].to_vec();
+    let t = NdArrayType {
+        shape: Shape(shape),
+        dtype: x.label.dtype,
+    };
+    let gamma = parameter(builder, t.clone(), format!("{name}.weight"));
+    let lr = rmsnorm_raw(builder, x);
+    let gamma = expand(builder, lr.label.shape.clone(), gamma);
+    lr * gamma
 }
 
 pub fn softmax(builder: &Builder, x: Var) -> Var {
