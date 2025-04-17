@@ -168,18 +168,15 @@ pub fn gelu(builder: &Builder, x: Var) -> Var {
 }
 
 fn layernorm_raw(builder: &Builder, x: Var) -> Var {
-    let scalar = NdArrayType {
-        shape: Shape(vec![1]),
-        dtype: x.label.dtype,
-    };
     let n = x.label.shape.0[x.label.shape.0.len() - 1];
-    let constn = constant(builder, scalar.clone(), n as f32);
 
+    let s = sum(builder, x.clone());
+    let constn = constant(builder, s.label.clone(), n as f32);
     let mean = sum(builder, x.clone()) / constn.clone();
     let nom = x.clone() - expand(builder, x.label.shape.clone(), mean.clone());
 
-    let epsilon = constant(builder, scalar.clone(), 1e-5);
     let var = sum(builder, nom.clone() * nom.clone()) / constn;
+    let epsilon = constant(builder, var.label.clone(), 1e-5);
     let stddev = sqrt(builder, var + epsilon);
     let denom = expand(builder, x.label.shape, stddev);
 
@@ -197,14 +194,11 @@ pub fn layernorm(builder: &Builder, _name: &str, x: Var) -> Var {
 }
 
 fn rmsnorm_raw(builder: &Builder, x: Var) -> Var {
-    let scalar = NdArrayType {
-        shape: Shape(vec![1]),
-        dtype: x.label.dtype,
-    };
-    let epsilon = constant(builder, scalar.clone(), 1e-5);
     let n = x.label.shape.0[x.label.shape.0.len() - 1];
-    let constn = constant(builder, scalar.clone(), n as f32);
+    let s = sum(builder, x.clone() * x.clone());
+    let constn = constant(builder, s.label.clone(), n as f32);
     let ms = sum(builder, x.clone() * x.clone()) / constn;
+    let epsilon = constant(builder, ms.label.clone(), 1e-5);
     let rms = sqrt(builder, ms + epsilon);
     let b = expand(builder, x.label.shape.clone(), rms);
 
