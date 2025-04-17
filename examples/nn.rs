@@ -99,7 +99,7 @@ pub fn mlp(
 }
 
 impl Model {
-    pub fn build(in_dim: usize, out_dim: usize) -> Self {
+    pub fn build(layers: usize, in_dim: usize, out_dim: usize) -> Self {
         let in_type = NdArrayType {
             shape: Shape(vec![1, in_dim]),
             dtype: Dtype::F32,
@@ -110,7 +110,7 @@ impl Model {
             let x = Var::new(builder.clone(), in_type.clone());
             let mut result = x.clone();
             result = layernorm(&builder, "prenorm", result);
-            for i in 0..4 {
+            for i in 0..layers {
                 result = layer(&builder, in_dim, out_dim, &format!("layers.{i}"), result);
             }
             result = layernorm(&builder, "postnorm", result);
@@ -137,10 +137,32 @@ impl Model {
     }
 }
 
+struct OptParse(Vec<String>);
+
+impl OptParse {
+    fn new() -> Self {
+        Self(std::env::args().collect())
+    }
+
+    fn get(&self, name: &str, default: usize) -> usize {
+        for p in self.0.windows(2) {
+            if p[0] == name {
+                return p[1].parse::<usize>().unwrap();
+            }
+        }
+        return default;
+    }
+}
+
 pub fn main() {
-    let batches = 1;
-    let input = NdArray::new(vec![1.0; 8 * batches], Shape(vec![batches, 8]));
-    let model = Model::build(8, 16);
+    let args = OptParse::new();
+    let batches = args.get("-b", 1);
+    let dim = args.get("-d", 8);
+    let exp = args.get("-e", 2);
+    let layers = args.get("-l", 4);
+
+    let input = NdArray::new(vec![1.0; batches * dim], Shape(vec![batches, dim]));
+    let model = Model::build(layers, dim, dim * exp);
     // println!("Model {:#?}", &model);
     let result = model.run(&input);
     println!("input {:?}", input);
