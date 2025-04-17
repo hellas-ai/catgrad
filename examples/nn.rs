@@ -99,9 +99,9 @@ pub fn mlp(
 }
 
 impl Model {
-    pub fn build(layers: usize, in_dim: usize, out_dim: usize) -> Self {
+    pub fn build(batches: usize, layers: usize, in_dim: usize, out_dim: usize) -> Self {
         let in_type = NdArrayType {
-            shape: Shape(vec![1, in_dim]),
+            shape: Shape(vec![batches, in_dim]),
             dtype: Dtype::F32,
         };
 
@@ -162,7 +162,7 @@ pub fn main() {
     let layers = args.get("-l", 4);
 
     let input = NdArray::new(vec![1.0; batches * dim], Shape(vec![batches, dim]));
-    let model = Model::build(layers, dim, dim * exp);
+    let model = Model::build(batches, layers, dim, dim * exp);
     // println!("Model {:#?}", &model);
     let result = model.run(&input);
     println!("input {:?}", input);
