@@ -195,7 +195,7 @@ fn layernorm_raw(builder: &Builder, x: Var) -> Var {
 }
 
 pub fn layernorm(builder: &Builder, name: &str, x: Var) -> Var {
-    let shape = x.label.shape.0[1..].to_vec();
+    let shape = vec![x.label.shape.0[x.label.shape.0.len() - 1]];
     let t = NdArrayType {
         shape: Shape(shape),
         dtype: x.label.dtype,
@@ -222,7 +222,7 @@ fn rmsnorm_raw(builder: &Builder, x: Var) -> Var {
 
 // rmsnorm(x) = x / √(E[x²] + ε) × γ
 pub fn rmsnorm(builder: &Builder, name: &str, x: Var) -> Var {
-    let shape = x.label.shape.0[1..].to_vec();
+    let shape = vec![x.label.shape.0[x.label.shape.0.len() - 1]];
     let t = NdArrayType {
         shape: Shape(shape),
         dtype: x.label.dtype,
