@@ -50,6 +50,9 @@ pub enum Operation {
 
     /// Inputs injected at runtime (model parameters)
     Parameter(String),
+
+    /// Embedding lookup
+    Embedding,
 }
 
 pub type Term = open_hypergraphs::lax::OpenHypergraph<PrimitiveType, Operation>;
