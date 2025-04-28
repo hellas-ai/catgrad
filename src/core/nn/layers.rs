@@ -104,10 +104,15 @@ pub fn exp(builder: &Builder, x: Var) -> Var {
     let e = constant(builder, x.label.clone(), E);
     power(builder, e, x)
 }
+
 pub fn reduceop(builder: &Builder, op: Operation, x: Var) -> Var {
     let source = x.label.clone();
+
+    // keep the last dimension, set it to 1
+    let mut target_shape = source.shape.0.clone();
+    target_shape[source.shape.0.len() - 1] = 1;
     let target = NdArrayType {
-        shape: Shape(source.shape.0[..source.shape.0.len() - 1].to_vec()),
+        shape: Shape(target_shape),
         dtype: source.dtype,
     };
     operation(builder, &[x.clone()], target, op)
