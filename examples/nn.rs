@@ -12,8 +12,8 @@ use catgrad::{
     core::{
         nn::{
             layers::{
-                constant, gelu, layernorm, linear, mat_mul, rmsnorm, softmax, tanh, transpose,
-                Builder,
+                constant, embedding, gelu, layernorm, linear, mat_mul, parameter, rmsnorm, softmax,
+                tanh, transpose, Builder,
             },
             utils::read_safetensors,
         },
@@ -31,30 +31,28 @@ struct Model {
     pub term: Term,
 }
 
-pub fn layer(
+pub fn layer(builder: &Builder, in_dim: usize, out_dim: usize, name: &str, x: Var) -> Var {
+    let res = x.clone();
+    let x = rmsnorm(builder, &format!("{name}.prenorm"), x);
+    let x = attention(builder, in_dim, &format!("{name}.attention"), x);
+    let x = rmsnorm(builder, &format!("{name}.postnorm"), x);
+    let x = mlp(builder, in_dim, out_dim, &format!("{name}.mlp"), x);
+    x + res
+}
+
+pub fn token_embeddings(
     builder: &Builder,
-    input_features: usize,
-    output_features: usize,
+    vocab_size: usize,
+    dim: usize,
     name: &str,
     x: Var,
 ) -> Var {
-    let res = x.clone();
-    let result = rmsnorm(builder, &format!("{name}.prenorm"), x);
-    let result = attention(
-        builder,
-        input_features,
-        &format!("{name}.attention"),
-        result,
-    );
-    let result = rmsnorm(builder, &format!("{name}.postnorm"), result);
-    let x = mlp(
-        builder,
-        input_features,
-        output_features,
-        &format!("{name}.mlp"),
-        result,
-    );
-    x + res
+    let t = NdArrayType {
+        shape: Shape(vec![vocab_size, dim]),
+        dtype: Dtype::F32,
+    };
+    let weights = parameter(builder, t, format!("{name}.weight"));
+    embedding(builder, x, weights)
 }
 
 pub fn attention(builder: &Builder, dim: usize, name: &str, x: Var) -> Var {
@@ -62,7 +60,7 @@ pub fn attention(builder: &Builder, dim: usize, name: &str, x: Var) -> Var {
     let q = linear(builder, dim, dim, &format!("{name}.query"), x.clone());
     let v = linear(builder, dim, dim, &format!("{name}.value"), x.clone());
 
-    let tk = transpose(builder, 0, 1, k); // TODO: dims
+    let tk = transpose(builder, 1, 2, k); // TODO: dims
     let attn = mat_mul(builder, q.clone(), tk);
     let denom = constant(builder, attn.label.clone(), f32::sqrt(dim as f32));
     let attn = attn / denom;
@@ -72,43 +70,33 @@ pub fn attention(builder: &Builder, dim: usize, name: &str, x: Var) -> Var {
     o
 }
 
-pub fn mlp(
-    builder: &Builder,
-    input_features: usize,
-    output_features: usize,
-    name: &str,
-    x: Var,
-) -> Var {
-    let l1 = linear(
-        builder,
-        input_features,
-        output_features,
-        &format!("{name}.lin1"),
-        x,
-    );
-    let a = tanh(builder, l1);
-    let l2 = linear(
-        builder,
-        output_features,
-        input_features,
-        &format!("{name}.lin2"),
-        a,
-    );
-    let l2 = gelu(builder, l2);
-    l2
+pub fn mlp(builder: &Builder, in_dim: usize, out_dim: usize, name: &str, x: Var) -> Var {
+    let x = linear(builder, in_dim, out_dim, &format!("{name}.lin1"), x);
+    let x = tanh(builder, x);
+    let x = linear(builder, out_dim, in_dim, &format!("{name}.lin2"), x);
+    let x = gelu(builder, x);
+    x
 }
 
 impl Model {
-    pub fn build(batches: usize, layers: usize, in_dim: usize, out_dim: usize) -> Self {
+    pub fn build(
+        batches: usize,
+        tokens: usize,
+        vocab_size: usize,
+        layers: usize,
+        in_dim: usize,
+        out_dim: usize,
+    ) -> Self {
         let in_type = NdArrayType {
-            shape: Shape(vec![batches, in_dim]),
-            dtype: Dtype::F32,
+            shape: Shape(vec![batches, tokens]),
+            dtype: Dtype::I32,
         };
 
         let builder = Rc::new(RefCell::new(Term::empty()));
         {
             let x = Var::new(builder.clone(), in_type.clone());
             let mut result = x.clone();
+            result = token_embeddings(&builder, vocab_size, in_dim, "token_embeddings", result);
             result = layernorm(&builder, "prenorm", result);
             for i in 0..layers {
                 result = layer(&builder, in_dim, out_dim, &format!("layers.{i}"), result);
@@ -125,7 +113,7 @@ impl Model {
         Self { term: f }
     }
 
-    pub fn run(&self, x: &NdArray<f32>) -> TaggedNdArray {
+    pub fn run(&self, x: &NdArray<i32>) -> TaggedNdArray {
         let mut state = EvalState::from_lax(self.term.clone());
         let tensors = read_safetensors("model.safetensors");
         state.set_parameters(tensors);
@@ -160,10 +148,16 @@ pub fn main() {
     let dim = args.get("-d", 8);
     let exp = args.get("-e", 2);
     let layers = args.get("-l", 4);
+    let vocab_size = args.get("-v", 128);
+    let tokens = args.get("-t", 9);
+    let fill = args.get("-f", 1);
 
-    let input = NdArray::new(vec![1.0; batches * dim], Shape(vec![batches, dim]));
-    let model = Model::build(batches, layers, dim, dim * exp);
-    // println!("Model {:#?}", &model);
+    let input = NdArray::new(
+        vec![fill as i32; batches * tokens],
+        Shape(vec![batches, tokens]),
+    );
+    let model = Model::build(batches, tokens, vocab_size, layers, dim, dim * exp);
+    println!("Model built...");
     let result = model.run(&input);
     println!("input {:?}", input);
     println!("Result: {:?}", result);

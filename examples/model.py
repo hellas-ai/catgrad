@@ -25,6 +25,7 @@ class MLP(nn.Module):
         x = self.gelu(x)
         return x
 
+
 class Attention(nn.Module):
     def __init__(self, dim):
         super().__init__()
@@ -34,19 +35,19 @@ class Attention(nn.Module):
         self.proj = nn.Linear(dim, dim)
 
     def forward(self, x):
-        # print(x)
         # B, T, D = x.size()
         k = self.key(x)
         q = self.query(x)
         v = self.value(x)
-        if False: # these are equivalent
+        if False:  # these are equivalent
             attn = torch.nn.functional.scaled_dot_product_attention(q, k, v)
         else:
-            attn = q@k.T
+            attn = q @ k.mT
             attn = attn / math.sqrt(k.size(-1))
-            attn = torch.nn.functional.softmax(attn,dim=-1)
-            attn = attn@v;
+            attn = torch.nn.functional.softmax(attn, dim=-1)
+            attn = attn @ v
         return self.proj(attn)
+
 
 class Layer(nn.Module):
     def __init__(self, dim=8, exp=2):
@@ -54,7 +55,7 @@ class Layer(nn.Module):
         self.prenorm = nn.RMSNorm(dim)
         # Init to something other than the default 1
         # to see that catgrad is using the norm weights
-        nn.init.constant_(self.prenorm.weight, .43)
+        nn.init.constant_(self.prenorm.weight, 0.43)
         self.attention = Attention(dim)
         self.postnorm = nn.RMSNorm(dim)
         self.mlp = MLP(dim, exp)
@@ -67,6 +68,7 @@ class Layer(nn.Module):
         x = self.mlp(x)
         return x + res
 
+
 class Model(nn.Module):
     def __init__(self, vocab_size, layers, dim, exp):
         super().__init__()
@@ -76,7 +78,7 @@ class Model(nn.Module):
         self.postnorm = nn.LayerNorm(dim)
 
     def forward(self, x):
-        # x = self.token_embeddings(x)
+        x = self.token_embeddings(x)
         x = self.prenorm(x)
         x = self.layers(x)
         x = self.postnorm(x)
@@ -90,7 +92,7 @@ def main(args):
     torch.manual_seed(args.seed)
 
     torch.set_printoptions(precision=6)
-    x = torch.full((args.batches, args.dim,), 1.0)
+    x = torch.full((args.batches, args.tokens), args.fill)
     print(x)
 
     model = Model(args.vocab_size, args.layers, args.dim, args.exp)
@@ -107,6 +109,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--model_path", "-m", type=str, default="model.safetensors")
     parser.add_argument("--batches", "-b", type=int, default=1)
+    parser.add_argument("--tokens", "-t", type=int, default=9)
+    parser.add_argument("--fill", "-f", type=int, default=1)
     parser.add_argument("--layers", "-l", type=int, default=4)
     parser.add_argument("--vocab-size", "-v", type=int, default=128)
     parser.add_argument("--dim", "-d", type=int, default=8)
