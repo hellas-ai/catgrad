@@ -206,6 +206,16 @@ impl EvalState {
                 Some(I32(a)) => a.fill(*k as i32),
                 _ => panic!("invalid type"),
             },
+
+            Arange => match self.data.get_mut(targets[0]) {
+                Some(I32(a)) => {
+                    for (i, x) in a.data.iter_mut().enumerate() {
+                        *x = i as i32;
+                    }
+                }
+                _ => panic!("invalid type"),
+            },
+
             Parameter(name) => {
                 // TODO:
                 // - The matching here is very ugly and incomplete

@@ -53,6 +53,9 @@ pub enum Operation {
 
     /// Embedding lookup
     Embedding,
+
+    /// Arange
+    Arange,
 }
 
 pub type Term = open_hypergraphs::lax::OpenHypergraph<PrimitiveType, Operation>;

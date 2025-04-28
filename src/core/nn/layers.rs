@@ -65,6 +65,11 @@ pub fn constant(builder: &Builder, param_type: NdArrayType, k: f32) -> Var {
     operation(builder, &[], param_type, op)
 }
 
+pub fn arange(builder: &Builder, param_type: NdArrayType) -> Var {
+    let op = Operation::Arange;
+    operation(builder, &[], param_type, op)
+}
+
 pub fn broadcast(builder: &Builder, n: Shape, x: Var) -> Var {
     let in_t = x.label.clone();
     let out_t = &n + &in_t;
