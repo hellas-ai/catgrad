@@ -12,8 +12,8 @@ use catgrad::{
     core::{
         nn::{
             layers::{
-                constant, embedding, gelu, layernorm, linear, mat_mul, parameter, rmsnorm, softmax,
-                tanh, transpose, Builder,
+                arange, constant, embedding, gelu, layernorm, linear, mat_mul, parameter, rmsnorm,
+                softmax, tanh, transpose, Builder,
             },
             utils::read_safetensors,
         },
@@ -40,15 +40,9 @@ pub fn layer(builder: &Builder, in_dim: usize, out_dim: usize, name: &str, x: Va
     x + res
 }
 
-pub fn token_embeddings(
-    builder: &Builder,
-    vocab_size: usize,
-    dim: usize,
-    name: &str,
-    x: Var,
-) -> Var {
+pub fn embeddings(builder: &Builder, size: usize, dim: usize, name: &str, x: Var) -> Var {
     let t = NdArrayType {
-        shape: Shape(vec![vocab_size, dim]),
+        shape: Shape(vec![size, dim]),
         dtype: Dtype::F32,
     };
     let weights = parameter(builder, t, format!("{name}.weight"));
@@ -95,9 +89,14 @@ impl Model {
         let builder = Rc::new(RefCell::new(Term::empty()));
         {
             let x = Var::new(builder.clone(), in_type.clone());
-            let mut result = x.clone();
-            result = token_embeddings(&builder, vocab_size, in_dim, "token_embeddings", result);
-            result = layernorm(&builder, "prenorm", result);
+            let tok_emb = embeddings(&builder, vocab_size, in_dim, "token_embeddings", x.clone());
+            // TODO: fix hardcoded max_seq_len
+            let max_seq_len = 16;
+            let pos = arange(&builder, x.label.clone());
+            let pos_emb = embeddings(&builder, max_seq_len, in_dim, "position_embeddings", pos);
+            let emb = tok_emb + pos_emb;
+
+            let mut result = layernorm(&builder, "prenorm", emb);
             for i in 0..layers {
                 result = layer(&builder, in_dim, out_dim, &format!("layers.{i}"), result);
             }

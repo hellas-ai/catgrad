@@ -70,15 +70,20 @@ class Layer(nn.Module):
 
 
 class Model(nn.Module):
-    def __init__(self, vocab_size, layers, dim, exp):
+    def __init__(self, vocab_size, max_seq_len, layers, dim, exp):
         super().__init__()
         self.token_embeddings = nn.Embedding(vocab_size, dim)
+        self.position_embeddings = nn.Embedding(max_seq_len, dim)
         self.prenorm = nn.LayerNorm(dim)
         self.layers = nn.Sequential(*[Layer(dim, exp) for _ in range(layers)])
         self.postnorm = nn.LayerNorm(dim)
 
     def forward(self, x):
-        x = self.token_embeddings(x)
+        batch_size, seq_len = x.shape
+        te = self.token_embeddings(x)
+        pos = torch.arange(0, seq_len)
+        pe = self.position_embeddings(pos)
+        x = te + pe
         x = self.prenorm(x)
         x = self.layers(x)
         x = self.postnorm(x)
@@ -95,7 +100,7 @@ def main(args):
     x = torch.full((args.batches, args.tokens), args.fill)
     print(x)
 
-    model = Model(args.vocab_size, args.layers, args.dim, args.exp)
+    model = Model(args.vocab_size, args.max_seq_len, args.layers, args.dim, args.exp)
 
     # print(model)
     y = model(x)
@@ -107,9 +112,10 @@ def main(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model_path", "-m", type=str, default="model.safetensors")
+    parser.add_argument("--model-path", "-p", type=str, default="model.safetensors")
     parser.add_argument("--batches", "-b", type=int, default=1)
-    parser.add_argument("--tokens", "-t", type=int, default=9)
+    parser.add_argument("--tokens", "-t", type=int, default=1)
+    parser.add_argument("--max-seq-len", "-m", type=int, default=16)
     parser.add_argument("--fill", "-f", type=int, default=1)
     parser.add_argument("--layers", "-l", type=int, default=4)
     parser.add_argument("--vocab-size", "-v", type=int, default=128)
