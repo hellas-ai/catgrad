@@ -301,31 +301,53 @@ impl<T: Numeric + PartialOrd + std::iter::Sum> UnaryOp<T> for SumOp {
     }
 }
 
-/// Broadcast input across a new shape.
-/// Ex: Input of shape [4, 5] broadcasted with shape n = [2, 3]
-/// will result in output of shape [2,3,4,5] where the input is repeated 2x3 times.
+/// Broadcast input into a new shape.
+/// Ex: Input of shape [4, 5] broadcasted to shape [2, 3, 4, 5]
+/// will result in output of shape [2, 3, 4, 5] where the input is repeated 2x3 times.
 pub struct BroadcastOp {
     pub n: Shape,
 }
 
 impl<T: Numeric> UnaryOp<T> for BroadcastOp {
     fn apply(&self, a: &NdArray<T>, b: &mut NdArray<T>) {
-        //TODO: Add proper compatibility checks
-        // assert_eq!(
-        //     a.shape.0.len(),
-        //     self.n.0.len(),
-        //     // b.shape.0.len(),
-        //     "BroadcastOp: input and output shapes must have compatible dimensions"
-        // );
-        // assert_eq!(
-        //     a.shape.size() * self.n.size(),
-        //     b.shape.size(),
-        //     "BroadcastOp: output size must be multiple of input size"
-        // );
-        b.data = a.data.clone(); //TODO: reuse vec instead of copy
+        assert!(
+            a.shape.0.len() <= b.shape.0.len(),
+            "BroadcastOp: cannot broadcast to fewer dimensions ({:?} to {:?})",
+            a.shape,
+            b.shape
+        );
 
-        // Set strides to 0 for the broadcasting dimensions
-        b.strides[..self.n.0.len()].fill(0);
+        // Prefix pad input dimensions with 1s to match the output shape if needed
+        let d = b.shape.0.len() - a.shape.0.len();
+
+        // println!("BroadcastOp: shapes {:?} to {:?}", a.shape, b.shape);
+        // println!("BroadcastOp: strides {:?} to {:?}", a.strides, b.strides);
+        let a_shape: Vec<usize> = vec![1; d]
+            .into_iter()
+            .chain(a.shape.0.iter().copied())
+            .collect();
+        let b_shape = b.shape.0.clone();
+
+        for i in 0..a_shape.len() {
+            if a_shape[i] != b_shape[i] && a_shape[i] != 1 {
+                panic!(
+                    "BroadcastOp: incompatible dimensions ({:?} to {:?}) at dimension {i}",
+                    a_shape, b_shape
+                );
+            }
+
+            // Set strides to 0 for the broadcasting dimensions
+            // Handles both left and right broadcasting
+            // TODO: see if this can be simplified or if it is missing cases.
+            if a_shape[i] == 1 || i < d {
+                b.strides[i] = 0;
+            } else {
+                b.strides[i] = a.strides[i - d];
+            }
+        }
+
+        // println!("BroadcastOp: strides {:?} to {:?}", a.strides, b.strides);
+        b.data = a.data.clone(); //TODO: reuse vec instead of copy
     }
 }
 

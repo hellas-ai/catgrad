@@ -93,10 +93,13 @@ impl Operation {
     }
 
     // Make an OpenHypergraph for the Broadcast operation
-    pub fn broadcast(x: NdArrayType, n: Shape) -> Term {
+    pub fn broadcast(x: NdArrayType, shape: Shape) -> Term {
         let source = x.clone();
-        let target = n.clone() + &x;
-        let op = Operation::Broadcast(n);
+        let target = NdArrayType {
+            shape: shape.clone(),
+            dtype: x.dtype,
+        };
+        let op = Operation::Broadcast(shape);
         Operation::term(op, vec![source], vec![target])
     }
 

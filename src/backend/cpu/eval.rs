@@ -765,13 +765,13 @@ mod test {
     }
 
     #[test]
-    fn test_broadcast() {
+    fn test_broadcast_left() {
         let f = Operation::broadcast(
             NdArrayType {
                 shape: Shape(vec![2, 3]),
                 dtype: Dtype::I32,
             },
-            Shape(vec![2, 1]),
+            Shape(vec![2, 1, 2, 3]),
         );
 
         let x = NdArray::new((30..36).collect(), Shape(vec![2, 3]));
@@ -796,6 +796,37 @@ mod test {
         }
     }
 
+    #[test]
+    fn test_broadcast_right() {
+        let f = Operation::broadcast(
+            NdArrayType {
+                shape: Shape(vec![4, 1]),
+                dtype: Dtype::I32,
+            },
+            Shape(vec![4, 3]),
+        );
+
+        let x = NdArray::new((30..34).collect(), Shape(vec![4, 1]));
+
+        let mut state = EvalState::from_lax(f);
+
+        let [actual] = state.eval_with(vec![x.into()])[..] else {
+            panic!("unexpected coarity at eval time")
+        };
+
+        // check that array is broadcasted across two new dimensions
+        if let TaggedNdArray::I32(actual) = actual {
+            assert_eq!(actual.shape.0, &[4, 3]);
+            assert_eq!(actual.strides, [1, 0]);
+
+            assert_eq!(actual[&[0, 0]], 30);
+            assert_eq!(actual[&[0, 1]], 30);
+            assert_eq!(actual[&[0, 2]], 30);
+            assert_eq!(actual[&[1, 0]], 31);
+            assert_eq!(actual[&[2, 1]], 32);
+            assert_eq!(actual[&[3, 2]], 33);
+        }
+    }
     #[test]
     fn test_transpose() {
         let f = Operation::transpose(
