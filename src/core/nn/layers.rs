@@ -81,6 +81,15 @@ pub fn expand(builder: &Builder, shape: Shape, x: Var) -> Var {
     operation(builder, &[x.clone()], out_t, op)
 }
 
+pub fn reshape(builder: &Builder, shape: Shape, x: Var) -> Var {
+    let out_t = NdArrayType {
+        shape,
+        dtype: x.label.dtype,
+    };
+    let op = Operation::Reshape;
+    operation(builder, &[x.clone()], out_t, op)
+}
+
 pub fn power(builder: &Builder, base: Var, power: Var) -> Var {
     let op = Operation::Pow;
     operation(builder, &[base.clone(), power.clone()], base.label, op)
