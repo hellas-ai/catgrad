@@ -147,16 +147,48 @@ impl Operation {
 
     // Make an OpenHypergraph for the Reshape operation
     pub fn reshape(x: NdArrayType, shape: Shape) -> Term {
+        // Handle wildcard dimension (0) in target shape
+        // TODO: It should be -1 as in torch but that needs changing all shape related code and the Nat = usize type.
+        let mut target_shape_vec = shape.0.clone();
+        let mut idx = None;
+        let mut prod_other_dims = 1;
+
+        for (i, &dim) in target_shape_vec.iter().enumerate() {
+            if dim == 0 {
+                if idx.is_none() {
+                    idx = Some(i);
+                } else {
+                    panic!("Only one wildcard dimension (0) is allowed in reshape.");
+                }
+            } else {
+                prod_other_dims *= dim;
+            }
+        }
+
+        if let Some(idx) = idx {
+            let size_x = x.size();
+            assert_eq!(
+                size_x % prod_other_dims,
+                0,
+                "Total size of source shape ({:?}) is not divisible by the product of non-zero target shape dimensions ({:?}) when using a wildcard (0).",
+                x.shape,
+                shape
+            );
+            target_shape_vec[idx] = size_x / prod_other_dims;
+        }
+
+        let target_shape = Shape(target_shape_vec);
+
         assert_eq!(
             x.size(),
-            shape.size(),
+            target_shape.size(),
             "Reshape from {:?} to {:?} must preserve total size.",
             x.shape,
             shape
         );
         let source = x.clone();
         let target = NdArrayType {
-            shape: shape.clone(),
+            shape: target_shape,
             dtype: x.dtype,
         };
         let op = Operation::Reshape;
