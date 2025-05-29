@@ -2,6 +2,7 @@ use super::ndarray::*;
 use crate::backend::cpu::kernel;
 use crate::core::{Operation, StrictTerm, Term, Var};
 use half::f16;
+use open_hypergraphs::lax::functor::Functor;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -396,7 +397,10 @@ impl EvalState {
     where
         F: Fn(&Builder) -> (Vec<Var>, Vec<Var>),
     {
-        let term = EvalState::build_lax(f);
+        let mut term = EvalState::build_lax(f);
+        if matches!(std::env::var("CATGRAD_FORGET").as_deref(), Ok("1")) {
+            term = open_hypergraphs::lax::var::forget::Forget.map_arrow(&term);
+        }
         EvalState::from_lax(term)
     }
 }
