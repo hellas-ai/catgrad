@@ -7,7 +7,7 @@ pub type Nat = usize;
 // Generating Objects
 
 /// Dtypes supported by N-dimensional arrays.
-#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+#[derive(Copy, Clone, PartialEq, Eq, Debug, Hash)]
 pub enum Dtype {
     F16,
     F32,
@@ -15,7 +15,7 @@ pub enum Dtype {
 }
 
 /// A rank-N shape is a length-N array of natural numbers
-#[derive(Clone, PartialEq, Eq, Debug)]
+#[derive(Clone, PartialEq, Eq, Debug, Hash)]
 pub struct Shape(pub Vec<Nat>);
 
 impl Shape {
