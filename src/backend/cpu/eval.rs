@@ -3,6 +3,7 @@ use crate::backend::cpu::kernel;
 use crate::core::{Operation, StrictTerm, Term, Var};
 use half::f16;
 use open_hypergraphs::lax::functor::Functor;
+use rayon::prelude::*;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -226,16 +227,24 @@ impl EvalState {
                 Ok([F32(a), I32(b)]) => {
                     let a_data = a.data.borrow();
                     let mut b_data = b.data.borrow_mut();
-                    a_data.iter().zip(b_data.iter_mut()).for_each(|(src, dst)| {
-                        *dst = *src as i32;
-                    });
+                    a_data
+                        .par_iter()
+                        .zip(b_data.par_iter_mut())
+                        .with_min_len(1024)
+                        .for_each(|(src, dst)| {
+                            *dst = *src as i32;
+                        });
                 }
                 Ok([I32(a), F32(b)]) => {
                     let a_data = a.data.borrow();
                     let mut b_data = b.data.borrow_mut();
-                    a_data.iter().zip(b_data.iter_mut()).for_each(|(src, dst)| {
-                        *dst = *src as f32;
-                    });
+                    a_data
+                        .par_iter()
+                        .zip(b_data.par_iter_mut())
+                        .with_min_len(1024)
+                        .for_each(|(src, dst)| {
+                            *dst = *src as f32;
+                        });
                 }
                 _ => panic!("Unsupported types for cast operation"),
             },

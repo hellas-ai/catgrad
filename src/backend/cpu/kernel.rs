@@ -4,6 +4,7 @@ use crate::core::object::Shape;
 use core::fmt::Debug;
 use gemm::{gemm, Parallelism};
 use log;
+use rayon::prelude::*;
 use std::rc::Rc;
 
 fn matmul<T: Numeric + 'static>(a: &NdArray<T>, b: &NdArray<T>, c: &mut NdArray<T>) {
@@ -170,11 +171,17 @@ pub fn batch_matmul<T: Numeric + 'static>(f: &NdArray<T>, g: &NdArray<T>, h: &mu
 }
 
 pub trait Numeric:
-    num_traits::Num + num_traits::Bounded + std::ops::Neg<Output = Self> + Copy + Debug
+    num_traits::Num + num_traits::Bounded + std::ops::Neg<Output = Self> + Copy + Debug + Send + Sync
 {
 }
 impl<T> Numeric for T where
-    T: num_traits::Num + num_traits::Bounded + std::ops::Neg<Output = Self> + Copy + Debug
+    T: num_traits::Num
+        + num_traits::Bounded
+        + std::ops::Neg<Output = Self>
+        + Copy
+        + Debug
+        + Send
+        + Sync
 {
 }
 
@@ -184,15 +191,23 @@ pub trait BinOp<T: Numeric> {
 
 fn binop_iterator<T: Numeric, F>(a: &NdArray<T>, b: &NdArray<T>, c: &mut NdArray<T>, op: F)
 where
-    F: Fn(T, T) -> T,
+    F: Fn(T, T) -> T + Send + Sync,
 {
     if a.strides == b.strides && a.strides == c.strides {
         let a_data = a.data.borrow();
         let b_data = b.data.borrow();
         let mut c_data = c.data.borrow_mut();
-        for i in 0..a_data.len() {
-            c_data[i] = op(a_data[i], b_data[i]);
-        }
+        // for i in 0..a_data.len() {
+        // c_data[i] = op(a_data[i], b_data[i]);
+        // }
+
+        (*c_data)
+            .par_iter_mut()
+            .with_min_len(4096)
+            .zip((*a_data).par_iter())
+            .zip((*b_data).par_iter())
+            .for_each(|((c, &a), &b)| *c = op(a, b));
+
         return;
     };
 
@@ -297,14 +312,19 @@ pub trait UnaryOp<T: Numeric> {
 
 fn unaryop_iterator<T: Numeric, F>(a: &NdArray<T>, b: &mut NdArray<T>, op: F)
 where
-    F: Fn(T) -> T,
+    F: Fn(T) -> T + Send + Sync,
 {
     if a.strides == b.strides {
         let a_data = a.data.borrow();
         let mut b_data = b.data.borrow_mut();
-        for i in 0..a_data.len() {
-            b_data[i] = op(a_data[i]);
-        }
+        // for i in 0..a_data.len() {
+        // b_data[i] = op(a_data[i]);
+        // }
+        (*b_data)
+            .par_iter_mut()
+            .with_min_len(4096)
+            .zip((*a_data).par_iter())
+            .for_each(|(b, &a)| *b = op(a));
         return;
     }
     a.shape.for_each_index(|_, indices| {
