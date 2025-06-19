@@ -62,7 +62,7 @@ fn matmul<T: Numeric + 'static>(a: &NdArray<T>, b: &NdArray<T>, c: &mut NdArray<
             false,                                          // conj C
             false,                                          // conj A
             false,                                          // conj B
-            Parallelism::None,
+            Parallelism::Rayon(2),
         )
     }
 }
