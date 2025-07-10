@@ -4,6 +4,7 @@ use crate::core::object::Shape;
 use core::fmt::Debug;
 use gemm::{Parallelism, gemm};
 use log;
+use rayon::prelude::*;
 use std::rc::Rc;
 
 fn matmul<T: Numeric + 'static>(a: &NdArray<T>, b: &NdArray<T>, c: &mut NdArray<T>) {
@@ -198,9 +199,10 @@ where
         let b_data = b.data.borrow();
         let mut c_data = c.data.borrow_mut();
         (*c_data)
-            .iter_mut()
-            .zip((*a_data).iter())
-            .zip((*b_data).iter())
+            .par_iter_mut()
+            .with_min_len(4096)
+            .zip((*a_data).par_iter())
+            .zip((*b_data).par_iter())
             .for_each(|((c, &a), &b)| *c = op(a, b));
         return;
     };
@@ -312,8 +314,9 @@ where
         let a_data = a.data.borrow();
         let mut b_data = b.data.borrow_mut();
         (*b_data)
-            .iter_mut()
-            .zip((*a_data).iter())
+            .par_iter_mut()
+            .with_min_len(4096)
+            .zip((*a_data).par_iter())
             .for_each(|(b, &a)| *b = op(a));
         return;
     }
