@@ -77,9 +77,15 @@ impl ModelRunner {
                 }
             }
 
-            let result =
-                self.model
-                    .build(builder, config, &mut cache, self.total_tokens, x.clone());
+            let start_pos = if self.use_kv_cache {
+                self.total_tokens
+            } else {
+                0
+            };
+
+            let result = self
+                .model
+                .build(builder, config, &mut cache, start_pos, x.clone());
 
             // Input most recently generated token and current kv_cache
             let mut sources_vec = vec![x];
