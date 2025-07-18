@@ -1,6 +1,6 @@
 use catgrad::backend::cpu::ndarray::{NdArray, TaggedNdArray};
 use catgrad::core::Shape;
-use hf_hub::api::sync::Api;
+use hf_hub::{Repo, RepoType, api::sync::Api};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -62,11 +62,14 @@ pub fn read_safetensors_multiple(path: Vec<PathBuf>) -> HashMap<String, TaggedNd
     map
 }
 
-pub fn get_model_files(model: &str) -> (Vec<PathBuf>, PathBuf, PathBuf, PathBuf) {
+pub fn get_model_files(model: &str, revision: &str) -> (Vec<PathBuf>, PathBuf, PathBuf, PathBuf) {
     let api = Api::new().unwrap();
 
-    let repo = api.model(model.to_string());
-
+    let repo = api.repo(Repo::with_revision(
+        model.to_string(),
+        RepoType::Model,
+        revision.to_string(),
+    ));
     // Get the model.safetensor file(s)
     let m = if let Ok(index) = repo.get("model.safetensors.index.json") {
         let index = std::fs::File::open(index).unwrap();
@@ -90,10 +93,14 @@ pub fn get_model_files(model: &str) -> (Vec<PathBuf>, PathBuf, PathBuf, PathBuf)
 }
 
 // Try getting the model's chat template from the repository
-pub fn get_model_chat_template(model: &str) -> String {
+pub fn get_model_chat_template(model: &str, revision: &str) -> String {
     let api = Api::new().unwrap();
 
-    let repo = api.model(model.to_string());
+    let repo = api.repo(Repo::with_revision(
+        model.to_string(),
+        RepoType::Model,
+        revision.to_string(),
+    ));
 
     if let Ok(ct) = repo.get("chat_template.jinja") {
         std::fs::read_to_string(ct).unwrap()

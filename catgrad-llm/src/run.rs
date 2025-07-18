@@ -45,7 +45,7 @@ fn read_to_value<V: for<'a> serde::Deserialize<'a>>(path: PathBuf) -> Result<V> 
 impl ModelLoader {
     pub fn new(model_name: &str, use_kv_cache: bool) -> serve::Result<Self> {
         let (model_paths, config_path, tokenizer_path, tokenizer_config_path) =
-            get_model_files(model_name);
+            get_model_files(model_name, "main");
 
         let config: Config = read_to_value(config_path)?;
 
