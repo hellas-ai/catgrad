@@ -38,6 +38,7 @@ pub struct Config {
     pub rope_theta: f32,
     pub local_rope_theta: f32,
     pub global_rope_theta: f32,
+    #[serde(alias = "_sliding_window_pattern")]
     pub sliding_window_pattern: usize,
     pub global_attn_every_n_layers: usize,
     pub rope_local_base_freq: f32,

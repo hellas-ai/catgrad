@@ -74,7 +74,7 @@ impl EvalState {
     }
 
     pub fn from_lax(f: Term) -> Self {
-        EvalState::new(f.to_open_hypergraph())
+        EvalState::new(f.to_strict())
     }
 
     pub fn set_parameters(&mut self, parameters: Rc<HashMap<String, TaggedNdArray>>) {

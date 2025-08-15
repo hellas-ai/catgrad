@@ -48,7 +48,7 @@ pub fn parameter(builder: &Builder, param_type: NdArrayType, name: String) -> Va
 pub fn side_effect(builder: &Builder, callback: Callback, x: &Var) {
     let op = Operation::SideEffect(callback);
 
-    open_hypergraphs::lax::var::operation(builder, &[x.clone()], vec![], op);
+    open_hypergraphs::lax::var::operation(builder, std::slice::from_ref(x), vec![], op);
 }
 
 pub fn print(builder: &Builder, name: &str, verbose: bool, x: &Var) {
@@ -208,11 +208,13 @@ pub fn increment(builder: &Builder, x: Var) -> Var {
 
 pub fn sin(builder: &Builder, x: Var) -> Var {
     let op = Operation::Sin;
+    #[allow(clippy::cloned_ref_to_slice_refs)]
     operation(builder, &[x.clone()], x.label, op)
 }
 
 pub fn cos(builder: &Builder, x: Var) -> Var {
     let op = Operation::Cos;
+    #[allow(clippy::cloned_ref_to_slice_refs)]
     operation(builder, &[x.clone()], x.label, op)
 }
 
