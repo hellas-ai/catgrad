@@ -140,7 +140,7 @@ impl ModelRunner {
     }
 
     fn load(&mut self, model_paths: Vec<PathBuf>) {
-        let mut tensors = read_safetensors_multiple(model_paths);
+        let mut tensors = read_safetensors_multiple(model_paths).expect("loading model weights");
         self.model.post_load(&mut tensors);
 
         self.tensors = Rc::new(tensors);
@@ -261,11 +261,12 @@ pub fn main() -> Result<()> {
         .copied()
         .unwrap_or(&args.model_name);
 
-    let (model_paths, config_path, tokenizer_path, _) = get_model_files(model_name, &args.revision);
+    let (model_paths, config_path, tokenizer_path, _) =
+        get_model_files(model_name, &args.revision).expect("loading model files");
     let tokenizer = Tokenizer::from_file(tokenizer_path)?;
     let config: Config = serde_json::from_str(&std::fs::read_to_string(config_path)?)?;
 
-    let chat_template = get_model_chat_template(model_name, &args.revision);
+    let chat_template = get_model_chat_template(model_name, &args.revision)?;
 
     // SmolLM3 template specific hack, move to lib.
     let chat_template = chat_template

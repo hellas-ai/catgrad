@@ -419,7 +419,7 @@ impl ModelRunner {
     }
 
     fn load(&mut self, model_paths: Vec<PathBuf>) {
-        let tensors = read_safetensors_multiple(model_paths);
+        let tensors = read_safetensors_multiple(model_paths).expect("loading model weights");
         self.tensors = Rc::new(tensors);
     }
 
@@ -494,7 +494,8 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::init();
     let args = Args::parse();
 
-    let (model_paths, config_path, tokenizer_path, _) = get_model_files(&args.model_name, "main");
+    let (model_paths, config_path, tokenizer_path, _) =
+        get_model_files(&args.model_name, "main").expect("loading model files");
 
     let config: SiglipConfig = serde_json::from_str(&std::fs::read_to_string(config_path)?)?;
 

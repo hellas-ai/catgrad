@@ -154,7 +154,7 @@ use super::phi::Model as PhiModel;
 use super::qwen::Model as QwenModel;
 use super::smollm3::Model as SmolLM3Model;
 
-pub fn get_model(arch: &str) -> Result<Box<dyn ModelBuilder>, String> {
+pub fn get_model(arch: &str) -> crate::Result<Box<dyn ModelBuilder>> {
     match arch {
         "LlamaForCausalLM" => Ok(Box::new(LlamaModel {})),
         "Olmo2ForCausalLM" => Ok(Box::new(OlmoModel {})),
@@ -166,6 +166,8 @@ pub fn get_model(arch: &str) -> Result<Box<dyn ModelBuilder>, String> {
         "Phi3ForCausalLM" => Ok(Box::new(PhiModel {})),
         "SmolLM3ForCausalLM" => Ok(Box::new(SmolLM3Model {})),
         "GPT2LMHeadModel" => Ok(Box::new(GPT2Model {})),
-        _ => Err(format!("Unsupported architecture: {arch}")),
+        _ => Err(crate::LLMError::UnsupportedModel(format!(
+            "Unsupported model architecture: {arch}"
+        ))),
     }
 }

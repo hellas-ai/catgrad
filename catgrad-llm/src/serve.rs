@@ -1,20 +1,5 @@
 //! Abstract interfaces for serving LLMs
-use thiserror::Error;
-
-#[derive(Error, Debug)]
-pub enum Error {
-    #[error("Tokenizer Error: {0}")]
-    Tokenizer(String),
-
-    #[error("IO Error: {0}")]
-    IO(String),
-}
-
-impl From<tokenizers::tokenizer::Error> for Error {
-    fn from(err: tokenizers::tokenizer::Error) -> Self {
-        Error::Tokenizer(err.to_string())
-    }
-}
+use crate::Result;
 
 /// Message type for use with instruct models
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -22,8 +7,6 @@ pub struct Message {
     pub role: String,
     pub content: String,
 }
-
-pub type Result<T> = core::result::Result<T, Error>;
 
 /// A language model has a settable internal context from which it can generate new tokens.
 pub trait LM<T>: Iterator<Item = T> {
