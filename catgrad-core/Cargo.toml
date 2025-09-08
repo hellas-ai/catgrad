@@ -15,3 +15,6 @@ ndarray = { version = "0.16.1", optional = true }
 [features]
 default = []
 ndarray-backend = ["dep:ndarray"]
+
+[dev-dependencies]
+catgrad-core = {path = ".", features = ["ndarray-backend"]}
