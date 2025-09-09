@@ -102,7 +102,7 @@ of Open Hypergraphs.
 Use the `svg` feature to visualise models--produce an SVG of the `Sigmoid`
 model above with the following code:
 
-```rust
+```rust,ignore
 use catgrad_core::prelude::*;
 use catgrad_core::svg::to_svg;
 
@@ -135,7 +135,7 @@ The `stdlib` and `parameters` arguments define what definitions and parameters a
 Run a program using an `Interpreter` with a chosen backend.
 For example, we can run the Sigmoid layer as follows:
 
-```rust
+```rust,ignore
 use catgrad_core::prelude::*;
 use interpreter::{Interpreter, Parameters, Shape, tensor, backend::ndarray::NdArrayBackend};
 
