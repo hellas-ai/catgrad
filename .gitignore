@@ -2,3 +2,4 @@
 Cargo.lock
 *.safetensors
 .cargo
+images/
