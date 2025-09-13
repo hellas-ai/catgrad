@@ -5,9 +5,6 @@ use catgrad_core::interpreter;
 
 use std::collections::HashMap;
 
-type BackendFunction =
-    Box<dyn Fn(&TypedTerm, Environment) -> Result<(), Box<dyn std::error::Error>>>;
-
 /// Construct, shapecheck, and interpret the `SimpleMNISTModel` using the ndarray backend.
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let model = SimpleMNISTModel;
@@ -32,63 +29,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let labeled_term = replace_nodes_in_hypergraph(typed_term.term.clone(), check_result);
     save_svg(&labeled_term, &format!("{}_typed.svg", model.path()))?;
 
-    // Run interpreter
-    let run_backend = get_backend()?;
-    run_backend(&typed_term, env)?;
+    // Choose a backend from available features
+    let backend = select_backend()?;
+
+    // Run the interpreter with the selected backend
+    let results = run_interpreter(&backend, &typed_term, env)?;
+
+    // Print the `Value`s returned by the interpreter.
+    for value in results {
+        println!("{value:?}");
+    }
 
     Ok(())
 }
 
-fn get_backend() -> Result<BackendFunction, Box<dyn std::error::Error>> {
-    #[cfg(feature = "candle-backend")]
-    {
-        use catgrad_core::interpreter::backend::candle::CandleBackend;
-
-        let backend = CandleBackend::new();
-        Ok(Box::new(move |typed_term: &TypedTerm, env: Environment| {
-            run_interpreter(&backend, typed_term, env, |arr| {
-                println!("Output shape: {:?}", <catgrad_core::interpreter::backend::candle::CandleTensor as catgrad_core::interpreter::backend::NdArray<f32>>::shape(arr));
-                let flat_data: Vec<f32> = arr.0.flatten_all().unwrap().to_vec1().unwrap();
-                println!("Output sample: {:?}", &flat_data[..10.min(flat_data.len())]);
-            })
-        }))
-    }
-
-    #[cfg(all(feature = "ndarray-backend", not(feature = "candle-backend")))]
-    {
-        use catgrad_core::interpreter::backend::ndarray::NdArrayBackend;
-
-        let backend = NdArrayBackend;
-        Ok(Box::new(move |typed_term: &TypedTerm, env: Environment| {
-            run_interpreter(&backend, typed_term, env, |arr| {
-                println!("Output shape: {:?}", arr.shape());
-                if let Some(slice) = arr.as_slice() {
-                    println!("Output sample: {:?}", &slice[..10.min(slice.len())]);
-                }
-            })
-        }))
-    }
-
-    #[cfg(not(any(feature = "ndarray-backend", feature = "candle-backend")))]
-    {
-        panic!(
-            "No backend feature enabled. Please enable either 'candle-backend' or 'ndarray-backend'."
-        );
-    }
-}
-
-fn run_interpreter<B: interpreter::Backend, F>(
+fn run_interpreter<B: interpreter::Backend>(
     backend: &B,
     typed_term: &TypedTerm,
     env: Environment,
-    print_output: F,
-) -> Result<(), Box<dyn std::error::Error>>
-where
-    F: FnOnce(&B::NdArray<f32>),
-{
-    use catgrad_core::category::core::Shape;
-    use catgrad_core::interpreter::{TaggedNdArray, Value};
-
+) -> Result<Vec<interpreter::Value<B>>, Box<dyn std::error::Error>> {
     // Create sample input data: batch of 2 MNIST-like images (28x28)
     let input_data: Vec<f32> = (0..2 * 28 * 28)
         .map(|i| (i as f32 * 0.001) % 1.0) // Simple pattern: values between 0 and 1
@@ -97,24 +56,43 @@ where
     let interpreter_params = load_param_data(backend);
     let interpreter = interpreter::Interpreter::new(backend.clone(), env, interpreter_params);
 
-    let input_tensor =
-        interpreter::tensor(&interpreter.backend, Shape(vec![2, 28, 28]), &input_data)
-            .expect("Failed to create input tensor");
+    let input_tensor = interpreter::tensor(
+        &interpreter.backend,
+        interpreter::Shape(vec![2, 28, 28]),
+        &input_data,
+    )
+    .expect("Failed to create input tensor");
 
     let results = interpreter
         .run(typed_term.term.clone(), vec![input_tensor])
         .expect("Failed to run inference");
 
-    if let Some(output) = results.last() {
-        match output {
-            Value::NdArray(TaggedNdArray::F32([arr])) => {
-                print_output(arr);
-            }
-            _ => println!("Unexpected output type: {:?}", output),
-        }
+    Ok(results)
+}
+
+/// Pick a backend depending on what features are available
+fn select_backend() -> Result<impl interpreter::Backend, Box<dyn std::error::Error>> {
+    #[cfg(feature = "candle-backend")]
+    {
+        println!("selected candle backend...");
+        use catgrad_core::interpreter::backend::candle::CandleBackend;
+        #[allow(clippy::needless_return)]
+        return Ok(CandleBackend::new());
     }
 
-    Ok(())
+    #[cfg(all(feature = "ndarray-backend", not(feature = "candle-backend")))]
+    {
+        println!("selected ndarray backend...");
+        use catgrad_core::interpreter::backend::ndarray::NdArrayBackend;
+        #[allow(clippy::needless_return)]
+        return Ok(NdArrayBackend);
+    }
+
+    #[cfg(not(any(feature = "candle-backend", feature = "ndarray-backend")))]
+    {
+        println!("selected ShapeOnly backend (no tensors computed)");
+        return Ok(interpreter::backend::shape_only::ShapeOnlyBackend);
+    }
 }
 
 ////////////////////////////////////////////////////////////////////////////////

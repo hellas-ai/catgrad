@@ -2,6 +2,9 @@ use super::types::*;
 use crate::category::core::{Dtype, Shape};
 use std::fmt::Debug;
 
+/// Default backend: only perform shape computations.
+pub mod shape_only;
+
 #[cfg(feature = "ndarray-backend")]
 pub mod ndarray;
 
@@ -14,7 +17,8 @@ pub mod candle;
 ///
 /// - Methods take a `TaggedNdArrayTuple<Self; N>`: a tuple of arrays of the *same dtype*
 /// - A method of this signature is expected to work for *any dtype*
-/// -
+/// - Kernels *never* implicitly broadcast their arguments. Shapes must be an exact match, or error.
+/// - Reductions preserve rank. For example, sum tensor shape `[2,3,4]` gives `[2,3,1]` instead of `[2,3]`.
 pub trait Backend: Send + Sync + Clone + Debug {
     /// Representation of tensor values. (e.g., device ptrs, Vec, etc.)
     type NdArray<D: HasDtype>: NdArray<D, Backend = Self>;
