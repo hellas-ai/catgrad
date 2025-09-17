@@ -166,7 +166,12 @@ impl Backend for ShapeOnlyBackend {
         }
     }
 
-    fn index(&self, x: TaggedNdArray<Self>, indices: TaggedNdArray<Self>) -> TaggedNdArray<Self> {
+    fn index(
+        &self,
+        x: TaggedNdArray<Self>,
+        dim: usize,
+        indices: TaggedNdArray<Self>,
+    ) -> TaggedNdArray<Self> {
         use TaggedNdArrayTuple::*;
         let shape = &match indices {
             F32([shape]) => shape,
@@ -178,11 +183,11 @@ impl Backend for ShapeOnlyBackend {
 
         match x {
             F32([ShapeOnly(mut s)]) => {
-                s[0] = n;
+                s[dim] = n;
                 F32([ShapeOnly(s)])
             }
             U32([ShapeOnly(mut s)]) => {
-                s[0] = n;
+                s[dim] = n;
                 U32([ShapeOnly(s)])
             }
         }

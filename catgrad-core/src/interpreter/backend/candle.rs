@@ -221,14 +221,19 @@ impl Backend for CandleBackend {
         U32([CandleTensor(r)])
     }
 
-    fn index(&self, x: TaggedNdArray<Self>, indices: TaggedNdArray<Self>) -> TaggedNdArray<Self> {
+    fn index(
+        &self,
+        x: TaggedNdArray<Self>,
+        dim: usize,
+        indices: TaggedNdArray<Self>,
+    ) -> TaggedNdArray<Self> {
         use TaggedNdArrayTuple::*;
         match (x, indices) {
             (F32([arr]), U32([indices])) => {
-                F32([CandleTensor(Self::index_tensor(arr.0, indices.0))])
+                F32([CandleTensor(Self::index_tensor(arr.0, dim, indices.0))])
             }
             (U32([arr]), U32([indices])) => {
-                U32([CandleTensor(Self::index_tensor(arr.0, indices.0))])
+                U32([CandleTensor(Self::index_tensor(arr.0, dim, indices.0))])
             }
             _ => panic!("Invalid index type"),
         }
@@ -315,8 +320,8 @@ impl CandleBackend {
         tensor.reshape(&*new_shape.0).unwrap()
     }
 
-    fn index_tensor(tensor: Tensor, indices: Tensor) -> Tensor {
-        tensor.index_select(&indices, 0).unwrap()
+    fn index_tensor(tensor: Tensor, dim: usize, indices: Tensor) -> Tensor {
+        tensor.index_select(&indices, dim).unwrap()
     }
 
     fn slice_tensor(tensor: Tensor, dim: usize, start: usize, len: usize) -> Tensor {

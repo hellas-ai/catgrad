@@ -330,14 +330,18 @@ fn tensor_broadcast(args: &[Value]) -> ApplyResult {
 }
 
 fn tensor_index(args: &[Value]) -> ApplyResult {
-    match (&args[0], &args[1]) {
+    if args.len() != 3 {
+        return Err(ApplyError::ArityError);
+    }
+    match (&args[0], &args[1], &args[2]) {
         (
             Value::Tensor(TypeExpr::NdArrayType(input)),
+            Value::Nat(NatExpr::Constant(n)),
             Value::Tensor(TypeExpr::NdArrayType(idx)),
         ) => match (&input.shape, &idx.shape) {
             (ShapeExpr::Shape(input_shape), ShapeExpr::Shape(idx_shape)) => {
                 let mut out_shape = input_shape.clone();
-                out_shape[0] = idx_shape[0].clone();
+                out_shape[*n] = idx_shape[*n].clone();
                 Ok(vec![Value::Tensor(TypeExpr::NdArrayType(NdArrayType {
                     dtype: input.dtype.clone(),
                     shape: ShapeExpr::Shape(out_shape),

@@ -52,7 +52,12 @@ pub trait Backend: Send + Sync + Clone + Debug {
         y: TaggedNdArray<Self>,
         dim: usize,
     ) -> TaggedNdArray<Self>;
-    fn index(&self, x: TaggedNdArray<Self>, indices: TaggedNdArray<Self>) -> TaggedNdArray<Self>;
+    fn index(
+        &self,
+        x: TaggedNdArray<Self>,
+        dim: usize,
+        indices: TaggedNdArray<Self>,
+    ) -> TaggedNdArray<Self>;
     fn slice(
         &self,
         x: TaggedNdArray<Self>,

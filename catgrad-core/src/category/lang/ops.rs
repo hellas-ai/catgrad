@@ -152,8 +152,13 @@ pub fn reshape(builder: &Builder, t: Var, x: Var) -> Var {
     var::fn_operation(builder, &[t, x], Object::Tensor, op!["tensor", "reshape"])
 }
 
-pub fn index(builder: &Builder, x: Var, idx: Var) -> Var {
-    var::fn_operation(builder, &[x, idx], Object::Tensor, op!["tensor", "index"])
+pub fn index(builder: &Builder, x: Var, dim: Var, idx: Var) -> Var {
+    var::fn_operation(
+        builder,
+        &[x, dim, idx],
+        Object::Tensor,
+        op!["tensor", "index"],
+    )
 }
 
 pub fn slice(builder: &Builder, x: Var, dim: Var, start: Var, len: Var) -> Var {

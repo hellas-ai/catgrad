@@ -130,11 +130,16 @@ impl Backend for NdArrayBackend {
         }
     }
 
-    fn index(&self, x: TaggedNdArray<Self>, indices: TaggedNdArray<Self>) -> TaggedNdArray<Self> {
+    fn index(
+        &self,
+        x: TaggedNdArray<Self>,
+        dim: usize,
+        indices: TaggedNdArray<Self>,
+    ) -> TaggedNdArray<Self> {
         use TaggedNdArrayTuple::*;
         match (x, indices) {
-            (F32([arr]), U32([indices])) => F32([Self::index_ndarray(arr, indices)]),
-            (U32([arr]), U32([indices])) => U32([Self::index_ndarray(arr, indices)]),
+            (F32([arr]), U32([indices])) => F32([Self::index_ndarray(arr, dim, indices)]),
+            (U32([arr]), U32([indices])) => U32([Self::index_ndarray(arr, dim, indices)]),
             _ => panic!("Invalid input types for indexing"),
         }
     }
@@ -200,11 +205,10 @@ impl NdArrayBackend {
         broadcasted.to_owned()
     }
 
-    fn index_ndarray<D: HasDtype>(arr: ArrayD<D>, indices: ArrayD<u32>) -> ArrayD<D> {
-        let axis = 0;
+    fn index_ndarray<D: HasDtype>(arr: ArrayD<D>, dim: usize, indices: ArrayD<u32>) -> ArrayD<D> {
         let idx = indices.iter().map(|&i| i as usize).collect::<Vec<_>>();
 
-        arr.select(ndarray::Axis(axis), &idx)
+        arr.select(ndarray::Axis(dim), &idx)
     }
 
     fn slice_ndarray<D: HasDtype>(

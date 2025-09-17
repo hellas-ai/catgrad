@@ -227,7 +227,7 @@ fn tensor_index<B: Backend>(
     mut args: Vec<Value<B>>,
     ssa: &SSA<Object, Operation>,
 ) -> Result<Vec<Value<B>>, Box<ApplyError>> {
-    if args.len() != 2 {
+    if args.len() != 3 {
         return Err(Box::new(ApplyError {
             kind: ApplyErrorKind::ArityError,
             ssa: ssa.clone(),
@@ -235,8 +235,10 @@ fn tensor_index<B: Backend>(
     }
 
     // Args are: [input, indices]
-    if let (Value::NdArray(input), Value::NdArray(indices)) = (args.remove(0), args.remove(0)) {
-        let result = backend.index(input, indices);
+    if let (Value::NdArray(input), Value::Nat(dim), Value::NdArray(indices)) =
+        (args.remove(0), args.remove(0), args.remove(0))
+    {
+        let result = backend.index(input, dim, indices);
         Ok(vec![Value::NdArray(result)])
     } else {
         Err(Box::new(ApplyError {
