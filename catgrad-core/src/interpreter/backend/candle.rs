@@ -215,9 +215,9 @@ impl Backend for CandleBackend {
         }
     }
 
-    fn arange(&self, end: usize) -> TaggedNdArray<Self> {
+    fn arange(&self, start: usize, end: usize, step: usize) -> TaggedNdArray<Self> {
         use TaggedNdArrayTuple::*;
-        let r = Tensor::arange(0, end as u32, &self.device).unwrap();
+        let r = Tensor::arange_step(start as u32, end as u32, step as u32, &self.device).unwrap();
         U32([CandleTensor(r)])
     }
 

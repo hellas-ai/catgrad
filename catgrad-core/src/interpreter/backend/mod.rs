@@ -60,7 +60,7 @@ pub trait Backend: Send + Sync + Clone + Debug {
         start: usize,
         len: usize,
     ) -> TaggedNdArray<Self>;
-    fn arange(&self, end: usize) -> TaggedNdArray<Self>;
+    fn arange(&self, start: usize, end: usize, step: usize) -> TaggedNdArray<Self>;
 }
 
 pub trait NdArray<D: HasDtype>: Send + Sync + Clone + Debug {

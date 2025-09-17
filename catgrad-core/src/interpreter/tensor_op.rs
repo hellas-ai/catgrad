@@ -201,25 +201,27 @@ fn tensor_broadcast<B: Backend>(
 
 fn tensor_arange<B: Backend>(
     backend: &B,
-    args: Vec<Value<B>>,
+    mut args: Vec<Value<B>>,
     ssa: &SSA<Object, Operation>,
 ) -> Result<Vec<Value<B>>, Box<ApplyError>> {
-    if args.len() != 1 {
+    if args.len() != 3 {
         return Err(Box::new(ApplyError {
             kind: ApplyErrorKind::ArityError,
             ssa: ssa.clone(),
         }));
     }
 
-    let Value::Nat(end) = args[0] else {
-        return Err(Box::new(ApplyError {
+    if let (Value::Nat(start), Value::Nat(end), Value::Nat(step)) =
+        (args.remove(0), args.remove(0), args.remove(0))
+    {
+        let result = backend.arange(start, end, step);
+        Ok(vec![Value::NdArray(result)])
+    } else {
+        Err(Box::new(ApplyError {
             kind: ApplyErrorKind::TypeError,
             ssa: ssa.clone(),
-        }));
-    };
-
-    let result = backend.arange(end);
-    Ok(vec![Value::NdArray(result)])
+        }))
+    }
 }
 
 fn tensor_index<B: Backend>(

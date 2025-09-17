@@ -139,9 +139,9 @@ impl Backend for ShapeOnlyBackend {
         }
     }
 
-    fn arange(&self, end: usize) -> TaggedNdArray<Self> {
+    fn arange(&self, start: usize, end: usize, step: usize) -> TaggedNdArray<Self> {
         use TaggedNdArrayTuple::*;
-        U32([ShapeOnly(Shape(vec![end]))])
+        U32([ShapeOnly(Shape(vec![(end - start) / step]))])
     }
 
     fn concat(
