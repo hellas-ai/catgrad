@@ -199,11 +199,11 @@ impl Backend for CandleBackend {
         }
     }
 
-    fn broadcast(&self, x: TaggedNdArray<Self>, shape_prefix: Shape) -> TaggedNdArray<Self> {
+    fn broadcast(&self, x: TaggedNdArray<Self>, shape: Shape) -> TaggedNdArray<Self> {
         use TaggedNdArrayTuple::*;
         match x {
-            F32([arr]) => F32([CandleTensor(Self::broadcast_tensor(arr.0, shape_prefix))]),
-            U32([arr]) => U32([CandleTensor(Self::broadcast_tensor(arr.0, shape_prefix))]),
+            F32([arr]) => F32([CandleTensor(Self::broadcast_tensor(arr.0, shape))]),
+            U32([arr]) => U32([CandleTensor(Self::broadcast_tensor(arr.0, shape))]),
         }
     }
 
@@ -339,21 +339,8 @@ impl CandleBackend {
         tensor.narrow(dim, start, len).unwrap()
     }
 
-    // Catgrad always uses explicit broadcasting.
-    fn broadcast_tensor(tensor: Tensor, shape_prefix: Shape) -> Tensor {
-        let current_shape = tensor.dims();
-        let target_shape = shape_prefix.0;
-
-        // If the tensor is a scalar (shape []), broadcast it to the target shape
-        if current_shape.is_empty() {
-            // For scalars, broadcast directly to the target shape
-            tensor.broadcast_as(&*target_shape).unwrap()
-        } else {
-            // For non-scalars, prepend the shape_prefix dimensions
-            let mut new_shape = target_shape;
-            new_shape.extend_from_slice(current_shape);
-            tensor.broadcast_as(&*new_shape).unwrap()
-        }
+    fn broadcast_tensor(tensor: Tensor, shape: Shape) -> Tensor {
+        tensor.broadcast_as(shape.0).unwrap()
     }
 
     fn add(x: CandleTensor, y: CandleTensor) -> CandleTensor {

@@ -98,11 +98,11 @@ impl Backend for ShapeOnlyBackend {
         x
     }
 
-    fn broadcast(&self, x: TaggedNdArray<Self>, shape_prefix: Shape) -> TaggedNdArray<Self> {
+    fn broadcast(&self, x: TaggedNdArray<Self>, shape: Shape) -> TaggedNdArray<Self> {
         use TaggedNdArrayTuple::*;
         match x {
-            F32([arr]) => F32([Self::broadcast_with_prefix(arr, shape_prefix)]),
-            U32([arr]) => U32([Self::broadcast_with_prefix(arr, shape_prefix)]),
+            F32([arr]) => F32([Self::broadcast(arr, shape)]),
+            U32([arr]) => U32([Self::broadcast(arr, shape)]),
         }
     }
 
@@ -263,10 +263,8 @@ impl ShapeOnlyBackend {
         x
     }
 
-    fn broadcast_with_prefix(arr: ShapeOnly, shape_prefix: Shape) -> ShapeOnly {
-        let mut result_shape = shape_prefix.0;
-        result_shape.extend_from_slice(&arr.0.0);
-        ShapeOnly(Shape(result_shape))
+    fn broadcast(_arr: ShapeOnly, shape: Shape) -> ShapeOnly {
+        ShapeOnly(Shape(shape.0))
     }
 
     fn reduce_last_dim(arr: ShapeOnly) -> ShapeOnly {
@@ -384,8 +382,8 @@ mod tests {
     #[test]
     fn test_broadcast_with_prefix() {
         let arr = ShapeOnly(Shape(vec![3, 4]));
-        let prefix = Shape(vec![2, 5]);
-        let result = ShapeOnlyBackend::broadcast_with_prefix(arr, prefix);
+        let shape = Shape(vec![2, 5, 3, 4]);
+        let result = ShapeOnlyBackend::broadcast(arr, shape);
         assert_eq!(result.shape(), Shape(vec![2, 5, 3, 4]));
     }
 

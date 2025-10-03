@@ -304,17 +304,19 @@ fn tensor_reduce(args: &[Value]) -> ApplyResult {
 fn tensor_sum(args: &[Value]) -> ApplyResult {
     tensor_reduce(args)
 }
+
 fn tensor_max(args: &[Value]) -> ApplyResult {
     tensor_reduce(args)
 }
+
 fn tensor_broadcast(args: &[Value]) -> ApplyResult {
     match (&args[0], &args[1]) {
         (Value::Tensor(TypeExpr::NdArrayType(t)), Value::Shape(shape)) => {
             match (&t.shape, &shape) {
-                (ShapeExpr::Shape(s1), ShapeExpr::Shape(s2)) => {
+                (ShapeExpr::Shape(_), ShapeExpr::Shape(s2)) => {
                     Ok(vec![Value::Tensor(TypeExpr::NdArrayType(NdArrayType {
                         dtype: t.dtype.clone(),
-                        shape: ShapeExpr::Shape([s1.clone(), s2.clone()].concat()),
+                        shape: ShapeExpr::Shape(s2.clone()),
                     }))])
                 }
                 (ShapeExpr::Shape(s), ShapeExpr::Var(v)) if s.is_empty() => {

@@ -377,10 +377,22 @@ fn test_candle_backend_broadcast() {
         .unwrap();
 
     // Broadcast to add a dimension at the front: [2, 2] -> [1, 2, 2]
-    let broadcasted = backend.broadcast(TaggedNdArray::F32([tensor]), Shape(vec![1]));
+    let broadcasted = backend.broadcast(TaggedNdArray::F32([tensor]), Shape(vec![1, 2, 2]));
     match broadcasted {
         TaggedNdArray::F32([arr]) => {
             assert_eq!(arr.0.shape().dims(), &[1, 2, 2]);
+        }
+        _ => panic!("Expected F32 result"),
+    }
+
+    // Broadcast to expand the first dimension: [1, 2, 2] -> [5, 2, 2]
+    let tensor: <CandleBackend as Backend>::NdArray<f32> = backend
+        .ndarray_from_slice(&data, Shape(vec![1, 2, 2]))
+        .unwrap();
+    let broadcasted = backend.broadcast(TaggedNdArray::F32([tensor]), Shape(vec![5, 2, 2]));
+    match broadcasted {
+        TaggedNdArray::F32([arr]) => {
+            assert_eq!(arr.0.shape().dims(), &[5, 2, 2]);
         }
         _ => panic!("Expected F32 result"),
     }
@@ -392,7 +404,8 @@ fn test_candle_backend_broadcast() {
         .unwrap();
 
     // Broadcast to add multiple dimensions: [2, 2] -> [2, 1, 2, 2]
-    let broadcasted_u32 = backend.broadcast(TaggedNdArray::U32([tensor_u32]), Shape(vec![2, 1]));
+    let broadcasted_u32 =
+        backend.broadcast(TaggedNdArray::U32([tensor_u32]), Shape(vec![2, 1, 2, 2]));
     match broadcasted_u32 {
         TaggedNdArray::U32([arr]) => {
             assert_eq!(arr.0.shape().dims(), &[2, 1, 2, 2]);
