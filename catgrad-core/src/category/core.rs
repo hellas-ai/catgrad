@@ -170,7 +170,7 @@ pub enum TensorOp {
     /// `Argmax : Tensor → Tensor`
     Argmax,
 
-    // broadcast a Tensor of shape S to one of shape (N × S) (prepends shape N to tensor)
+    // broadcast a Tensor to a given shape
     Broadcast,
 
     /// Reshape a tensor into an isomorphic shape
