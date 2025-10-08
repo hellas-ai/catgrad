@@ -109,8 +109,18 @@ pub fn constant_f32(builder: &Builder, v: f32) -> Var {
     lit(builder, Literal::F32(v))
 }
 
+pub fn constant(builder: &Builder, v: f32, sh: &Var) -> Var {
+    let c = constant_f32(builder, v);
+    broadcast_to(builder, c, sh.clone())
+}
+
 pub fn constant_nat(builder: &Builder, v: u32) -> Var {
-    lit(builder, Literal::Nat(v))
+    var::fn_operation(
+        builder,
+        &[],
+        Object::Nat,
+        Operation::Literal(Literal::Nat(v)),
+    )
 }
 
 /// Pack a fixed number of Nat values into a specific shape
@@ -152,15 +162,19 @@ pub fn dtype_constant(builder: &Builder, dtype: Dtype) -> Var {
 // x : t    s : Shape
 // ------------------ broadcast
 //     x : (s × t)
-pub fn broadcast(builder: &Builder, x: Var, s: Var) -> Var {
+pub fn broadcast_to(builder: &Builder, x: Var, s: Var) -> Var {
     var::fn_operation(builder, &[x, s], Object::Tensor, op!["tensor", "broadcast"])
+}
+
+pub fn expand(builder: &Builder, x: Var, s: Var) -> Var {
+    broadcast_to(builder, x, s)
 }
 
 pub fn reshape(builder: &Builder, t: Var, x: Var) -> Var {
     var::fn_operation(builder, &[t, x], Object::Tensor, op!["tensor", "reshape"])
 }
 
-pub fn transpose(builder: &Builder, x: Var, dim0: Var, dim1: Var) -> Var {
+pub fn transpose(builder: &Builder, dim0: Var, dim1: Var, x: Var) -> Var {
     var::fn_operation(
         builder,
         &[x, dim0, dim1],

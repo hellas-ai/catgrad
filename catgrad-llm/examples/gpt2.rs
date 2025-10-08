@@ -57,7 +57,7 @@ fn run_interpreter(
 
     // GPT-2 encoding for 'Category theory is'
     let input_data = [27313, 4583, 318];
-    let input_tensor = interpreter::tensor(&interpreter.backend, Shape(vec![3]), &input_data)
+    let input_tensor = interpreter::tensor(&interpreter.backend, Shape(vec![1, 3]), &input_data)
         .expect("Failed to create input tensor");
 
     // Run the model
@@ -90,10 +90,6 @@ pub struct GPT2Model {
     config: Config,
 }
 
-// fn sum(_builder: &Builder, x: Var) -> Var {
-//     x
-// }
-
 impl GPT2Model {
     pub fn info(&self) {
         println!("Config: {:#?}", self.config);
@@ -101,22 +97,23 @@ impl GPT2Model {
 
     fn layernorm_raw(&self, builder: &Builder, eps: f32, x: Var) -> Var {
         let x_shape = shape(builder, x.clone());
-        let [_, n] = unpack::<2>(builder, x_shape.clone());
+        let [_, _, n] = unpack::<3>(builder, x_shape.clone());
         let s = sum(builder, x.clone());
 
         let constn = scalar(builder, n);
         let constn = cast(builder, constn, dtype(builder, x.clone()));
         let sh = shape(builder, s.clone());
-        let constn = broadcast(builder, constn, sh);
+        let constn = broadcast_to(builder, constn, sh);
 
         let mean = s / constn.clone();
-        let nom = x - broadcast(builder, mean, x_shape.clone());
+        let nom = x - broadcast_to(builder, mean, x_shape.clone());
 
         let var = sum(builder, nom.clone() * nom.clone()) / constn;
         let epsilon = constant_f32(builder, eps);
-        let epsilon = broadcast(builder, epsilon, x_shape.clone());
+        let sh = shape(builder, var.clone());
+        let epsilon = broadcast_to(builder, epsilon, sh);
         let stddev = nn::sqrt(builder, var + epsilon);
-        let denom = broadcast(builder, stddev, x_shape);
+        let denom = broadcast_to(builder, stddev, x_shape);
 
         nom / denom
     }
@@ -128,14 +125,14 @@ impl GPT2Model {
         );
         let lr = self.layernorm_raw(builder, eps, x);
         let lr_shape = shape(builder, lr.clone());
-        let gamma = broadcast(builder, gamma, lr_shape.clone());
+        let gamma = broadcast_to(builder, gamma, lr_shape.clone());
         let lr = lr * gamma;
 
         let beta = param(
             builder,
             &p.concat(&path(vec!["bias"]).expect("invalid param path")),
         );
-        let beta = broadcast(builder, beta, lr_shape);
+        let beta = broadcast_to(builder, beta, lr_shape);
         lr + beta
     }
 
@@ -147,18 +144,22 @@ impl GPT2Model {
         let dim = constant_nat(builder, 0);
         let te = index(builder, wte, dim.clone(), x);
 
+        // add back batch size dim
+        let sh = shape(builder, te.clone());
+        let [seq_len, hidden_dim] = unpack::<2>(builder, sh);
+        let batch_size = constant_nat(builder, 1);
+        let sh = pack::<3>(builder, [batch_size, seq_len.clone(), hidden_dim]);
+
+        let te = reshape(builder, sh.clone(), te);
+
         let wpe = param(
             builder,
             &p.concat(&path(vec!["wpe", "weight"]).expect("invalid param path")),
         );
 
-        // let sh = shape(builder, x);
-        // let [_batch_len, seq_len] = unpack::<2>(builder, sh.clone());
-        let sh = shape(builder, te.clone());
-        let [seq_len, _dim] = unpack::<2>(builder, sh);
         let r = arange(builder, seq_len);
-        // let r = broadcast(builder, r, sh);
         let pe = index(builder, wpe, dim, r);
+        let pe = reshape(builder, sh, pe);
         te + pe
     }
 
