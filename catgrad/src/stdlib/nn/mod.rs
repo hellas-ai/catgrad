@@ -1,7 +1,7 @@
 use crate::prelude::{ops::*, *};
-use std::f32::consts::{E, PI};
 
 use crate::typecheck::*;
+use std::f32::consts::{E, PI};
 
 ////////////////////////////////////////
 // Sigmoid
@@ -286,4 +286,20 @@ pub fn unsqueeze<const N: usize, const M: usize>(builder: &Builder, dim: usize, 
     s.insert(dim, lit(builder, nat(1)));
     let new_shape = pack::<M>(builder, s.try_into().unwrap());
     reshape(builder, new_shape, x)
+}
+
+pub fn repeat_kv(builder: &Builder, rep: usize, x: Var) -> Var {
+    let shape = shape(builder, x.clone());
+    let [b, num_kv_heads, s, head_dim] = unpack::<4>(builder, shape);
+
+    let sh = shape!(builder, b, num_kv_heads, 1, s, head_dim);
+    // equivalent of torch.repeat_interleave across dim 1
+    let x = reshape(builder, sh, x);
+    let sh = shape!(builder, b, num_kv_heads, rep, s, head_dim);
+
+    let x = broadcast(builder, x, sh);
+
+    let rnkv = num_kv_heads * lit(builder, nat(rep as u32));
+    let sh = shape!(builder, b, rnkv, s, head_dim);
+    reshape(builder, sh, x)
 }
