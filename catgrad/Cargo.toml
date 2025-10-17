@@ -1,9 +1,12 @@
 [package]
 name = "catgrad"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2024"
+rust-version = "1.87"
 description = "a categorical deep learning compiler"
 license = "MIT"
+repository = "https://github.com/hellas-ai/catgrad"
+documentation = "https://docs.rs/catgrad"
 
 [dependencies]
 open-hypergraphs = "0.2.7"
