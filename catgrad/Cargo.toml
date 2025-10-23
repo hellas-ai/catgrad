@@ -14,7 +14,7 @@ graphviz-rust = { version = "0.9.5", optional = true }
 open-hypergraphs-dot = { version = "0.2.1", optional = true }
 
 # Interpreter backends (optional)
-ndarray = { version = "0.16.1", optional = true }
+ndarray = { version = "0.16.1", optional = true, features=["matrixmultiply-threading", "rayon"] }
 candle-core = { version = "0.8", optional = true }
 
 [features]
