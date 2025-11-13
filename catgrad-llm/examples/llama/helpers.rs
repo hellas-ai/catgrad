@@ -93,3 +93,23 @@ pub fn rope(
 
     apply_rope_embedding(builder, pos, head_dim, cos, sin, x)
 }
+
+pub fn causal_mask(builder: &Builder, size: Var) -> Var {
+    let i = arange(builder, size.clone());
+    let sh = pack::<2>(builder, [size.clone(), size.clone()]);
+    let i = broadcast(builder, i, sh.clone());
+
+    let one = 1.to_nat(builder);
+    let shr = pack::<2>(builder, [size.clone(), one]);
+    let j = arange(builder, size);
+    let j = reshape(builder, shr, j);
+    let j = broadcast(builder, j, sh);
+
+    let mask = lt(builder, j, i);
+
+    let mask = cast(builder, mask, Dtype::F32);
+    let sh = shape(builder, mask.clone());
+    let ninf = constant(builder, f32::MIN, &sh);
+
+    mask * ninf
+}

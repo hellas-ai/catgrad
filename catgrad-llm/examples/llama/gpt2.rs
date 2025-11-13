@@ -1,8 +1,10 @@
+use super::helpers::*;
 use crate::llm_type;
 use catgrad::prelude::ops::*;
 use catgrad::prelude::*;
 use catgrad_llm::models::utils::Config;
-use nn::{Gelu, causal_mask, chunk, layernorm, linear_no_bias, softmax, unsqueeze};
+
+use nn::*;
 pub struct GPT2Model {
     pub config: Config,
 }

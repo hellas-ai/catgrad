@@ -183,26 +183,6 @@ pub fn chunk(builder: &Builder, dim: isize, chunks: usize, chunk_size: usize, x:
     outputs
 }
 
-pub fn causal_mask(builder: &Builder, size: Var) -> Var {
-    let i = arange(builder, size.clone());
-    let sh = pack::<2>(builder, [size.clone(), size.clone()]);
-    let i = broadcast(builder, i, sh.clone());
-
-    let one = 1.to_nat(builder);
-    let shr = pack::<2>(builder, [size.clone(), one]);
-    let j = arange(builder, size);
-    let j = reshape(builder, shr, j);
-    let j = broadcast(builder, j, sh);
-
-    let mask = lt(builder, j, i);
-
-    let mask = cast(builder, mask, Dtype::F32);
-    let sh = shape(builder, mask.clone());
-    let ninf = constant(builder, f32::MIN, &sh);
-
-    mask * ninf
-}
-
 /// Generic linear layer with optional bias with already loaded parameters given as vars
 pub fn linear_b_param(
     builder: &Builder,
