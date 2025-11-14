@@ -55,6 +55,7 @@ pub trait Backend: Clone + Debug {
     fn max(&self, x: TaggedTensor<Self>) -> TaggedTensor<Self>;
     fn sum(&self, x: TaggedTensor<Self>) -> TaggedTensor<Self>;
     fn argmax(&self, x: TaggedTensor<Self>) -> TaggedTensor<Self>;
+    fn topk(&self, x: TaggedTensor<Self>, k: usize) -> (TaggedTensor<Self>, TaggedTensor<Self>);
     fn compare(&self, x: TaggedTensorTuple<Self, 2>) -> bool;
     fn concat(
         &self,

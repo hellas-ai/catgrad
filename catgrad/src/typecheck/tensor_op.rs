@@ -15,6 +15,7 @@ pub(crate) fn tensor_op(ssa: &CoreSSA, args: Vec<Value>, op: &TensorOp) -> Resul
         TensorOp::MatMul => tensor_matmul(ssa, args),
         TensorOp::Scalar(c) => tensor_constant(ssa, args, c.clone()),
         TensorOp::Sum | TensorOp::Max | TensorOp::Argmax => tensor_reduce(ssa, args),
+        TensorOp::TopK => tensor_topk(ssa, args),
         TensorOp::Broadcast => tensor_broadcast(ssa, args),
         TensorOp::Reshape => tensor_reshape(ssa, args),
         TensorOp::Transpose => tensor_transpose(ssa, args),
@@ -144,6 +145,31 @@ fn tensor_reduce(ssa: &CoreSSA, args: Vec<Value>) -> ResultValues {
     };
 
     Ok(vec![Value::Tensor(type_expr)])
+}
+
+fn tensor_topk(ssa: &CoreSSA, args: Vec<Value>) -> ResultValues {
+    let [tensor, k] = get_exact_arity(ssa, args)?;
+    let (tensor, k) = (
+        to_tensor(ssa, tensor)?.into_ndarraytype(ssa)?,
+        to_nat(ssa, k)?,
+    );
+
+    match tensor.shape {
+        ShapeExpr::Shape(mut shape) if !shape.is_empty() => {
+            let last_idx = shape.len() - 1;
+            shape[last_idx] = k.nf();
+            let values = Value::Tensor(TypeExpr::NdArrayType(NdArrayType {
+                dtype: tensor.dtype.clone(),
+                shape: ShapeExpr::Shape(shape.clone()),
+            }));
+            let indices = Value::Tensor(TypeExpr::NdArrayType(NdArrayType {
+                dtype: DtypeExpr::Constant(Dtype::U32),
+                shape: ShapeExpr::Shape(shape),
+            }));
+            Ok(vec![values, indices])
+        }
+        _ => Err(InterpreterError::TypeError(ssa.edge_id)),
+    }
 }
 
 // TODO: return normalized, broadcasted result (y) instead,

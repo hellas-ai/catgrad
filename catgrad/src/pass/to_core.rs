@@ -107,6 +107,7 @@ pub(crate) fn core_declarations() -> HashMap<lang::Path, core::Operation> {
         (path!["tensor", "sum"], Operation::Tensor(Sum)),
         (path!["tensor", "max"], Operation::Tensor(Max)),
         (path!["tensor", "argmax"], Operation::Tensor(Argmax)),
+        (path!["tensor", "topk"], Operation::Tensor(TopK)),
         (path!["tensor", "arange"], Operation::Tensor(Arange)),
         (path!["tensor", "concat"], Operation::Tensor(Concat)),
         (path!["tensor", "nat_to_u32"], Operation::Tensor(NatToU32)),
