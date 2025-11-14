@@ -20,6 +20,10 @@ pub fn concat(builder: &Builder, dim: impl IntoNatVar, x: Var, y: Var) -> Var {
     ops::concat(builder, dim.to_nat(builder), x, y)
 }
 
+pub fn topk(builder: &Builder, k: impl IntoNatVar, x: Var) -> (Var, Var) {
+    ops::topk(builder, k.to_nat(builder), x)
+}
+
 pub fn index(builder: &Builder, dim: impl IntoNatVar, idx: Var, x: Var) -> Var {
     ops::index(builder, dim.to_nat(builder), idx, x)
 }

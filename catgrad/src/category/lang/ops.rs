@@ -210,6 +210,21 @@ pub fn argmax(builder: &Builder, x: Var) -> Var {
     var::fn_operation(builder, &[x], Object::Tensor, op!["tensor", "argmax"])
 }
 
+pub fn topk(builder: &Builder, k: Var, x: Var) -> (Var, Var) {
+    assert_eq!(k.label, Object::Nat);
+    assert_eq!(x.label, Object::Tensor);
+
+    let outputs = var::operation(
+        builder,
+        &[x, k],
+        vec![Object::Tensor, Object::Tensor],
+        op!["tensor", "topk"],
+    );
+    let values = outputs[0].clone();
+    let indices = outputs[1].clone();
+    (values, indices)
+}
+
 pub fn nat_to_u32(builder: &Builder, nat: Var) -> Var {
     var::fn_operation(builder, &[nat], Object::Tensor, op!["tensor", "nat_to_u32"])
 }

@@ -30,6 +30,7 @@ pub(crate) fn tensor_op<B: Backend>(
         TensorOp::Sum => tensor_sum(backend, args, ssa),
         TensorOp::Max => tensor_max(backend, args, ssa),
         TensorOp::Argmax => tensor_argmax(backend, args, ssa),
+        TensorOp::TopK => tensor_topk(backend, args, ssa),
         TensorOp::Broadcast => tensor_broadcast(backend, args, ssa),
         TensorOp::Reshape => tensor_reshape(backend, args, ssa),
         TensorOp::Transpose => tensor_transpose(backend, args, ssa),
@@ -98,6 +99,13 @@ fn tensor_argmax<B: Backend>(backend: &B, args: Vec<Value<B>>, ssa: &CoreSSA) ->
     let [x] = get_exact_arity(ssa, args)?;
     let x = to_tensor(ssa, x)?;
     Ok(vec![Value::Tensor(backend.argmax(x))])
+}
+
+fn tensor_topk<B: Backend>(backend: &B, args: Vec<Value<B>>, ssa: &CoreSSA) -> ResultValues<B> {
+    let [x, k] = get_exact_arity(ssa, args)?;
+    let (x, k) = (to_tensor(ssa, x)?, to_nat(ssa, k)?);
+    let (values, indices) = backend.topk(x, k);
+    Ok(vec![Value::Tensor(values), Value::Tensor(indices)])
 }
 
 fn tensor_broadcast<B: Backend>(

@@ -151,6 +151,19 @@ impl Backend for ShapeOnlyBackend {
         }
     }
 
+    fn topk(&self, x: TaggedTensor<Self>, k: usize) -> (TaggedTensor<Self>, TaggedTensor<Self>) {
+        use TaggedTensorTuple::*;
+        match x {
+            F32([arr]) => {
+                let new_shape = Self::topk(arr, k);
+                let values = TaggedTensor::F32([new_shape.clone()]);
+                let indices = TaggedTensor::U32([new_shape]);
+                (values, indices)
+            }
+            _ => panic!("Unsupported type for topk"),
+        }
+    }
+
     fn compare(&self, x: TaggedTensorTuple<Self, 2>) -> bool {
         use TaggedTensorTuple::*;
         match x {
@@ -300,12 +313,18 @@ impl ShapeOnlyBackend {
 
         ShapeOnly(Shape(result_shape))
     }
+
+    fn topk(arr: ShapeOnly, k: usize) -> ShapeOnly {
+        let mut shape = arr.0.0;
+        let last_idx = shape.len() - 1;
+        shape[last_idx] = k;
+        ShapeOnly(Shape(shape))
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::category::core::Shape;
 
     #[test]
     fn test_zeros() {
@@ -500,5 +519,16 @@ mod tests {
 
         let result = backend.cast(tagged_x, Dtype::U32);
         assert_eq!(result.shape(), Shape(vec![2, 3]));
+    }
+
+    #[test]
+    fn test_topk_shapes() {
+        let backend = ShapeOnlyBackend;
+        let input = TaggedTensor::F32([ShapeOnly(Shape(vec![2, 5]))]);
+        let (values, indices) = backend.topk(input, 3);
+        assert_eq!(values.shape(), Shape(vec![2, 3]));
+        assert_eq!(indices.shape(), Shape(vec![2, 3]));
+        assert_eq!(values.dtype(), Dtype::F32);
+        assert_eq!(indices.dtype(), Dtype::U32);
     }
 }

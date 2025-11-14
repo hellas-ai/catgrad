@@ -244,6 +244,17 @@ impl Backend for NdArrayBackend {
         }
     }
 
+    fn topk(&self, x: TaggedTensor<Self>, k: usize) -> (TaggedTensor<Self>, TaggedTensor<Self>) {
+        use TaggedTensorTuple::*;
+        match x {
+            F32([arr]) => {
+                let (values, indices) = Self::topk_f32(arr.unwrap_f32(), k);
+                (from_f32(values), from_u32(indices))
+            }
+            _ => panic!("Unsupported type for topk"),
+        }
+    }
+
     fn broadcast(&self, x: TaggedTensor<Self>, shape: Shape) -> TaggedTensor<Self> {
         use TaggedTensorTuple::*;
         match x {
@@ -478,6 +489,33 @@ impl NdArrayBackend {
                 .unwrap()
         })
         .insert_axis(Axis(axis))
+    }
+
+    fn topk_f32(x: ArrayD<f32>, k: usize) -> (ArrayD<f32>, ArrayD<u32>) {
+        let mut dims = x.shape().to_vec();
+
+        let last_idx = dims.len() - 1;
+        let last_dim = dims[last_idx];
+
+        let total_outer = x.len() / last_dim;
+        let mut values: Vec<f32> = Vec::with_capacity(total_outer * k);
+        let mut indices: Vec<u32> = Vec::with_capacity(total_outer * k);
+
+        for lane in x.lanes(Axis(last_idx)) {
+            let mut idxs: Vec<usize> = (0..lane.len()).collect();
+            idxs.select_nth_unstable_by(k, |&i, &j| lane[j].total_cmp(&lane[i]));
+            idxs.truncate(k);
+
+            for i in idxs {
+                values.push(lane[i]);
+                indices.push(i as u32);
+            }
+        }
+
+        dims[last_idx] = k;
+        let values = ArrayD::from_shape_vec(IxDyn(&dims), values).unwrap();
+        let indices = ArrayD::from_shape_vec(IxDyn(&dims), indices).unwrap();
+        (values, indices)
     }
 
     fn sum<D>(x: ArrayD<D>) -> ArrayD<D>
