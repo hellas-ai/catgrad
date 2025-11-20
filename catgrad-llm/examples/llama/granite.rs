@@ -4,6 +4,7 @@ use catgrad::prelude::ops::*;
 use catgrad::prelude::*;
 use catgrad_llm::models::utils::Config;
 use nn::*;
+
 pub struct GraniteModel {
     pub config: Config,
     pub max_sequence_length: usize,
@@ -46,6 +47,68 @@ impl GraniteModel {
             p.extend(["down_proj"]).unwrap(),
             x,
         )
+    }
+
+    fn moe(&self, builder: &Builder, p: Path, x: Var) -> Var {
+        let [_, seq_len, _] = unpack::<3>(builder, shape(builder, x.clone()));
+
+        let moe_input = param(builder, &p.extend(vec!["input_linear", "weight"]).unwrap());
+        let moe_output = param(builder, &p.extend(vec!["output_linear", "weight"]).unwrap());
+        let routed = linear_no_bias(
+            builder,
+            self.config.hidden_size,
+            self.config.num_local_experts,
+            p.extend(["router", "layer"]).unwrap(),
+            x.clone(),
+        );
+
+        let vi = topk(
+            builder,
+            self.config.num_experts_per_tok.to_nat(builder),
+            routed,
+        );
+        let values = vi.0;
+        let indices = vi.1;
+
+        let sh = shape!(
+            builder,
+            seq_len,
+            self.config.num_experts_per_tok.to_nat(builder)
+        );
+
+        let indices = reshape(builder, sh.clone(), indices);
+
+        let values = reshape(builder, sh, values);
+
+        let values = softmax(builder, values);
+
+        let fullx = transpose(builder, 0, 1, x);
+        let mut sumk = constant(builder, 0., &shape(builder, fullx.clone()));
+
+        for i in 0..self.config.num_experts_per_tok {
+            let idx = get(builder, 1, i, indices.clone());
+            let val = get(builder, 1, i, values.clone());
+
+            let gate_up = index(builder, 0, idx.clone(), moe_input.clone());
+            let out = index(builder, 0, idx.clone(), moe_output.clone());
+
+            let gate_up = chunk(builder, 1, 2, self.config.intermediate_size, gate_up);
+            let gate = transpose(builder, 1, 2, gate_up[0].clone());
+            let up = transpose(builder, 1, 2, gate_up[1].clone());
+
+            let gate = matmul(builder, fullx.clone(), gate);
+            let up = matmul(builder, fullx.clone(), up);
+            let x = silu(builder, gate) * up; // SwiGLU
+
+            let out = transpose(builder, 1, 2, out);
+            let x = matmul(builder, x, out);
+
+            let v = unsqueeze::<2, 3>(builder, 2, val);
+            let v = broadcast(builder, v, shape(builder, x.clone()));
+            sumk = sumk + x * v;
+        }
+
+        transpose(builder, 0, 1, sumk)
     }
 
     fn attention(
@@ -164,7 +227,11 @@ impl GraniteModel {
             p.extend(["post_attention_layernorm"]).unwrap(),
             x,
         );
-        let x = self.mlp(builder, p.extend(["mlp"]).unwrap(), x);
+        let x = if self.config.num_experts_per_tok == 0 {
+            self.mlp(builder, p.extend(["mlp"]).unwrap(), x)
+        } else {
+            self.moe(builder, p.extend(["block_sparse_moe"]).unwrap(), x)
+        };
         x * mul + res
     }
 }

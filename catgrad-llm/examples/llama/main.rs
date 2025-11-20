@@ -52,7 +52,7 @@ enum BackendChoice {
     Candle,
 }
 
-/// Construct, shapecheck, and interpret the `GPT2Model` using the selected backend.
+/// Construct, shapecheck, and interpret the a given LLM using the selected backend.
 fn main() -> Result<()> {
     env_logger::init();
     let args = Args::parse();
@@ -85,7 +85,7 @@ fn run_with_backend<B: interpreter::Backend>(args: &Args, backend: B) -> Result<
             config: config.clone(),
             max_sequence_length: args.seq_len + token_ids.len(),
         }),
-        "GraniteForCausalLM" => Box::new(granite::GraniteModel {
+        "GraniteForCausalLM" | "GraniteMoeForCausalLM" => Box::new(granite::GraniteModel {
             config: config.clone(),
             max_sequence_length: args.seq_len + token_ids.len(),
         }),
