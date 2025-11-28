@@ -21,7 +21,8 @@
         llvmPackages ? pkgs.llvmPackages_21,
       }: let
         # todo: reduce closure size by using clang/llvm from rust toolchain?
-        mlirInputs = with llvmPackages; [mlir llvm clang];
+        mlirLibs = with llvmPackages; [mlir];
+        mlirBins = with llvmPackages; [mlir llvm clang];
       in
         pkgs.rustPlatform.buildRustPackage {
           pname = "catgrad";
@@ -40,7 +41,12 @@
 
           buildInputs =
             []
-            ++ pkgs.lib.optionals withMlir [pkgs.makeWrapper] ++ mlirInputs;
+            ++ pkgs.lib.optionals withMlir mlirLibs;
+
+          nativeBuildInputs =
+            []
+            # add mlir-opt and friends, mkWrapper for wrapping output
+            ++ pkgs.lib.optionals withMlir [pkgs.makeWrapper] ++ mlirBins;
 
           postInstall =
             # copy examples if requested (except test binaries)
@@ -56,11 +62,11 @@
             + pkgs.lib.optionalString withMlir ''
               if [ -x "$out/bin/mlir-llm" ]; then
                 wrapProgram "$out/bin/mlir-llm" \
-                  --prefix PATH : "${pkgs.lib.makeBinPath mlirInputs}" \
-                  --prefix LIBRARY_PATH : "${pkgs.lib.makeLibraryPath mlirInputs}" \
-                  --prefix LD_LIBRARY_PATH : "${pkgs.lib.makeLibraryPath mlirInputs}" \
-                  --prefix DYLD_LIBRARY_PATH : "${pkgs.lib.makeLibraryPath mlirInputs}" \
-                  --prefix NIX_LDFLAGS " " "-L${pkgs.lib.makeLibraryPath mlirInputs}"
+                  --prefix PATH : "${pkgs.lib.makeBinPath mlirBins}" \
+                  --prefix LIBRARY_PATH : "${pkgs.lib.makeLibraryPath mlirLibs}" \
+                  --prefix LD_LIBRARY_PATH : "${pkgs.lib.makeLibraryPath mlirLibs}" \
+                  --prefix DYLD_LIBRARY_PATH : "${pkgs.lib.makeLibraryPath mlirLibs}" \
+                  --prefix NIX_LDFLAGS " " "-L${pkgs.lib.makeLibraryPath mlirLibs}"
               fi
             '';
 
