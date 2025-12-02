@@ -333,7 +333,7 @@ pub fn tensor_index(ssa: &SSA<Type, lang::Operation>) -> Vec<grammar::Statement>
     // Generate size of indexes tensor
     //  %n = tensor.dim %idx, %c0 : tensor<?xindex>
     statements.push(grammar::Statement::Custom(format!(
-        "  {base}_n = tensor.dim {index_ssa}, {base}_c0 : {index_type}",
+        "  {base}_d0 = tensor.dim {index_ssa}, {base}_c0 : {index_type}",
     )));
 
     // Generate dimension extraction statements for dims 1..rank
@@ -1453,12 +1453,9 @@ fn to_empty_expr(
         .collect();
 
     let mut dim_args = vec![];
-    if !is_known_dimension[0] {
-        dim_args.push(format!("{base}_n"));
-    }
 
     #[allow(clippy::needless_range_loop)]
-    for i in 1..rank {
+    for i in 0..rank {
         if !is_known_dimension[i] {
             dim_args.push(format!("{base}_d{i}"));
         }
