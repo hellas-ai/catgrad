@@ -55,7 +55,7 @@ fn test_cast_u32_f32() {
             [tensor_type(&s, Dtype::U32)],
             [tensor_type(&s, Dtype::F32)],
             |builder, [x]| {
-                let d = Dtype::F32.to_nat(builder);
+                let d = Dtype::F32.to_dtype(builder);
                 vec![ops::cast(builder, x, d)]
             },
         )
