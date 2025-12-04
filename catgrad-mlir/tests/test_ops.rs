@@ -1,4 +1,3 @@
-#![cfg(any())]
 //! Test that operations can be lowered to text and mlir-opt will accept them.
 use catgrad::prelude::*;
 use catgrad::stdlib::ops::IntoDtypeVar;
