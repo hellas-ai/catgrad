@@ -10,7 +10,26 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: Swatinem/rust-cache@v2
-      - run: |
+
+      - name: Install MLIR/LLVM
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y wget gnupg
+
+          # Add LLVM apt repo + install
+          wget https://apt.llvm.org/llvm.sh
+          chmod +x llvm.sh
+          sudo ./llvm.sh 21
+
+          # Install MLIR
+          sudo apt-get install -y mlir-21-tools libmlir-21-dev
+
+          echo "/usr/lib/llvm-21/bin" >> $GITHUB_PATH
+      - name: Run tests
+        env:
+          LIBRARY_PATH: /usr/lib/llvm-21/lib
+          LD_LIBRARY_PATH: /usr/lib/llvm-21/lib
+        run: |
           cargo test --features ndarray-backend,candle-backend
           RUST_BACKTRACE=full cargo test --examples --features ndarray-backend,candle-backend
   # Check formatting with rustfmt
@@ -22,9 +41,9 @@ jobs:
       - run: cargo fmt --check
 
   clippy:
-     name: cargo clippy
-     runs-on: ubuntu-latest
-     steps:
+    name: cargo clippy
+    runs-on: ubuntu-latest
+    steps:
       - uses: actions/checkout@v4
       - uses: Swatinem/rust-cache@v2
       - run: cargo clippy --all-targets --features ndarray-backend,candle-backend -- --deny warnings -W clippy::redundant_clone
