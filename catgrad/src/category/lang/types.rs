@@ -8,7 +8,9 @@ pub use crate::typecheck::Type;
 
 use crate::path::*;
 
-#[derive(Debug, PartialEq, Clone)]
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, PartialEq, Clone, Serialize, Deserialize)]
 pub enum Literal {
     F32(f32),
     U32(u32),
@@ -18,7 +20,7 @@ pub enum Literal {
 
 // Operations are the core shape operations (and operation schemas like 'Constant') extended
 // with "Definitions".
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Operation {
     /// Operations declared to exist, but without a definition (externally interpreted)
     Declaration(Path),
@@ -34,7 +36,7 @@ pub type Term = OpenHypergraph<Object, Operation>;
 pub type Var = open_hypergraphs::lax::var::Var<Object, Operation>;
 
 /// A TypedTerm is one with source and target type specified as 'type maps' (TODO!)
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TypedTerm {
     pub term: Term,
     pub source_type: Vec<Type>,

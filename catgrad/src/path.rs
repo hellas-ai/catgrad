@@ -1,12 +1,13 @@
 //! Names of operations in surface syntax
+use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::slice;
 
-#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+#[derive(Debug, Clone, Hash, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Path(Vec<PathComponent>);
 
 // Names of definitions
-#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+#[derive(Debug, Clone, Hash, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PathComponent(String); // only [a-zA-Z_]
 
 pub fn path(components: Vec<&str>) -> Result<Path, InvalidPathComponent> {
