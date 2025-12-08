@@ -9,9 +9,10 @@ repository.workspace = true
 documentation.workspace = true
 
 [dependencies]
-open-hypergraphs = "0.2.7"
+open-hypergraphs = { workspace = true, features = ["serde"] }
 graphviz-rust = { version = "0.9.5", optional = true }
 open-hypergraphs-dot = { version = "0.2.1", optional = true }
+serde = { workspace = true }
 
 # Interpreter backends (optional)
 ndarray = { version = "0.17.1", optional = true }

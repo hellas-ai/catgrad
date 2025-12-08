@@ -387,6 +387,7 @@ dependencies = [
  "ndarray",
  "open-hypergraphs",
  "open-hypergraphs-dot",
+ "serde",
 ]
 
 [[package]]
@@ -2244,6 +2245,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2cee45ff51782ae067b2ddf577403edd2ebc203786668cdb352e8cfa56e9b5d8"
 dependencies = [
  "num-traits",
+ "serde",
 ]
 
 [[package]]
