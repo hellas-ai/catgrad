@@ -2,6 +2,7 @@ use catgrad::interpreter::backend::candle::CandleBackend;
 use catgrad::interpreter::backend::ndarray::NdArrayBackend;
 use catgrad::prelude::*;
 use std::io::Write;
+use std::path::PathBuf;
 
 use std::collections::HashMap;
 
@@ -30,7 +31,7 @@ struct Args {
     prompt: String,
     /// Tokens to generate
     #[arg(short = 's', long, default_value_t = 1)]
-    seq_len: usize,
+    max_seq_len: usize,
     /// Enable typecheck
     #[arg(short = 't', long)]
     typecheck: bool,
@@ -40,6 +41,12 @@ struct Args {
     /// Enable Candle backend acceleration
     #[arg(short = 'a', long)]
     accel: bool,
+    /// Dump the constructed graph to this JSON file then exit.
+    #[arg(long)]
+    dump: Option<PathBuf>,
+    /// Load model from a previously dumped JSON graph
+    #[arg(long)]
+    load: Option<PathBuf>,
 }
 
 #[derive(Copy, Clone, Debug, ValueEnum)]
@@ -68,7 +75,7 @@ fn run_with_backend<B: interpreter::Backend>(args: &Args, backend: B) -> Result<
 
     let mut token_ids = encoding.get_ids().to_vec();
 
-    let max_sequence_length = args.seq_len + token_ids.len();
+    let max_sequence_length = args.max_seq_len + token_ids.len();
     let model: Box<dyn Module<1, 1>> = match config.architectures[0].as_str() {
         "LlamaForCausalLM" => Box::new(llama::LlamaModel {
             config: config.clone(),
@@ -97,8 +104,23 @@ fn run_with_backend<B: interpreter::Backend>(args: &Args, backend: B) -> Result<
         _ => panic!("Unsupported model architecture {}", config.architectures[0]),
     };
 
-    // Get the model as a typed term
-    let typed_term = model.term().expect("Failed to create typed term");
+    let typed_term = if let Some(load_path) = &args.load {
+        let file = std::fs::File::open(load_path)?;
+        serde_json::from_reader(file)?
+    } else {
+        model.term().expect("Failed to create typed term")
+    };
+
+    if let Some(dump_path) = &args.dump {
+        let file = std::fs::File::create(dump_path)?;
+        serde_json::to_writer_pretty(file, &typed_term)?;
+        println!(
+            "Graph for {} and max_seq_length of {max_sequence_length} dumped to {}",
+            model.path(),
+            dump_path.display()
+        );
+        return Ok(());
+    }
 
     // Get stdlib environment and extend with parameter declarations
     let mut env = stdlib();
@@ -115,7 +137,7 @@ fn run_with_backend<B: interpreter::Backend>(args: &Args, backend: B) -> Result<
     let start_gen = std::time::Instant::now();
     let interpreter = interpreter::Interpreter::new(backend, env, parameter_values);
     // Run interpreter
-    for _ in 0..args.seq_len {
+    for _ in 0..args.max_seq_len {
         let next_token_id = run_interpreter(&typed_term, &interpreter, &token_ids)?;
         if config.get_eos_token_ids().contains(&(next_token_id as i32)) {
             break;
@@ -127,7 +149,7 @@ fn run_with_backend<B: interpreter::Backend>(args: &Args, backend: B) -> Result<
     }
 
     let elapsed_gen = start_gen.elapsed();
-    let generated_tokens = args.seq_len;
+    let generated_tokens = args.max_seq_len;
     println!(
         "\n{} tokens generated in {} seconds. ({:.2} tps)",
         generated_tokens,

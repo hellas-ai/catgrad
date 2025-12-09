@@ -4,6 +4,7 @@
 use crate::definition::Def;
 use crate::path::Path;
 use open_hypergraphs::lax::OpenHypergraph;
+use serde::{Deserialize, Serialize};
 
 ////////////////////////////////////////////////////////////////////////////////
 // Basic types.
@@ -11,19 +12,19 @@ use open_hypergraphs::lax::OpenHypergraph;
 // a core::Term is an open hypergraph with adjoined definitions named by Paths
 pub type Term = OpenHypergraph<Object, Def<Path, Operation>>;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NdArrayType {
     pub dtype: Dtype,
     pub shape: Shape,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Dtype {
     F32,
     U32,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Shape(pub Vec<usize>);
 
 impl Shape {
@@ -66,7 +67,7 @@ impl std::ops::IndexMut<usize> for Shape {
 
 /// Objects of the category.
 /// Note that Nat and Rank-1 shapes are only isomorphic so we can safely index by naturals.
-#[derive(Debug, Hash, PartialEq, Eq, Clone)]
+#[derive(Debug, Hash, PartialEq, Eq, Clone, Serialize, Deserialize)]
 pub enum Object {
     Nat, // natural numbers
     Dtype,
@@ -87,7 +88,7 @@ impl std::fmt::Display for Object {
 use crate::category::lang;
 
 /// Operations are those of core, extended with operations on shapes
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq, Clone, Serialize, Deserialize)]
 pub enum Operation {
     Type(TypeOp),
     Nat(NatOp),
@@ -100,7 +101,7 @@ pub enum Operation {
     Load(lang::Path),
 }
 
-#[derive(Debug, Hash, PartialEq, Eq, Clone)]
+#[derive(Debug, Hash, PartialEq, Eq, Clone, Serialize, Deserialize)]
 pub enum NatOp {
     Constant(usize),
 
@@ -112,7 +113,7 @@ pub enum NatOp {
 }
 
 /// Operations involving shapes and dtypes
-#[derive(Debug, Hash, PartialEq, Eq, Clone)]
+#[derive(Debug, Hash, PartialEq, Eq, Clone, Serialize, Deserialize)]
 pub enum TypeOp {
     /// Pack k Nats into a shape
     /// Pack : Nat^k → Type
@@ -131,14 +132,14 @@ pub enum TypeOp {
     Dtype,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Scalar {
     F32(f32),
     U32(u32),
 }
 
 /// Generating tensor operations
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum TensorOp {
     /// Lift a scalar operation `f : m → n` to `m` input and `n` output arrays.
     /// `Map_f : S₀ ● ..m.. ● S_m → S₀ ● ..n.. ● Sn`
@@ -208,7 +209,7 @@ pub enum TensorOp {
 
 /// For now, we assume that every Dtype defines a ring & has comparisons
 /// TODO: constants, comparisons
-#[derive(Debug, Hash, Clone, PartialEq, Eq)]
+#[derive(Debug, Hash, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ScalarOp {
     Add, // 2 → 1
     Sub, // 2 → 1
