@@ -95,11 +95,7 @@ int main() {
     // Free the heap memory allocated inside the MLIR function.
     printf("freeing res.negated...\n");
     free(res.negated.allocated);
-    printf("freeing res.unchanged...\n");
-    free(res.unchanged.allocated);
-
     // Unload the shared object and exit.
     dlclose(handle);
     return 0;
 }
-
