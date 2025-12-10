@@ -20,7 +20,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         5.0, 6.0, 7.0, 8.0, // Second slice
         9.0, 10.0, 11.0, 12.0, // Third slice
     ];
-    let input_tensor = LlvmRuntime::tensor(input_data, vec![3, 1, 4], vec![4, 4, 1]);
+    let input_tensor = LlvmRuntime::tensor(input_data, vec![3, 1, 4]);
 
     // Print the input tensor using Display
     println!("input: {}", input_tensor);

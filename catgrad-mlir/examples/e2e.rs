@@ -41,7 +41,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Set the scalar parameter (value 1.0)
     let scalar_data = vec![1.0f32];
-    let param_tensor = LlvmRuntime::tensor(scalar_data, vec![], vec![]); // scalar tensor
+    let param_tensor = LlvmRuntime::tensor(scalar_data, vec![]); // scalar tensor
     let param_values = HashMap::from([(model.path().concat(&param_name), param_tensor)]);
 
     ////////////////////////////////////////
@@ -51,7 +51,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         5.0, 6.0, 7.0, 8.0, // 1
         9.0, 10.0, 11.0, 12.0, // 2
     ];
-    let input_tensor = LlvmRuntime::tensor(input_data, vec![3, 1, 4], vec![4, 4, 1]);
+    let input_tensor = LlvmRuntime::tensor(input_data, vec![3, 1, 4]);
     println!("Input tensor: {}", input_tensor);
 
     // Call the function using the CompiledModel API
