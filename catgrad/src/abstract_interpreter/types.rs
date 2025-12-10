@@ -2,8 +2,6 @@
 use open_hypergraphs::lax::{EdgeId, NodeId};
 use std::fmt::Debug;
 
-use serde::{Deserialize, Serialize};
-
 use crate::category::{
     core,
     core::{Object, Operation, TensorOp},
@@ -67,7 +65,8 @@ pub trait Interpreter: Clone + Debug {
 }
 
 /// Tagged value types for a given [`Interpreter`] type
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Debug, Clone)]
 pub enum Value<V: Interpreter> {
     Nat(V::Nat),
     Dtype(V::Dtype),
