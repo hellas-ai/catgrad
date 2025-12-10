@@ -115,10 +115,28 @@ impl LlvmRuntime {
         }
     }
 
+    fn compute_strides(shape: &[usize]) -> Vec<usize> {
+        let mut strides: Vec<usize> = vec![1];
+        for dim in shape.iter().skip(1).rev() {
+            strides.push(strides.last().unwrap() * dim);
+        }
+        strides.reverse();
+        strides
+    }
+
     /// Create a tensor from an f32 buffer with separate extents and strides
     ///
     /// This takes ownership of the data vector and manages it safely.
-    pub fn tensor(data: Vec<f32>, extents: Vec<usize>, strides: Vec<usize>) -> MlirValue {
+    pub fn tensor(data: Vec<f32>, extents: Vec<usize>) -> MlirValue {
+        let strides = LlvmRuntime::compute_strides(&extents);
+        LlvmRuntime::tensor_with_strides(data, extents, strides)
+    }
+
+    pub fn tensor_with_strides(
+        data: Vec<f32>,
+        extents: Vec<usize>,
+        strides: Vec<usize>,
+    ) -> MlirValue {
         let (data_ptr, len, capacity) = into_raw_parts(data);
 
         let sizes: Vec<i64> = extents.into_iter().map(|s| s as i64).collect();

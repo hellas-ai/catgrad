@@ -80,7 +80,7 @@ pub fn main() -> Result<()> {
         9.0, 10.0, 11.0, 12.0, // 2
     ];
 
-    let input_tensor = LlvmRuntime::tensor(input_data, vec![3, 4], vec![4, 1]);
+    let input_tensor = LlvmRuntime::tensor_with_strides(input_data, vec![3, 4], vec![4, 1]);
     println!("Input tensor: {}", input_tensor);
 
     // Call the function using the CompiledModel API
@@ -99,17 +99,6 @@ pub fn main() -> Result<()> {
     }
 
     Ok(())
-}
-
-fn prefix_product(xs: &[usize]) -> Vec<usize> {
-    let mut out = Vec::with_capacity(xs.len() + 1);
-    let mut acc = 1;
-    out.push(acc);
-    for &x in xs {
-        acc *= x;
-        out.push(acc);
-    }
-    out
 }
 
 fn load_model(
@@ -154,8 +143,7 @@ fn load_model(
                 }
             };
 
-            let strides: Vec<usize> = prefix_product(&shape);
-            let tensor = LlvmRuntime::tensor(data, shape.clone(), strides);
+            let tensor = LlvmRuntime::tensor(data, shape.clone());
             let key = path(name.split(".").collect()).expect("invalid param path");
             data_map.insert(key.clone(), tensor);
 
