@@ -4,7 +4,10 @@ use catgrad::stdlib::ops::IntoDtypeVar;
 use catgrad::typecheck::*;
 use catgrad::{category::lang, stdlib::ops};
 
-use catgrad_mlir::compile::CompiledModel;
+use catgrad_mlir::{
+    compile::CompiledModel,
+    runtime::{LlvmRuntime, MlirTensor, MlirValue},
+};
 
 use open_hypergraphs::lax::{
     OpenHypergraph,
@@ -14,6 +17,7 @@ use open_hypergraphs::lax::{
 //use crate::lower::preprocess;
 
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::rc::Rc;
 
 fn run_test(term: TypedTerm) {
@@ -27,6 +31,21 @@ fn run_test(term: TypedTerm) {
 
     // TODO: CompiledModel::new crashes on failure- fix!
     let _ = CompiledModel::new(&env, &params, symbol);
+}
+
+fn run_and_call_test(term: TypedTerm, inputs: Vec<MlirValue>) -> Vec<MlirValue> {
+    let symbol = path(vec!["test", "term"]).unwrap();
+
+    let mut env = stdlib();
+    env.definitions.extend([(symbol.clone(), term)]);
+
+    let params = typecheck::Parameters::from([]);
+    let compiled = CompiledModel::new(&env, &params, symbol.clone());
+    let param_values: HashMap<Path, MlirValue> = HashMap::new();
+
+    compiled
+        .call(symbol, &param_values, inputs)
+        .expect("runtime call failed")
 }
 
 #[test]
@@ -199,6 +218,96 @@ fn test_tensor_sin() {
         )
         .unwrap(),
     );
+}
+
+#[test]
+fn test_tensor_sum_executes() {
+    let input_shape = vec![2, 3];
+    let output_shape = vec![2, 1];
+
+    let term = build_typed_term(
+        [tensor_type(&input_shape, Dtype::F32)],
+        [tensor_type(&output_shape, Dtype::F32)],
+        |builder, [input_tensor]| vec![ops::sum(builder, input_tensor)],
+    )
+    .unwrap();
+
+    let inputs = vec![LlvmRuntime::tensor(
+        vec![1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0],
+        input_shape,
+    )];
+
+    let outputs = run_and_call_test(term, inputs);
+    let (data, shape) = tensor_to_vec_f32(&outputs[0]);
+
+    assert_eq!(shape, output_shape);
+    assert_eq!(data, vec![6.0, 15.0]);
+}
+
+#[test]
+fn test_arange_executes() {
+    let end = 5usize;
+    let term = build_typed_term([], [tensor_type(&[end], Dtype::U32)], |builder, []| {
+        vec![ops::arange(builder, end)]
+    })
+    .unwrap();
+
+    let outputs = run_and_call_test(term, vec![]);
+    let (data, shape) = tensor_to_vec_u32(&outputs[0]);
+
+    assert_eq!(shape, vec![end]);
+    assert_eq!(data, (0..end as u32).collect::<Vec<_>>());
+}
+
+#[test]
+fn test_tensor_reshape_executes() {
+    let input_shape = vec![2, 3];
+    let output_shape = vec![3, 2];
+
+    let term = build_typed_term(
+        [tensor_type(&input_shape, Dtype::F32)],
+        [tensor_type(&output_shape, Dtype::F32)],
+        |builder, [x]| {
+            let new_shape = ops::pack(builder, [3.to_nat(builder), 2.to_nat(builder)]);
+            vec![ops::reshape(builder, new_shape, x)]
+        },
+    )
+    .unwrap();
+
+    let inputs = vec![LlvmRuntime::tensor(
+        vec![0.0f32, 1.0, 2.0, 3.0, 4.0, 5.0],
+        input_shape,
+    )];
+
+    let outputs = run_and_call_test(term, inputs);
+    let (data, shape) = tensor_to_vec_f32(&outputs[0]);
+
+    assert_eq!(shape, output_shape);
+    assert_eq!(data, vec![0.0, 1.0, 2.0, 3.0, 4.0, 5.0]);
+}
+
+#[test]
+fn test_tensor_transpose_executes() {
+    let input_shape = vec![2, 3];
+    let output_shape = vec![3, 2];
+
+    let term = build_typed_term(
+        [tensor_type(&input_shape, Dtype::F32)],
+        [tensor_type(&output_shape, Dtype::F32)],
+        |builder, [x]| vec![ops::transpose(builder, 0, 1, x)],
+    )
+    .unwrap();
+
+    let inputs = vec![LlvmRuntime::tensor(
+        vec![0.0f32, 1.0, 2.0, 3.0, 4.0, 5.0],
+        input_shape,
+    )];
+
+    let outputs = run_and_call_test(term, inputs);
+    let (data, shape) = tensor_to_vec_f32(&outputs[0]);
+
+    assert_eq!(shape, output_shape);
+    assert_eq!(data, vec![0.0, 3.0, 1.0, 4.0, 2.0, 5.0]);
 }
 
 #[test]
@@ -376,6 +485,49 @@ fn test_tensor_broadcast_dynamic() {
         )
         .unwrap(),
     );
+}
+
+// MlirValue helpers. TODO: Variants of these may be best exposed as runtime APIs.
+fn tensor_to_vec_f32(value: &MlirValue) -> (Vec<f32>, Vec<usize>) {
+    match value {
+        MlirValue::MlirTensorF32(tensor) => tensor_to_vec(tensor),
+        _ => panic!("expected f32 tensor"),
+    }
+}
+
+fn tensor_to_vec_u32(value: &MlirValue) -> (Vec<u32>, Vec<usize>) {
+    match value {
+        MlirValue::MlirTensorU32(tensor) => tensor_to_vec(tensor),
+        MlirValue::MlirTensorF32(tensor) => tensor_to_vec_cast::<f32, u32>(tensor),
+        _ => panic!("expected tensor carrying u32 data"),
+    }
+}
+
+fn tensor_to_vec<T: Copy>(tensor: &MlirTensor<T>) -> (Vec<T>, Vec<usize>) {
+    let (shape, len) = tensor_shape_and_len(tensor);
+    unsafe {
+        let start = tensor.aligned.add(tensor.offset as usize);
+        (std::slice::from_raw_parts(start, len).to_vec(), shape)
+    }
+}
+
+fn tensor_to_vec_cast<T, U: Copy>(tensor: &MlirTensor<T>) -> (Vec<U>, Vec<usize>) {
+    let (shape, len) = tensor_shape_and_len(tensor);
+    unsafe {
+        let start = (tensor.aligned as *mut U).add(tensor.offset as usize);
+        (std::slice::from_raw_parts(start, len).to_vec(), shape)
+    }
+}
+
+fn tensor_shape_and_len<T>(tensor: &MlirTensor<T>) -> (Vec<usize>, usize) {
+    let shape: Vec<usize> = tensor
+        .sizes
+        .iter()
+        .map(|&dim| usize::try_from(dim).expect("negative dimension in tensor"))
+        .collect();
+
+    let len: usize = shape.iter().product();
+    (shape, len)
 }
 
 ////////////////////////////////////////////////////////////////////////////////
