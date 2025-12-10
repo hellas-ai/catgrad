@@ -41,6 +41,7 @@ pub fn codegen<P: AsRef<Path>>(mlir_text: &str, output_so: P) -> Result<(), Code
 fn lower_mlir(mlir_text: &str) -> Result<String, CodegenError> {
     let mut opt_cmd = Command::new("mlir-opt")
         .arg("-")
+        .arg("--mlir-print-debuginfo")
         .arg("--convert-elementwise-to-linalg")
         .arg("--linalg-fuse-elementwise-ops")
         .arg("--one-shot-bufferize=bufferize-function-boundaries")
@@ -53,7 +54,9 @@ fn lower_mlir(mlir_text: &str) -> Result<String, CodegenError> {
         .arg("--convert-arith-to-llvm")
         .arg("--convert-func-to-llvm")
         .arg("--convert-cf-to-llvm")
+        .arg("--ensure-debug-info-scope-on-llvm-func")
         .arg("--reconcile-unrealized-casts")
+        .arg("--remove-dead-values")
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .spawn()
