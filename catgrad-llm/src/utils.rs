@@ -322,6 +322,7 @@ use tokenizers::tokenizer::Tokenizer;
 
 pub fn load_model<B: interpreter::Backend>(
     model_name: &str,
+    revision: &str,
     backend: &B,
 ) -> Result<(
     interpreter::Parameters<B>,
@@ -329,7 +330,7 @@ pub fn load_model<B: interpreter::Backend>(
     Config,
     Tokenizer,
 )> {
-    let (model_paths, config_path, tokenizer_path, _) = get_model_files(model_name, "main")?;
+    let (model_paths, config_path, tokenizer_path, _) = get_model_files(model_name, revision)?;
     let config: Config = serde_json::from_str(&std::fs::read_to_string(config_path)?)?;
     let tokenizer = Tokenizer::from_file(tokenizer_path)
         .map_err(|err| LLMError::TokenizerError(format!("tokenizer load error {:?}", err)))?;

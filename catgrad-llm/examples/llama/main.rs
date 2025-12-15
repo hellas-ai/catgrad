@@ -17,6 +17,9 @@ struct Args {
         default_value = "HuggingFaceTB/SmolLM2-135M-Instruct"
     )]
     model_name: String,
+    /// Model revision (branch, tag, or commit)
+    #[arg(short = 'r', long, default_value = "main")]
+    revision: String,
     /// Initial prompt
     #[arg(short = 'p', long, default_value = "Category theory is")]
     prompt: String,
@@ -58,7 +61,7 @@ fn main() -> Result<()> {
 
 fn run_with_backend<B: interpreter::Backend>(args: &Args, backend: B) -> Result<()> {
     let (parameter_values, parameter_types, config, tokenizer) =
-        load_model(&args.model_name, &backend)?;
+        load_model(&args.model_name, &args.revision, &backend)?;
 
     let encoding = tokenizer
         .encode(args.prompt.clone(), true)
