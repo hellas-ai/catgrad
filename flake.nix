@@ -42,6 +42,8 @@
             []
             ++ pkgs.lib.optionals withMlir [pkgs.makeWrapper] ++ mlirInputs;
 
+          nativeCheckInputs = with pkgs; [rust-analyzer rustfmt clippy];
+
           postInstall =
             # copy examples if requested (except test binaries)
             pkgs.lib.optionalString withExamples ''

@@ -24,7 +24,7 @@ struct Args {
 pub fn main() -> Result<()> {
     let args = Args::parse();
 
-    let (param_values, parameters, config, _tokenizer) = load_model(&args.model_name)?;
+    let (param_values, parameters, config, _tokenizer) = load_model(&args.model_name, "main")?;
 
     ////////////////////////////////////////
     // Setup model and environment
@@ -103,13 +103,14 @@ pub fn main() -> Result<()> {
 
 fn load_model(
     model_name: &str,
+    revision: &str,
 ) -> Result<(
     HashMap<Path, catgrad_mlir::runtime::MlirValue>,
     typecheck::Parameters,
     Config,
     Tokenizer,
 )> {
-    let (model_paths, config_path, tokenizer_path, _) = get_model_files(model_name, "main")?;
+    let (model_paths, config_path, tokenizer_path, _) = get_model_files(model_name, revision)?;
     let config: Config = serde_json::from_str(&std::fs::read_to_string(config_path)?)?;
     let tokenizer = Tokenizer::from_file(tokenizer_path)
         .map_err(|err| anyhow::anyhow!("tokenizer load error {:?}", err))?;

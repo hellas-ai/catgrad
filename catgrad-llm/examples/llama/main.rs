@@ -17,6 +17,9 @@ struct Args {
         default_value = "HuggingFaceTB/SmolLM2-135M-Instruct"
     )]
     model_name: String,
+    /// Model revision (branch, tag, or commit)
+    #[arg(short = 'r', long, default_value = "main")]
+    revision: String,
     /// Initial prompt
     #[arg(short = 'p', long, default_value = "Category theory is")]
     prompt: String,
@@ -58,7 +61,7 @@ fn main() -> Result<()> {
 
 fn run_with_backend<B: interpreter::Backend>(args: &Args, backend: B) -> Result<()> {
     let (parameter_values, parameter_types, config, tokenizer) =
-        load_model(&args.model_name, &backend)?;
+        load_model(&args.model_name, &args.revision, &backend)?;
 
     let encoding = tokenizer
         .encode(args.prompt.clone(), true)
@@ -67,7 +70,7 @@ fn run_with_backend<B: interpreter::Backend>(args: &Args, backend: B) -> Result<
     let mut token_ids = encoding.get_ids().to_vec();
 
     let max_sequence_length = args.max_seq_len + token_ids.len();
-    let model = get_model(&config, max_sequence_length);
+    let model = get_model(&config, max_sequence_length)?;
 
     let typed_term = if let Some(load_path) = &args.load {
         let file = std::fs::File::open(load_path)?;

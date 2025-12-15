@@ -173,33 +173,35 @@ pub fn get_model_chat_template(model: &str, revision: &str) -> Result<String> {
 }
 
 use crate::legacy::models::utils::Config;
-pub fn get_model(config: &Config, max_sequence_length: usize) -> Box<dyn Module<1, 1>> {
-    match config.architectures[0].as_str() {
-        "LlamaForCausalLM" => Box::new(llama::LlamaModel {
+
+pub fn get_model(config: &Config, max_sequence_length: usize) -> Result<Box<dyn Module<1, 1>>> {
+    let arch = config.architectures[0].as_str();
+    match arch {
+        "LlamaForCausalLM" => Ok(Box::new(llama::LlamaModel {
             config: config.clone(),
             max_sequence_length,
-        }),
-        "Gemma3ForCausalLM" => Box::new(gemma3::Gemma3Model {
+        })),
+        "Gemma3ForCausalLM" => Ok(Box::new(gemma3::Gemma3Model {
             config: config.clone(),
             max_sequence_length,
-        }),
-        "Qwen3ForCausalLM" | "Qwen3MoeForCausalLM" => Box::new(qwen3::Qwen3Model {
+        })),
+        "Qwen3ForCausalLM" | "Qwen3MoeForCausalLM" => Ok(Box::new(qwen3::Qwen3Model {
             config: config.clone(),
             max_sequence_length,
-        }),
-        "GraniteForCausalLM" | "GraniteMoeForCausalLM" => Box::new(granite::GraniteModel {
+        })),
+        "GraniteForCausalLM" | "GraniteMoeForCausalLM" => Ok(Box::new(granite::GraniteModel {
             config: config.clone(),
             max_sequence_length,
-        }),
-        "DeepseekV3ForCausalLM" => Box::new(deepseek::DeepSeekModel {
+        })),
+        "DeepseekV3ForCausalLM" => Ok(Box::new(deepseek::DeepSeekModel {
             config: config.clone(),
             max_sequence_length,
-        }),
-        "GPT2LMHeadModel" => Box::new(gpt2::GPT2Model {
+        })),
+        "GPT2LMHeadModel" => Ok(Box::new(gpt2::GPT2Model {
             config: config.clone(),
             max_sequence_length,
-        }),
-        _ => panic!("Unsupported model architecture {}", config.architectures[0]),
+        })),
+        _ => Err(LLMError::UnsupportedModel(arch.to_string())),
     }
 }
 
@@ -320,6 +322,7 @@ use tokenizers::tokenizer::Tokenizer;
 
 pub fn load_model<B: interpreter::Backend>(
     model_name: &str,
+    revision: &str,
     backend: &B,
 ) -> Result<(
     interpreter::Parameters<B>,
@@ -327,7 +330,7 @@ pub fn load_model<B: interpreter::Backend>(
     Config,
     Tokenizer,
 )> {
-    let (model_paths, config_path, tokenizer_path, _) = get_model_files(model_name, "main")?;
+    let (model_paths, config_path, tokenizer_path, _) = get_model_files(model_name, revision)?;
     let config: Config = serde_json::from_str(&std::fs::read_to_string(config_path)?)?;
     let tokenizer = Tokenizer::from_file(tokenizer_path)
         .map_err(|err| LLMError::TokenizerError(format!("tokenizer load error {:?}", err)))?;
