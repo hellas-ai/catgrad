@@ -173,33 +173,35 @@ pub fn get_model_chat_template(model: &str, revision: &str) -> Result<String> {
 }
 
 use crate::legacy::models::utils::Config;
-pub fn get_model(config: &Config, max_sequence_length: usize) -> Box<dyn Module<1, 1>> {
-    match config.architectures[0].as_str() {
-        "LlamaForCausalLM" => Box::new(llama::LlamaModel {
+
+pub fn get_model(config: &Config, max_sequence_length: usize) -> Result<Box<dyn Module<1, 1>>> {
+    let arch = config.architectures[0].as_str();
+    match arch {
+        "LlamaForCausalLM" => Ok(Box::new(llama::LlamaModel {
             config: config.clone(),
             max_sequence_length,
-        }),
-        "Gemma3ForCausalLM" => Box::new(gemma3::Gemma3Model {
+        })),
+        "Gemma3ForCausalLM" => Ok(Box::new(gemma3::Gemma3Model {
             config: config.clone(),
             max_sequence_length,
-        }),
-        "Qwen3ForCausalLM" | "Qwen3MoeForCausalLM" => Box::new(qwen3::Qwen3Model {
+        })),
+        "Qwen3ForCausalLM" | "Qwen3MoeForCausalLM" => Ok(Box::new(qwen3::Qwen3Model {
             config: config.clone(),
             max_sequence_length,
-        }),
-        "GraniteForCausalLM" | "GraniteMoeForCausalLM" => Box::new(granite::GraniteModel {
+        })),
+        "GraniteForCausalLM" | "GraniteMoeForCausalLM" => Ok(Box::new(granite::GraniteModel {
             config: config.clone(),
             max_sequence_length,
-        }),
-        "DeepseekV3ForCausalLM" => Box::new(deepseek::DeepSeekModel {
+        })),
+        "DeepseekV3ForCausalLM" => Ok(Box::new(deepseek::DeepSeekModel {
             config: config.clone(),
             max_sequence_length,
-        }),
-        "GPT2LMHeadModel" => Box::new(gpt2::GPT2Model {
+        })),
+        "GPT2LMHeadModel" => Ok(Box::new(gpt2::GPT2Model {
             config: config.clone(),
             max_sequence_length,
-        }),
-        _ => panic!("Unsupported model architecture {}", config.architectures[0]),
+        })),
+        _ => Err(LLMError::UnsupportedModel(arch.to_string())),
     }
 }
 
