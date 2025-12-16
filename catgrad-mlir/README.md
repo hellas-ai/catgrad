@@ -10,7 +10,7 @@ Main modules:
     - `lower::grammar` is a semi-structured representation of MLIR text
     - `lower::ops` contains lowerings of individual ops to MLIR
         - NOTE: there are likely bugs here!
-- `codegen` calls MLIR tools to map MLIR text into a shared object file
+- `codegen` calls MLIR tools to map MLIR text into a shared object file. If `CATGRAD_MLIR_CODEGEN_SCRIPT` is set, it will call that script instead.
 - `runtime` is the low-level runtime interface to run the generated code
 - `compile::CompiledModel` is a higher-level interface which also handles parameter passing
 

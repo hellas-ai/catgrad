@@ -31,9 +31,47 @@ impl From<std::string::FromUtf8Error> for CodegenError {
 /// 3. Compile to object file (llc)
 /// 4. Link to shared library (clang)
 pub fn codegen<P: AsRef<Path>>(mlir_text: &str, output_so: P) -> Result<(), CodegenError> {
+    #[cfg(feature = "codegen-script")]
+    if let Ok(path) = std::env::var("CATGRAD_MLIR_CODEGEN_SCRIPT") {
+        return codegen_with_script(mlir_text, &path, output_so);
+    }
+
     let lowered_mlir = lower_mlir(mlir_text)?;
     let llvm_ir = mlir_to_llvm_ir(&lowered_mlir)?;
     compile_to_shared_lib(&llvm_ir, output_so)?;
+    Ok(())
+}
+
+/// Transform MLIR text into a shared library (.so)
+/// using an external script
+#[cfg(feature = "codegen-script")]
+fn codegen_with_script<P: AsRef<Path>>(
+    mlir_text: &str,
+    script: &str,
+    output_so: P,
+) -> Result<(), CodegenError> {
+    let mut child = Command::new(script)
+        .arg(output_so.as_ref())
+        .stdin(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|e| {
+            CodegenError::ProcessError(format!("Failed to spawn codegen script {}: {}", script, e))
+        })?;
+
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(mlir_text.as_bytes())?;
+
+    let status = child.wait()?;
+    if !status.success() {
+        return Err(CodegenError::ProcessError(format!(
+            "Codegen script ({}): {}",
+            script, status
+        )));
+    }
+
     Ok(())
 }
 
