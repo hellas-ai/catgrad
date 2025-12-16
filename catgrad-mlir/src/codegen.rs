@@ -31,6 +31,7 @@ impl From<std::string::FromUtf8Error> for CodegenError {
 /// 3. Compile to object file (llc)
 /// 4. Link to shared library (clang)
 pub fn codegen<P: AsRef<Path>>(mlir_text: &str, output_so: P) -> Result<(), CodegenError> {
+    #[cfg(feature = "codegen-script")]
     if let Ok(path) = std::env::var("CATGRAD_MLIR_CODEGEN_SCRIPT") {
         return codegen_with_script(mlir_text, &path, output_so);
     }
@@ -43,6 +44,7 @@ pub fn codegen<P: AsRef<Path>>(mlir_text: &str, output_so: P) -> Result<(), Code
 
 /// Transform MLIR text into a shared library (.so)
 /// using an external script
+#[cfg(feature = "codegen-script")]
 fn codegen_with_script<P: AsRef<Path>>(
     mlir_text: &str,
     script: &str,
