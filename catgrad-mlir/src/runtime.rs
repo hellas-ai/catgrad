@@ -151,6 +151,30 @@ impl LlvmRuntime {
         })
     }
 
+    pub fn tensor_u32(data: Vec<u32>, extents: Vec<usize>) -> MlirValue {
+        let strides = LlvmRuntime::compute_strides(&extents);
+        LlvmRuntime::tensor_with_strides_u32(data, extents, strides)
+    }
+
+    pub fn tensor_with_strides_u32(
+        data: Vec<u32>,
+        extents: Vec<usize>,
+        strides: Vec<usize>,
+    ) -> MlirValue {
+        let (data_ptr, len, capacity) = into_raw_parts(data);
+
+        let sizes: Vec<i64> = extents.into_iter().map(|s| s as i64).collect();
+        let strides: Vec<i64> = strides.into_iter().map(|s| s as i64).collect();
+
+        MlirValue::MlirTensorU32(MlirTensor {
+            allocated: MlirBuffer::Rust(Rc::new(data_ptr), len, capacity),
+            aligned: data_ptr, // For user-created tensors, allocated == aligned
+            offset: 0,
+            sizes,
+            strides,
+        })
+    }
+
     pub fn call(
         &self,
         name: &CString,
