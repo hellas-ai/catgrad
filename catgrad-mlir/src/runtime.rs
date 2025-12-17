@@ -242,10 +242,31 @@ impl LlvmRuntime {
 use libffi::middle::*;
 
 /// Memory management for tensor buffers with shared ownership
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub enum MlirBuffer<T> {
     Rust(Rc<*mut T>, usize, usize), // Shared Rust pointer + separate len/capacity
     Malloc(Rc<*mut T>),             // Shared malloc'd pointer
+}
+
+impl<T> std::fmt::Debug for MlirBuffer<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            MlirBuffer::Rust(ptr_rc, len, capacity) => write!(
+                f,
+                "MlirBuffer::Rust<{}>(ptr={:p}, len={len}, capacity={capacity}, strong_count={})",
+                std::any::type_name::<T>(),
+                **ptr_rc,
+                Rc::strong_count(ptr_rc),
+            ),
+            MlirBuffer::Malloc(ptr_rc) => write!(
+                f,
+                "MlirBuffer::Malloc<{}>(ptr={:p}, strong_count={})",
+                std::any::type_name::<T>(),
+                **ptr_rc,
+                Rc::strong_count(ptr_rc),
+            ),
+        }
+    }
 }
 
 impl<T> Drop for MlirBuffer<T> {
