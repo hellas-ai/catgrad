@@ -74,13 +74,9 @@ pub fn main() -> Result<()> {
 
     ////////////////////////////////////////
     // Execute with example data
-    let input_data = vec![
-        1.0f32, 2.0, 3.0, 4.0, // 0
-        5.0, 6.0, 7.0, 8.0, // 1
-        9.0, 10.0, 11.0, 12.0, // 2
-    ];
+    let input_data = (1..13).collect();
 
-    let input_tensor = LlvmRuntime::tensor_with_strides(input_data, vec![3, 4], vec![4, 1]);
+    let input_tensor = LlvmRuntime::tensor_u32(input_data, vec![3, 4]);
     println!("Input tensor: {}", input_tensor);
 
     // Call the function using the CompiledModel API
