@@ -435,14 +435,15 @@ pub fn tensor_transpose(ssa: &SSA<Type, lang::Operation>) -> Vec<grammar::Statem
     permutation.swap(*dim1, *dim2);
 
     // Get target shape for empty tensor creation
-    let target_shape_dims = require_known_shape(ssa.targets[0].1.clone())
+    let mut target_shape_dims = require_known_shape(ssa.targets[0].1.clone())
         .expect("Transpose operation needs known shape");
+    target_shape_dims.swap(*dim1, *dim2);
 
     let mut statements = vec![];
 
     // Generate dimension extraction for dynamic dimensions
     let base = Identifier::Edge(ssa.edge_id);
-    for (i, dim) in target_shape_dims.iter().enumerate() {
+    for (i, dim) in shape_dims.iter().enumerate() {
         if !matches!(dim, NatExpr::Constant(_)) {
             // This is a dynamic dimension, extract it
             statements.push(grammar::Statement::Custom(format!(
