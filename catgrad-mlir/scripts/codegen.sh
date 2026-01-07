@@ -10,7 +10,6 @@ output_so="$1"
 # Default tool names that can be overridden via environment variables
 mlir_opt="${MLIR_OPT:-mlir-opt}"
 mlir_translate="${MLIR_TRANSLATE:-mlir-translate}"
-llc="${LLC:-llc}"
 clang="${CLANG:-clang}"
 
 # Temporary files
@@ -55,6 +54,4 @@ mlir_opt_args=(
 
 "${mlir_translate}" --mlir-to-llvmir "${temp_mlir_out}"  >"${temp_ll}"
 
-"${llc}" -filetype=obj -relocation-model=pic "${temp_ll}" -o "${temp_obj}"
-
-"${clang}" -shared -fPIC "${temp_obj}" -o "${output_so}" -lm -lmlir_c_runner_utils
+"${clang}" -shared -fPIC -Wno-override-module "${temp_ll}" -o "${output_so}" -lm -lmlir_c_runner_utils
