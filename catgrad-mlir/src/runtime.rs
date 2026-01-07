@@ -264,7 +264,12 @@ impl<T> Drop for MlirBuffer<T> {
                 // Only free if this is the last reference
                 if Rc::strong_count(ptr_rc) == 1 {
                     unsafe {
-                        libc::free(**ptr_rc as *mut c_void);
+                        // Check if this is not actually a malloc'd pointer but statically allocated by LLVM.
+                        // When the allocated memref field is 0xdeadbeef only the aligned field is valid.
+                        // TODO: make this cleaner/more robust maybe by introducing a new enum variant for static allocation.
+                        if **ptr_rc as usize != 0xdeadbeef {
+                            libc::free(**ptr_rc as *mut c_void);
+                        }
                     }
                 }
             }
