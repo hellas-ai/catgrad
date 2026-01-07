@@ -28,8 +28,7 @@ impl From<std::string::FromUtf8Error> for CodegenError {
 ///
 /// 1. Lower MLIR through the LLVM pipeline (`mlir-opt`)
 /// 2. Translate to LLVM IR (`mlir-translate`)
-/// 3. Compile to object file (llc)
-/// 4. Link to shared library (clang)
+/// 4. Compile to shared library (clang)
 pub fn codegen<P: AsRef<Path>>(mlir_text: &str, output_so: P) -> Result<(), CodegenError> {
     #[cfg(feature = "codegen-script")]
     if let Ok(path) = std::env::var("CATGRAD_MLIR_CODEGEN_SCRIPT") {
@@ -150,39 +149,18 @@ fn compile_to_shared_lib<P: AsRef<Path>>(llvm_ir: &str, output_so: P) -> Result<
     // Create temporary directory
     let temp_dir = TempDir::new("catgrad-mlir")?;
 
-    // Write LLVM IR to temporary file for llc
+    // Write LLVM IR to temporary file for clang
     let base_name = output_so.with_extension("");
     let temp_ll = temp_dir
         .path()
         .join(format!("{}.ll", base_name.to_string_lossy()));
     fs::write(&temp_ll, llvm_ir)?;
 
-    // Create a temporary file for the object
-    let temp_obj = temp_dir
-        .path()
-        .join(format!("{}.o", base_name.to_string_lossy()));
-
-    // Compile to object file
-    let llc_output = Command::new("llc")
-        .arg("-filetype=obj")
-        .arg("-relocation-model=pic")
-        .arg(&temp_ll)
-        .arg("-o")
-        .arg(&temp_obj)
-        .output()?;
-
-    if !llc_output.status.success() {
-        return Err(CodegenError::ProcessError(format!(
-            "llc failed: {}",
-            String::from_utf8(llc_output.stderr)?
-        )));
-    }
-
     // Link to shared library
     let clang_output = Command::new("clang")
         .arg("-shared")
         .arg("-fPIC")
-        .arg(&temp_obj)
+        .arg(&temp_ll)
         .arg("-o")
         .arg(output_so)
         .arg("-lm")
