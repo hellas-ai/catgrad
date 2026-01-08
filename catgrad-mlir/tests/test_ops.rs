@@ -364,7 +364,37 @@ fn test_tensor_matmul() {
         .unwrap(),
     );
 }
+#[test]
+fn test_tensor_matmul_executes() {
+    let lhs_shape = vec![4, 3, 5]; // (N=4, A=3, B=5)
+    let rhs_shape = vec![4, 5, 7]; // (N=4, B=5, C=7)
+    let output_shape = vec![4, 3, 7]; // (N=4, A=3, C=7)
 
+    let term = build_typed_term(
+        [
+            tensor_type(&lhs_shape, Dtype::F32),
+            tensor_type(&rhs_shape, Dtype::F32),
+        ],
+        [tensor_type(&output_shape, Dtype::F32)],
+        |builder, [lhs, rhs]| vec![ops::matmul(builder, lhs, rhs)],
+    )
+    .unwrap();
+
+    // Use simple data (all ones) so each output element = sum_k 1*1 = 5
+    let lhs_data = vec![1.0f32; lhs_shape.iter().product()];
+    let rhs_data = vec![1.0f32; rhs_shape.iter().product()];
+
+    let inputs = vec![
+        LlvmRuntime::tensor(lhs_data, lhs_shape),
+        LlvmRuntime::tensor(rhs_data, rhs_shape),
+    ];
+
+    let outputs = run_and_call_test(term, inputs);
+    let (data, shape) = tensor_to_vec_f32(&outputs[0]);
+
+    assert_eq!(shape, output_shape);
+    assert_eq!(data, vec![5.0f32; output_shape.iter().product()]);
+}
 #[test]
 fn test_tensor_lt() {
     let ty = Type::Tensor(TypeExpr::NdArrayType(NdArrayType {
