@@ -1012,6 +1012,16 @@ pub fn tensor_matmul(ssa: &SSA<Type, lang::Operation>) -> Vec<grammar::Statement
         "  {base}_empty = {empty_expr}"
     )));
 
+    // Create zero constant for initialization
+    statements.push(grammar::Statement::Custom(format!(
+        "  {base}_zero = arith.constant 0.0 : f32"
+    )));
+
+    // Fill the empty tensor with zeros
+    statements.push(grammar::Statement::Custom(format!(
+        "  {base}_fill = linalg.fill ins({base}_zero : f32) outs({base}_empty : {target_type}) -> {target_type}"
+    )));
+
     // Generate indexing maps for matmul
     // We need (rank + 1) dimensions: batch_dims + M + N + K
     // For input A: (...batch_dims, M, K)
@@ -1057,7 +1067,7 @@ pub fn tensor_matmul(ssa: &SSA<Type, lang::Operation>) -> Vec<grammar::Statement
         r#"  {target_id} = linalg.generic {{
     indexing_maps = [{lhs_map}, {rhs_map}, {out_map}],
     iterator_types = [{iterator_types}]
-  }} ins({lhs_id}, {rhs_id} : {lhs_type}, {rhs_type}) outs({base}_empty : {target_type}) {{
+  }} ins({lhs_id}, {rhs_id} : {lhs_type}, {rhs_type}) outs({base}_fill : {target_type}) {{
   ^bb0(%a: {element_type}, %b: {element_type}, %acc: {element_type}):
     %prod = arith.mulf %a, %b : {element_type}
     %sum = arith.addf %acc, %prod : {element_type}
