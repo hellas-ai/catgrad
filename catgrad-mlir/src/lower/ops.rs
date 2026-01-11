@@ -1129,7 +1129,7 @@ pub fn tensor_slice(ssa: &SSA<Type, lang::Operation>) -> Vec<grammar::Statement>
             if i == static_dim {
                 format!("{start}")
             } else {
-                format!("{base}_c{i}")
+                format!("{base}_c0")
             }
         })
         .collect::<Vec<_>>()
