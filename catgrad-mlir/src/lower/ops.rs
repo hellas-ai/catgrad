@@ -999,9 +999,16 @@ pub fn tensor_matmul(ssa: &SSA<Type, lang::Operation>) -> Vec<grammar::Statement
             statements.push(grammar::Statement::Custom(format!(
                 "  {base}_c{i} = arith.constant {i} : index"
             )));
-            statements.push(grammar::Statement::Custom(format!(
-                "  {base}_d{i} = tensor.dim {lhs_id}, {base}_c{i} : {lhs_type}"
-            )));
+            // Get all but the last dimension from the right operand
+            if i < target_shape_dims.len() - 1 {
+                statements.push(grammar::Statement::Custom(format!(
+                    "  {base}_d{i} = tensor.dim {lhs_id}, {base}_c{i} : {lhs_type}"
+                )));
+            } else {
+                statements.push(grammar::Statement::Custom(format!(
+                    "  {base}_d{i} = tensor.dim {rhs_id}, {base}_c{i} : {rhs_type}"
+                )));
+            }
         }
     }
 
