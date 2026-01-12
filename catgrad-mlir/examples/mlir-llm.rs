@@ -19,12 +19,16 @@ struct Args {
         default_value = "HuggingFaceTB/SmolLM2-135M-Instruct"
     )]
     model_name: String,
+
+    /// Initial prompt
+    #[arg(short = 'p', long, default_value = "Category theory is")]
+    prompt: String,
 }
 
 pub fn main() -> Result<()> {
     let args = Args::parse();
 
-    let (param_values, parameters, config, _tokenizer) = load_model(&args.model_name, "main")?;
+    let (param_values, parameters, config, tokenizer) = load_model(&args.model_name, "main")?;
 
     ////////////////////////////////////////
     // Setup model and environment
@@ -72,11 +76,15 @@ pub fn main() -> Result<()> {
     println!("Compiling {}...", model.path());
     let compiled_model = CompiledModel::new(&env, &parameters, model.path());
 
-    ////////////////////////////////////////
-    // Execute with example data
-    let input_data = (1..13).collect();
+    let encoding = tokenizer
+        .encode(args.prompt, true)
+        .map_err(|err| anyhow::anyhow!("tokenizer error {:?}", err))?;
 
-    let input_tensor = LlvmRuntime::tensor_u32(input_data, vec![3, 4]);
+    let input_data = encoding.get_ids().to_vec();
+
+    let len = input_data.len();
+
+    let input_tensor = LlvmRuntime::tensor_u32(input_data, vec![1, len]);
     println!("Input tensor: {}", input_tensor);
 
     // Call the function using the CompiledModel API
