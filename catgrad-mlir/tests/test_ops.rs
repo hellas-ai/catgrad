@@ -533,11 +533,40 @@ fn tensor_to_vec_u32(value: &MlirValue) -> (Vec<u32>, Vec<usize>) {
     }
 }
 
+// Copy a possibly non-contiguous MLIR Tensor to a Vec
 fn tensor_to_vec<T: Copy>(tensor: &MlirTensor<T>) -> (Vec<T>, Vec<usize>) {
     let (shape, len) = tensor_shape_and_len(tensor);
     unsafe {
-        let start = tensor.aligned.add(tensor.offset as usize);
-        (std::slice::from_raw_parts(start, len).to_vec(), shape)
+        let strides: Vec<usize> = tensor.strides.iter().map(|&s| s as usize).collect();
+        let is_contiguous = LlvmRuntime::compute_strides(&shape) == strides;
+
+        if is_contiguous {
+            let start = tensor.aligned.add(tensor.offset as usize);
+            return (std::slice::from_raw_parts(start, len).to_vec(), shape);
+        }
+
+        let mut result = Vec::with_capacity(len);
+
+        let mut idx = vec![0usize; shape.len()];
+
+        for _ in 0..len {
+            let mut elem = tensor.offset as usize;
+            for (i, &ind) in idx.iter().enumerate() {
+                elem += ind * strides[i];
+            }
+            let ptr = tensor.aligned.add(elem);
+            result.push(std::ptr::read(ptr));
+
+            for dim in (0..shape.len()).rev() {
+                idx[dim] += 1;
+                if idx[dim] < shape[dim] {
+                    break;
+                }
+                idx[dim] = 0;
+            }
+        }
+
+        (result, shape)
     }
 }
 

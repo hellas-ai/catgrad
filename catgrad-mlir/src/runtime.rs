@@ -115,7 +115,7 @@ impl LlvmRuntime {
         }
     }
 
-    fn compute_strides(shape: &[usize]) -> Vec<usize> {
+    pub fn compute_strides(shape: &[usize]) -> Vec<usize> {
         let mut strides: Vec<usize> = vec![1];
         for dim in shape.iter().skip(1).rev() {
             strides.push(strides.last().unwrap() * dim);
