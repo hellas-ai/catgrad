@@ -82,6 +82,33 @@ fn test_cast_u32_f32() {
 }
 
 #[test]
+fn test_cast_u32_f32_executes() {
+    let s = vec![3, 1, 4];
+    let term = build_typed_term(
+        [tensor_type(&s, Dtype::U32)],
+        [tensor_type(&s, Dtype::F32)],
+        |builder, [x]| {
+            let d = Dtype::F32.to_dtype(builder);
+            vec![ops::cast(builder, x, d)]
+        },
+    )
+    .unwrap();
+
+    // Prepare input data 0..(len-1) as u32s
+    let len: usize = s.iter().product();
+    let input_data: Vec<u32> = (0..len as u32).collect();
+
+    let inputs = vec![LlvmRuntime::tensor_u32(input_data.clone(), s.clone())];
+
+    let outputs = run_and_call_test(term, inputs);
+    let (data, shape) = tensor_to_vec_f32(&outputs[0]);
+
+    assert_eq!(shape, s);
+    let expected: Vec<f32> = input_data.iter().map(|&x| x as f32).collect();
+    assert_eq!(data, expected);
+}
+
+#[test]
 fn test_arange() {
     let s = vec![10];
     run_test(
@@ -125,6 +152,42 @@ fn test_tensor_index() {
         )
         .unwrap(),
     );
+}
+
+#[test]
+fn test_tensor_index_executes() {
+    let input_shape = vec![4, 3]; // 4x3 tensor
+    let indices_shape = vec![2]; // 2 indices
+    let output_shape = vec![2, 3]; // result: 2x3 tensor (indexed along dim 0)
+
+    let term = build_typed_term(
+        [
+            tensor_type(&input_shape, Dtype::F32),
+            tensor_type(&indices_shape, Dtype::U32),
+        ],
+        [tensor_type(&output_shape, Dtype::F32)],
+        |builder, [input_tensor, indices_tensor]| {
+            let dim = 0.to_nat(builder); // Index along dimension 0
+            vec![ops::index(builder, dim, indices_tensor, input_tensor)]
+        },
+    )
+    .unwrap();
+
+    // Input 4x3: rows [0,1,2], [3,4,5], [6,7,8], [9,10,11]
+    let input_data: Vec<f32> = (0..(4 * 3)).map(|x| x as f32).collect();
+    let indices: Vec<u32> = vec![1, 3];
+
+    let inputs = vec![
+        LlvmRuntime::tensor(input_data, input_shape),
+        LlvmRuntime::tensor_u32(indices, indices_shape),
+    ];
+
+    let outputs = run_and_call_test(term, inputs);
+    let (data, shape) = tensor_to_vec_f32(&outputs[0]);
+
+    assert_eq!(shape, output_shape);
+    let expected = vec![3.0, 4.0, 5.0, 9.0, 10.0, 11.0];
+    assert_eq!(data, expected);
 }
 
 #[test]
@@ -218,6 +281,29 @@ fn test_tensor_sin() {
         )
         .unwrap(),
     );
+}
+
+#[test]
+fn test_tensor_sin_executes() {
+    let shape = vec![2, 3];
+    let term = build_typed_term(
+        [tensor_type(&shape, Dtype::F32)],
+        [tensor_type(&shape, Dtype::F32)],
+        |builder, [input_tensor]| vec![ops::sin(builder, input_tensor)],
+    )
+    .unwrap();
+
+    let input_data: Vec<f32> = vec![0.0, 1.0, 2.0, 3.0, 4.0, 5.0];
+    let inputs = vec![LlvmRuntime::tensor(input_data.clone(), shape.clone())];
+
+    let outputs = run_and_call_test(term, inputs);
+    let (data, out_shape) = tensor_to_vec_f32(&outputs[0]);
+
+    assert_eq!(out_shape, shape);
+    let expected: Vec<f32> = input_data.iter().map(|x| x.sin()).collect();
+    for (a, b) in data.iter().zip(expected.iter()) {
+        assert!((a - b).abs() < 1e-4);
+    }
 }
 
 #[test]
@@ -325,6 +411,29 @@ fn test_tensor_cos() {
 }
 
 #[test]
+fn test_tensor_cos_executes() {
+    let shape = vec![2, 3];
+    let term = build_typed_term(
+        [tensor_type(&shape, Dtype::F32)],
+        [tensor_type(&shape, Dtype::F32)],
+        |builder, [input_tensor]| vec![ops::cos(builder, input_tensor)],
+    )
+    .unwrap();
+
+    let input_data: Vec<f32> = vec![0.0, 1.0, 2.0, 3.0, 4.0, 5.0];
+    let inputs = vec![LlvmRuntime::tensor(input_data.clone(), shape.clone())];
+
+    let outputs = run_and_call_test(term, inputs);
+    let (data, out_shape) = tensor_to_vec_f32(&outputs[0]);
+
+    assert_eq!(out_shape, shape);
+    let expected: Vec<f32> = input_data.iter().map(|x| x.cos()).collect();
+    for (a, b) in data.iter().zip(expected.iter()) {
+        assert!((a - b).abs() < 1e-4);
+    }
+}
+
+#[test]
 fn test_tensor_concat() {
     let tensor1_shape = vec![2, 3]; // 2x3 tensor
     let tensor2_shape = vec![2, 4]; // 2x4 tensor
@@ -344,6 +453,43 @@ fn test_tensor_concat() {
         )
         .unwrap(),
     );
+}
+
+#[test]
+fn test_tensor_concat_executes() {
+    let tensor1_shape = vec![2, 3]; // 2x3 tensor
+    let tensor2_shape = vec![2, 4]; // 2x4 tensor
+    let output_shape = vec![2, 7]; // concatenated along dim 1: 2x7 tensor
+
+    let term = build_typed_term(
+        [
+            tensor_type(&tensor1_shape, Dtype::F32),
+            tensor_type(&tensor2_shape, Dtype::F32),
+        ],
+        [tensor_type(&output_shape, Dtype::F32)],
+        |builder, [tensor1, tensor2]| {
+            let dim = 1.to_nat(builder); // Concatenate along dimension 1
+            vec![ops::concat(builder, dim, tensor1, tensor2)]
+        },
+    )
+    .unwrap();
+
+    let t1 = vec![1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0];
+    let t2 = vec![7.0f32, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0];
+
+    let inputs = vec![
+        LlvmRuntime::tensor(t1, tensor1_shape),
+        LlvmRuntime::tensor(t2, tensor2_shape),
+    ];
+
+    let outputs = run_and_call_test(term, inputs);
+    let (data, shape) = tensor_to_vec_f32(&outputs[0]);
+
+    assert_eq!(shape, output_shape);
+    let expected = vec![
+        1.0, 2.0, 3.0, 7.0, 8.0, 9.0, 10.0, 4.0, 5.0, 6.0, 11.0, 12.0, 13.0, 14.0,
+    ];
+    assert_eq!(data, expected);
 }
 
 #[test]
@@ -411,6 +557,35 @@ fn test_tensor_lt() {
 }
 
 #[test]
+fn test_tensor_lt_executes() {
+    let ty = tensor_type(&[2, 3], Dtype::F32);
+
+    let term = build_typed_term([ty.clone(), ty.clone()], [ty], |builder, [lhs, rhs]| {
+        vec![ops::lt(builder, lhs, rhs)]
+    })
+    .unwrap();
+
+    let lhs = vec![0.0f32, 1.0, 2.0, 3.0, 4.0, 5.0];
+    let rhs = vec![1.0f32; lhs.len()];
+
+    let inputs = vec![
+        LlvmRuntime::tensor(lhs.clone(), vec![2, 3]),
+        LlvmRuntime::tensor(rhs.clone(), vec![2, 3]),
+    ];
+
+    let outputs = run_and_call_test(term, inputs);
+    let (data, shape) = tensor_to_vec_f32(&outputs[0]);
+
+    assert_eq!(shape, vec![2, 3]);
+    let expected: Vec<f32> = lhs
+        .iter()
+        .zip(rhs.iter())
+        .map(|(a, b)| if a < b { 1.0 } else { 0.0 })
+        .collect();
+    assert_eq!(data, expected);
+}
+
+#[test]
 fn test_tensor_slice() {
     let input_shape = vec![2, 6, 4]; // 2x6x4 tensor
     let output_shape = vec![2, 3, 4]; // slice dim 1, start=2, len=3: 2x3x4 tensor
@@ -428,6 +603,46 @@ fn test_tensor_slice() {
         )
         .unwrap(),
     );
+}
+
+#[test]
+fn test_tensor_slice_executes() {
+    let input_shape = vec![2, 6, 4];
+    let output_shape = vec![2, 3, 4];
+
+    let term = build_typed_term(
+        [tensor_type(&input_shape, Dtype::F32)],
+        [tensor_type(&output_shape, Dtype::F32)],
+        |builder, [input_tensor]| {
+            let dim = 1.to_nat(builder); // Slice along dimension 1
+            let start = 2.to_nat(builder); // Start at index 2
+            let len = 3.to_nat(builder); // Take 3 elements
+            vec![ops::slice(builder, dim, start, len, input_tensor)]
+        },
+    )
+    .unwrap();
+
+    let input_data: Vec<f32> = (0..(input_shape.iter().product()))
+        .map(|x| x as f32)
+        .collect();
+    let inputs = vec![LlvmRuntime::tensor(input_data, input_shape)];
+
+    let outputs = run_and_call_test(term, inputs);
+    let (data, shape) = tensor_to_vec_f32(&outputs[0]);
+
+    assert_eq!(shape, output_shape);
+
+    // compute expected slice: for each i in 0..2, j in 0..3, k in 0..4 -> input[i, j+2, k]
+    let mut expected = Vec::new();
+    for i in 0..2 {
+        for j in 0..3 {
+            for k in 0..4 {
+                let idx = i * (6 * 4) + (j + 2) * 4 + k;
+                expected.push(idx as f32);
+            }
+        }
+    }
+    assert_eq!(data, expected);
 }
 
 #[test]
@@ -458,6 +673,38 @@ fn test_tensor_max() {
 }
 
 #[test]
+fn test_tensor_max_executes() {
+    let input_shape = vec![2, 3, 4];
+    let output_shape = vec![2, 3, 1];
+
+    let term = build_typed_term(
+        [tensor_type(&input_shape, Dtype::F32)],
+        [tensor_type(&output_shape, Dtype::F32)],
+        |builder, [input_tensor]| vec![ops::max(builder, input_tensor)],
+    )
+    .unwrap();
+
+    // input data 0..(2*3*4-1)
+    let input_data: Vec<f32> = (0..(input_shape.iter().product()))
+        .map(|x| x as f32)
+        .collect();
+    let inputs = vec![LlvmRuntime::tensor(input_data, input_shape)];
+
+    let outputs = run_and_call_test(term, inputs);
+    let (data, shape) = tensor_to_vec_f32(&outputs[0]);
+
+    assert_eq!(shape, output_shape);
+
+    // expected: max over last dim (len 4) i.e., last element in each group of 4
+    let mut expected = Vec::new();
+    for i in 0..(2 * 3) {
+        let base = i * 4;
+        expected.push((base + 3) as f32);
+    }
+    assert_eq!(data, expected);
+}
+
+#[test]
 fn test_tensor_argmax() {
     let input_shape = vec![2, 3, 4]; // 2x3x4 tensor
     let output_shape = vec![2, 3, 1]; // argmax over final dim: 2x3x1 tensor (indices)
@@ -470,6 +717,33 @@ fn test_tensor_argmax() {
         )
         .unwrap(),
     );
+}
+
+#[test]
+fn test_tensor_argmax_executes() {
+    let input_shape = vec![2, 3, 4];
+    let output_shape = vec![2, 3, 1];
+
+    let term = build_typed_term(
+        [tensor_type(&input_shape, Dtype::F32)],
+        [tensor_type(&output_shape, Dtype::U32)],
+        |builder, [input_tensor]| vec![ops::argmax(builder, input_tensor)],
+    )
+    .unwrap();
+
+    // input data 0..(2*3*4-1)
+    let input_data: Vec<f32> = (0..(input_shape.iter().product()))
+        .map(|x| x as f32)
+        .collect();
+    let inputs = vec![LlvmRuntime::tensor(input_data, input_shape)];
+
+    let outputs = run_and_call_test(term, inputs);
+    let (data, shape) = tensor_to_vec_u32(&outputs[0]);
+
+    assert_eq!(shape, vec![2, 3, 1]);
+
+    let expected = vec![3u32; 6];
+    assert_eq!(data, expected);
 }
 
 #[test]
@@ -490,6 +764,47 @@ fn test_tensor_broadcast() {
         )
         .unwrap(),
     );
+}
+
+#[test]
+fn test_tensor_broadcast_executes() {
+    let input_shape = vec![3, 1];
+    let output_shape = vec![10, 3, 4];
+
+    let term = build_typed_term(
+        [
+            tensor_type(&input_shape, Dtype::F32),
+            shape_type(&output_shape), // target shape
+        ],
+        [tensor_type(&output_shape, Dtype::F32)],
+        |builder, [input_tensor, target_shape]| {
+            vec![ops::broadcast(builder, input_tensor, target_shape)]
+        },
+    )
+    .unwrap();
+
+    // input 3x1: values [1,2,3]
+    let input_data: Vec<f32> = vec![1.0, 2.0, 3.0];
+    let shape_tensor =
+        LlvmRuntime::tensor_u32(output_shape.iter().map(|&x| x as u32).collect(), vec![3]);
+
+    let inputs = vec![LlvmRuntime::tensor(input_data, input_shape), shape_tensor];
+
+    let outputs = run_and_call_test(term, inputs);
+    let (data, shape) = tensor_to_vec_f32(&outputs[0]);
+
+    assert_eq!(shape, output_shape);
+
+    // expected: for each i0 in 0..10, j in 0..3, k in 0..4 => value = input[j]
+    let mut expected = Vec::new();
+    for _i0 in 0..10 {
+        for j in 0..3 {
+            for _k in 0..4 {
+                expected.push((j + 1) as f32);
+            }
+        }
+    }
+    assert_eq!(data, expected);
 }
 
 #[test]
@@ -517,6 +832,41 @@ fn test_tensor_broadcast_dynamic() {
     );
 }
 
+#[test]
+fn test_tensor_broadcast_dynamic_executes() {
+    let input_shape = vec![1];
+    let output_dims = vec![2, 4];
+    let output_type = Type::Tensor(TypeExpr::NdArrayType(NdArrayType {
+        shape: ShapeExpr::Shape(vec![NatExpr::Var(0), 4.into()]), // Dynamic x 4 tensor
+        dtype: Dtype::F32.into(),
+    }));
+
+    let term = build_typed_term(
+        [
+            tensor_type(&input_shape, Dtype::F32),
+            shape_type(&[2, 4]), // target shape: 2x4
+        ],
+        [output_type],
+        |builder, [input_tensor, target_shape]| {
+            vec![ops::broadcast(builder, input_tensor, target_shape)]
+        },
+    )
+    .unwrap();
+
+    let input_data = vec![7.0f32];
+    let shape_tensor =
+        LlvmRuntime::tensor_u32(output_dims.iter().map(|&x| x as u32).collect(), vec![2]);
+
+    let inputs = vec![LlvmRuntime::tensor(input_data, input_shape), shape_tensor];
+
+    let outputs = run_and_call_test(term, inputs);
+    let (data, shape) = tensor_to_vec_f32(&outputs[0]);
+
+    assert_eq!(shape, output_dims);
+    let expected = vec![7.0f32; output_dims.iter().product()];
+    assert_eq!(data, expected);
+}
+
 // MlirValue helpers. TODO: Variants of these may be best exposed as runtime APIs.
 fn tensor_to_vec_f32(value: &MlirValue) -> (Vec<f32>, Vec<usize>) {
     match value {
@@ -533,11 +883,40 @@ fn tensor_to_vec_u32(value: &MlirValue) -> (Vec<u32>, Vec<usize>) {
     }
 }
 
+// Copy a possibly non-contiguous MLIR Tensor to a Vec
 fn tensor_to_vec<T: Copy>(tensor: &MlirTensor<T>) -> (Vec<T>, Vec<usize>) {
     let (shape, len) = tensor_shape_and_len(tensor);
     unsafe {
-        let start = tensor.aligned.add(tensor.offset as usize);
-        (std::slice::from_raw_parts(start, len).to_vec(), shape)
+        let strides: Vec<usize> = tensor.strides.iter().map(|&s| s as usize).collect();
+        let is_contiguous = LlvmRuntime::compute_strides(&shape) == strides;
+
+        if is_contiguous {
+            let start = tensor.aligned.add(tensor.offset as usize);
+            return (std::slice::from_raw_parts(start, len).to_vec(), shape);
+        }
+
+        let mut result = Vec::with_capacity(len);
+
+        let mut idx = vec![0usize; shape.len()];
+
+        for _ in 0..len {
+            let mut elem = tensor.offset as usize;
+            for (i, &ind) in idx.iter().enumerate() {
+                elem += ind * strides[i];
+            }
+            let ptr = tensor.aligned.add(elem);
+            result.push(std::ptr::read(ptr));
+
+            for dim in (0..shape.len()).rev() {
+                idx[dim] += 1;
+                if idx[dim] < shape[dim] {
+                    break;
+                }
+                idx[dim] = 0;
+            }
+        }
+
+        (result, shape)
     }
 }
 
