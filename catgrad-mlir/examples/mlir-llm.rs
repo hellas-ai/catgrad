@@ -1,12 +1,12 @@
 use catgrad::prelude::*;
 use catgrad_mlir::{compile::CompiledModel, runtime::LlvmRuntime};
+use std::io::Write;
 
 use anyhow::Result;
 use std::collections::HashMap;
 
 use catgrad_llm::legacy::models::utils::Config;
-use catgrad_llm::models::*;
-use catgrad_llm::utils::get_model_files;
+use catgrad_llm::utils::{get_model, get_model_files};
 use clap::Parser;
 use tokenizers::tokenizer::Tokenizer;
 
@@ -23,6 +23,10 @@ struct Args {
     /// Initial prompt
     #[arg(short = 'p', long, default_value = "Category theory is")]
     prompt: String,
+
+    /// Tokens to generate
+    #[arg(short = 's', long, default_value_t = 1)]
+    max_seq_len: usize,
 }
 
 pub fn main() -> Result<()> {
@@ -30,38 +34,14 @@ pub fn main() -> Result<()> {
 
     let (param_values, parameters, config, tokenizer) = load_model(&args.model_name, "main")?;
 
-    ////////////////////////////////////////
-    // Setup model and environment
+    let encoding = tokenizer
+        .encode(args.prompt.clone(), true)
+        .map_err(|err| anyhow::anyhow!("tokenizer error {:?}", err))?;
 
-    let max_sequence_length = 1;
+    let mut token_ids = encoding.get_ids().to_vec();
 
-    let model: Box<dyn Module<1, 1>> = match config.architectures[0].as_str() {
-        "LlamaForCausalLM" => Box::new(llama::LlamaModel {
-            config: config.clone(),
-            max_sequence_length,
-        }),
-        "Gemma3ForCausalLM" => Box::new(gemma3::Gemma3Model {
-            config: config.clone(),
-            max_sequence_length,
-        }),
-        "Qwen3ForCausalLM" | "Qwen3MoeForCausalLM" => Box::new(qwen3::Qwen3Model {
-            config: config.clone(),
-            max_sequence_length,
-        }),
-        "GraniteForCausalLM" | "GraniteMoeForCausalLM" => Box::new(granite::GraniteModel {
-            config: config.clone(),
-            max_sequence_length,
-        }),
-        "DeepseekV3ForCausalLM" => Box::new(deepseek::DeepSeekModel {
-            config: config.clone(),
-            max_sequence_length,
-        }),
-        "GPT2LMHeadModel" => Box::new(gpt2::GPT2Model {
-            config: config.clone(),
-            max_sequence_length,
-        }),
-        _ => panic!("Unsupported model architecture {}", config.architectures[0]),
-    };
+    let max_sequence_length = args.max_seq_len + token_ids.len();
+    let model = get_model(&config, max_sequence_length)?;
 
     let typed_term = model.term().expect("Failed to create typed term");
 
@@ -71,36 +51,47 @@ pub fn main() -> Result<()> {
     env.declarations
         .extend(to_load_ops(model.path(), parameters.keys()));
 
-    ////////////////////////////////////////
-    // Compile and set up runtime with compiled code
-    println!("Compiling {}...", model.path());
-    let compiled_model = CompiledModel::new(&env, &parameters, model.path());
-
-    let encoding = tokenizer
-        .encode(args.prompt, true)
-        .map_err(|err| anyhow::anyhow!("tokenizer error {:?}", err))?;
-
-    let input_data = encoding.get_ids().to_vec();
-
-    let len = input_data.len();
-
-    let input_tensor = LlvmRuntime::tensor_u32(input_data, vec![1, len]);
-    println!("Input tensor: {}", input_tensor);
-
-    // Call the function using the CompiledModel API
     let prefix = model.path();
     let param_values = param_values
         .into_iter()
         .map(|(k, v)| (prefix.concat(&k), v))
         .collect();
 
-    println!("calling...");
-    let results = compiled_model.call(model.path(), &param_values, vec![input_tensor])?;
+    ////////////////////////////////////////
+    // Compile and set up runtime with compiled code
+    let compiled_model = CompiledModel::new(&env, &parameters, model.path());
 
-    // Print each result using Display
-    for (i, result) in results.iter().enumerate() {
-        println!("Output tensor {}: {}", i, result);
+    print!("{}", args.prompt);
+    let start_gen = std::time::Instant::now();
+
+    for _ in 0..args.max_seq_len {
+        let input_tensor = LlvmRuntime::tensor_u32(token_ids.clone(), vec![1, token_ids.len()]);
+        let results = compiled_model.call(model.path(), &param_values, vec![input_tensor])?;
+
+        if let Some(output) = results.last() {
+            let (ov, _) = output.to_vec_f32();
+            let next_token_id = ov.last().unwrap();
+            let next_token_id = next_token_id.to_bits();
+            if config.get_eos_token_ids().contains(&(next_token_id as i32)) {
+                break;
+            }
+            token_ids.push(next_token_id);
+            let decoded_token = tokenizer.decode(&[next_token_id], false).unwrap();
+            print!("{}", decoded_token);
+            std::io::stdout().flush()?;
+        } else {
+            break;
+        }
     }
+
+    let elapsed_gen = start_gen.elapsed();
+    let generated_tokens = args.max_seq_len;
+    println!(
+        "\n{} tokens generated in {} seconds. ({:.2} tps)",
+        generated_tokens,
+        elapsed_gen.as_secs(),
+        generated_tokens as f64 / elapsed_gen.as_secs_f64(),
+    );
 
     Ok(())
 }

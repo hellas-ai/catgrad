@@ -456,6 +456,22 @@ impl MlirValue {
     }
 }
 
+impl MlirValue {
+    pub fn to_vec_u32(&self) -> (Vec<u32>, Vec<usize>) {
+        match self {
+            MlirValue::MlirTensorU32(tensor) => tensor.to_vec(),
+            _ => panic!("Unsupported type"),
+        }
+    }
+
+    pub fn to_vec_f32(&self) -> (Vec<f32>, Vec<usize>) {
+        match self {
+            MlirValue::MlirTensorF32(tensor) => tensor.to_vec(),
+            _ => panic!("Unsupported type"),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MlirType {
     Memref(usize), // ranked memref
