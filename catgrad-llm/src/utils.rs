@@ -185,6 +185,10 @@ pub fn get_model(config: &Config, max_sequence_length: usize) -> Result<Box<dyn 
             config: config.clone(),
             max_sequence_length,
         })),
+        "Olmo2ForCausalLM" | "Olmo3ForCausalLM" => Ok(Box::new(olmo::OlmoModel {
+            config: config.clone(),
+            max_sequence_length,
+        })),
         "Gemma3ForCausalLM" => Ok(Box::new(gemma3::Gemma3Model {
             config: config.clone(),
             max_sequence_length,
