@@ -124,7 +124,7 @@ impl LlamaModel {
         x: Var,
     ) -> Var {
         let res = x.clone();
-        let x = rmsnorm(
+        let x = rmsnorm::<3>(
             builder,
             self.config.rms_norm_eps,
             p.extend(["input_layernorm"]).unwrap(),
@@ -140,7 +140,7 @@ impl LlamaModel {
         );
         let x = res + x;
         let res = x.clone();
-        let x = rmsnorm(
+        let x = rmsnorm::<3>(
             builder,
             self.config.rms_norm_eps,
             p.extend(["post_attention_layernorm"]).unwrap(),
@@ -178,7 +178,7 @@ impl Module<1, 1> for LlamaModel {
             );
         }
 
-        x = rmsnorm(
+        x = rmsnorm::<3>(
             builder,
             self.config.rms_norm_eps,
             root.extend(["model", "norm"]).unwrap(),

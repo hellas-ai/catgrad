@@ -117,9 +117,10 @@ pub fn layernorm(builder: &Builder, eps: f32, p: Path, x: Var) -> Var {
     lr + beta
 }
 
-pub fn rmsnorm_raw(builder: &Builder, eps: f32, x: Var) -> Var {
+pub fn rmsnorm_raw<const N: usize>(builder: &Builder, eps: f32, x: Var) -> Var {
     let x_shape = shape(builder, x.clone());
-    let [_, _, n] = unpack::<3>(builder, x_shape.clone());
+    let u = unpack::<N>(builder, x_shape.clone());
+    let n = u[N - 1].clone();
     let s = sum(builder, x.clone() * x.clone());
 
     let constn = nat_to_u32(builder, n);
@@ -136,9 +137,9 @@ pub fn rmsnorm_raw(builder: &Builder, eps: f32, x: Var) -> Var {
 }
 
 // rmsnorm(x) = x / √(E[x²] + ε) × γ
-pub fn rmsnorm(builder: &Builder, eps: f32, p: Path, x: Var) -> Var {
+pub fn rmsnorm<const N: usize>(builder: &Builder, eps: f32, p: Path, x: Var) -> Var {
     let gamma = param(builder, &p.extend(["weight"]).unwrap());
-    let lr = rmsnorm_raw(builder, eps, x);
+    let lr = rmsnorm_raw::<N>(builder, eps, x);
     let lr_shape = shape(builder, lr.clone());
     let gamma = broadcast(builder, gamma, lr_shape);
     lr * gamma

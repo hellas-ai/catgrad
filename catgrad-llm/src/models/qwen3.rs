@@ -34,33 +34,6 @@ impl Qwen3Model {
         )
     }
 
-    pub fn rmsnorm_raw<const N: usize>(&self, builder: &Builder, eps: f32, x: Var) -> Var {
-        let x_shape = shape(builder, x.clone());
-        let u = unpack::<N>(builder, x_shape.clone());
-        let n = u[N - 1].clone();
-        let s = sum(builder, x.clone() * x.clone());
-
-        let constn = nat_to_u32(builder, n);
-        let constn = cast(builder, constn, dtype(builder, x.clone()));
-        let sh = shape(builder, s.clone());
-        let constn = broadcast(builder, constn, sh);
-
-        let mean = s / constn;
-
-        let epsilon = constant(builder, eps, &shape(builder, mean.clone()));
-        let rms = sqrt(builder, mean + epsilon);
-        let denom = broadcast(builder, rms, x_shape);
-        x / denom
-    }
-
-    fn rmsnorm<const N: usize>(&self, builder: &Builder, eps: f32, p: Path, x: Var) -> Var {
-        let gamma = param(builder, &p.extend(["weight"]).unwrap());
-        let lr = self.rmsnorm_raw::<N>(builder, eps, x);
-        let lr_shape = shape(builder, lr.clone());
-        let gamma = broadcast(builder, gamma, lr_shape);
-        lr * gamma
-    }
-
     fn moe(&self, builder: &Builder, p: Path, x: Var) -> Var {
         let [_, seq_len, _] = unpack::<3>(builder, shape(builder, x.clone()));
 
@@ -198,13 +171,13 @@ impl Qwen3Model {
         );
         let k = reshape(builder, sh, k);
 
-        let q = self.rmsnorm::<2>(
+        let q = rmsnorm::<2>(
             builder,
             self.config.rms_norm_eps,
             p.extend(["q_norm"]).unwrap(),
             q,
         );
-        let k = self.rmsnorm::<2>(
+        let k = rmsnorm::<2>(
             builder,
             self.config.rms_norm_eps,
             p.extend(["k_norm"]).unwrap(),
@@ -272,7 +245,7 @@ impl Qwen3Model {
         x: Var,
     ) -> Var {
         let res = x.clone();
-        let x = self.rmsnorm::<3>(
+        let x = rmsnorm::<3>(
             builder,
             self.config.rms_norm_eps,
             p.extend(["input_layernorm"]).unwrap(),
@@ -288,7 +261,7 @@ impl Qwen3Model {
         );
         let x = res + x;
         let res = x.clone();
-        let x = self.rmsnorm::<3>(
+        let x = rmsnorm::<3>(
             builder,
             self.config.rms_norm_eps,
             p.extend(["post_attention_layernorm"]).unwrap(),
@@ -332,7 +305,7 @@ impl Module<1, 1> for Qwen3Model {
             );
         }
 
-        x = self.rmsnorm::<3>(
+        x = rmsnorm::<3>(
             builder,
             self.config.rms_norm_eps,
             root.extend(["model", "norm"]).unwrap(),
