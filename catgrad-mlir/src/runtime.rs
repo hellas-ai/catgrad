@@ -115,7 +115,7 @@ impl LlvmRuntime {
         }
     }
 
-    pub fn compute_strides(shape: &[usize]) -> Vec<usize> {
+    fn compute_strides(shape: &[usize]) -> Vec<usize> {
         let mut strides: Vec<usize> = vec![1];
         for dim in shape.iter().skip(1).rev() {
             strides.push(strides.last().unwrap() * dim);
@@ -326,7 +326,7 @@ where
     }
 }
 
-impl<T> MlirTensor<T> {
+impl<T: Clone> MlirTensor<T> {
     /// Construct a `libffi::middle::Arg` for each field as if of the below C struct.
     /// ```c
     /// #[repr(C)]
@@ -360,6 +360,63 @@ impl<T> MlirTensor<T> {
             result.push(Arg::new(stride));
         }
         result
+    }
+
+    pub fn shape(&self) -> Vec<usize> {
+        self.sizes
+            .iter()
+            .map(|&dim| usize::try_from(dim).expect("negative dimension in tensor"))
+            .collect()
+    }
+
+    pub fn len(&self) -> usize {
+        self.sizes
+            .iter()
+            .map(|&dim| usize::try_from(dim).expect("negative dimension in tensor"))
+            .product()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    // Copy a possibly non-contiguous MLIR Tensor to a Vec
+    pub fn to_vec(&self) -> (Vec<T>, Vec<usize>) {
+        let shape = self.shape();
+        let len = self.len();
+
+        unsafe {
+            let strides: Vec<usize> = self.strides.iter().map(|&s| s as usize).collect();
+            let is_contiguous = LlvmRuntime::compute_strides(&shape) == strides;
+
+            if is_contiguous {
+                let start = self.aligned.add(self.offset as usize);
+                return (std::slice::from_raw_parts(start, len).to_vec(), shape);
+            }
+
+            let mut result = Vec::with_capacity(len);
+
+            let mut idx = vec![0usize; shape.len()];
+
+            for _ in 0..len {
+                let mut elem = self.offset as usize;
+                for (i, &ind) in idx.iter().enumerate() {
+                    elem += ind * strides[i];
+                }
+                let ptr = self.aligned.add(elem);
+                result.push(std::ptr::read(ptr));
+
+                for dim in (0..shape.len()).rev() {
+                    idx[dim] += 1;
+                    if idx[dim] < shape[dim] {
+                        break;
+                    }
+                    idx[dim] = 0;
+                }
+            }
+
+            (result, shape)
+        }
     }
 }
 
@@ -395,6 +452,22 @@ impl MlirValue {
             MlirValue::MlirTensorF32(tensor) => tensor.to_args(),
             MlirValue::MlirTensorU32(tensor) => tensor.to_args(),
             MlirValue::I64(val) => vec![Arg::new(val)],
+        }
+    }
+}
+
+impl MlirValue {
+    pub fn to_vec_u32(&self) -> (Vec<u32>, Vec<usize>) {
+        match self {
+            MlirValue::MlirTensorU32(tensor) => tensor.to_vec(),
+            _ => panic!("Unsupported type"),
+        }
+    }
+
+    pub fn to_vec_f32(&self) -> (Vec<f32>, Vec<usize>) {
+        match self {
+            MlirValue::MlirTensorF32(tensor) => tensor.to_vec(),
+            _ => panic!("Unsupported type"),
         }
     }
 }
