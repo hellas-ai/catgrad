@@ -15,7 +15,7 @@ if __name__ == "__main__":
         default="openai-community/gpt2",
     )
     parser.add_argument("--revision", type=str, default="main")
-    parser.add_argument("-p", "--prompt", type=str, default="Hello world")
+    parser.add_argument("-p", "--prompt", type=str, default="Category theory is")
     parser.add_argument("-s", "--seq-len", type=int, default=10)
     parser.add_argument("-r", "--raw-prompt", action="store_true")
     parser.add_argument("-t", "--thinking", action="store_true")
