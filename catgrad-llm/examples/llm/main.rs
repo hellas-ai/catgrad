@@ -228,7 +228,7 @@ struct Args {
     revision: String,
 
     /// Initial prompt
-    #[arg(short = 'p', long, default_value = "Hello world")]
+    #[arg(short = 'p', long, default_value = "Category theory is")]
     prompt: String,
 
     /// Pass raw prompt without chat template

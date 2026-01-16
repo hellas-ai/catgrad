@@ -438,11 +438,12 @@ impl CandleBackend {
     }
 
     fn lt(x: CandleTensor, y: CandleTensor) -> CandleTensor {
+        let dtype = x.0.dtype();
         if x.0.dims() != y.0.dims() {
             panic!("Shape mismatch in operation");
         }
 
-        CandleTensor((x.0.lt(&y.0)).unwrap())
+        CandleTensor(x.0.lt(&y.0).unwrap().to_dtype(dtype).unwrap())
     }
 
     fn eq(x: CandleTensor, y: CandleTensor) -> CandleTensor {
