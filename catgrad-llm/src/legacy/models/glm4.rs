@@ -167,18 +167,24 @@ impl Model {
         )
     }
 
-    pub fn mlp(builder: &Builder, config: &Config, name: &str, x: Var) -> Var {
+    pub fn mlp(
+        builder: &Builder,
+        hidden_size: usize,
+        intermediate_size: usize,
+        name: &str,
+        x: Var,
+    ) -> Var {
         let gated = linear_no_bias(
             builder,
-            config.hidden_size,
-            config.intermediate_size,
+            hidden_size,
+            intermediate_size,
             &format!("{name}.gate_proj"),
             x.clone(),
         );
         let up = linear_no_bias(
             builder,
-            config.hidden_size,
-            config.intermediate_size,
+            hidden_size,
+            intermediate_size,
             &format!("{name}.up_proj"),
             x,
         );
@@ -186,8 +192,8 @@ impl Model {
 
         linear_no_bias(
             builder,
-            config.intermediate_size,
-            config.hidden_size,
+            intermediate_size,
+            hidden_size,
             &format!("{name}.down_proj"),
             x,
         )
@@ -371,7 +377,13 @@ impl Model {
             }
             sumk_all = concat(builder, 1, sumk_all, sumk);
         }
-        let shared = Model::mlp(builder, config, &format!("{name}.shared_experts"), res);
+        let shared = Model::mlp(
+            builder,
+            config.hidden_size,
+            config.moe_intermediate_size,
+            &format!("{name}.shared_experts"),
+            res,
+        );
         sumk_all + shared
     }
 
@@ -412,7 +424,13 @@ impl Model {
         let x = if layer_id >= config.first_k_dense_replace {
             Model::moe(builder, config, &format!("{name}.mlp"), x)
         } else {
-            Model::mlp(builder, config, &format!("{name}.mlp"), x)
+            Model::mlp(
+                builder,
+                config.hidden_size,
+                config.intermediate_size,
+                &format!("{name}.mlp"),
+                x,
+            )
         };
         res + x
     }
