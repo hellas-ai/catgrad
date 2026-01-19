@@ -1,4 +1,5 @@
 use crate::legacy::models::utils::Config;
+use crate::legacy::models::utils::{Llama3RopeScaling, RopeScaling, YarnRopeScaling};
 use catgrad::prelude::ops::*;
 use catgrad::prelude::*;
 use catgrad::stdlib::nn::*;
@@ -31,12 +32,28 @@ pub struct Cache {
 
 impl Cache {
     pub fn init(builder: &Builder, config: &Config, positions: usize) -> Self {
-        let (cos, sin) = rope_tables(
-            builder,
-            config.rope_theta,
-            positions.to_nat(builder),
-            config.get_head_dim(),
-        );
+        let (cos, sin) = match &config.rope_scaling {
+            Some(RopeScaling::Yarn(params)) => rope_tables_yarn(
+                builder,
+                config.rope_theta,
+                params,
+                positions,
+                config.get_head_dim(),
+            ),
+            Some(RopeScaling::Llama3(params)) => rope_tables_llama3(
+                builder,
+                config.rope_theta,
+                params,
+                positions,
+                config.get_head_dim(),
+            ),
+            _ => rope_tables(
+                builder,
+                config.rope_theta,
+                positions.to_nat(builder),
+                ((config.get_head_dim() as f32) * config.partial_rotary_factor) as usize,
+            ),
+        };
 
         Self { cos, sin }
     }
@@ -185,6 +202,206 @@ pub fn rope_tables(builder: &Builder, theta: f32, seq_len: Var, head_dim: usize)
     let pos = pos * inv_freq;
     let cos = cos(builder, pos.clone());
     let sin = sin(builder, pos);
+
+    let cos = concat(builder, 1, cos.clone(), cos);
+    let sin = concat(builder, 1, sin.clone(), sin);
+
+    (cos, sin)
+}
+
+pub fn rope_tables_llama3(
+    builder: &Builder,
+    theta: f32,
+    rope_scaling: &Llama3RopeScaling,
+    seq_len: impl IntoNatVar,
+    head_dim: usize,
+) -> (Var, Var) {
+    let half_dim = head_dim / 2;
+
+    let f = arange(builder, half_dim);
+    let f = cast(builder, f, Dtype::F32);
+    let sh = shape(builder, f.clone());
+    let two = constant(builder, 2.0 / (head_dim as f32), &sh);
+    let f = f * two;
+    let theta_val = constant(builder, theta, &sh);
+    let freq = pow(builder, theta_val, f);
+    let inv_freq = inverse(builder, freq);
+
+    let low_freq_wavelength =
+        rope_scaling.original_max_position_embeddings as f32 / rope_scaling.low_freq_factor;
+    let high_freq_wavelength =
+        rope_scaling.original_max_position_embeddings as f32 / rope_scaling.high_freq_factor;
+
+    let sh = shape(builder, inv_freq.clone());
+    let low_freq_wavelength = constant(builder, low_freq_wavelength, &sh);
+    let high_freq_wavelength = constant(builder, high_freq_wavelength, &sh);
+    let factor = constant(builder, rope_scaling.factor, &sh);
+    let low_freq_factor = constant(builder, rope_scaling.low_freq_factor, &sh);
+    let high_freq_factor = constant(builder, rope_scaling.high_freq_factor, &sh);
+    let old_context_len = constant(
+        builder,
+        rope_scaling.original_max_position_embeddings as f32,
+        &sh,
+    );
+    let pi_2 = constant(builder, 2. * std::f32::consts::PI, &sh);
+
+    let wavelen = pi_2 / inv_freq.clone();
+
+    let low_freqs_mask = lt(builder, low_freq_wavelength, wavelen.clone());
+    let low_freqs_mask = cast(builder, low_freqs_mask, Dtype::F32);
+    let one = constant(builder, 1.0, &sh);
+
+    let inv_freq_scaled = inv_freq.clone() / factor.clone();
+    let inv_freq = low_freqs_mask.clone() * inv_freq_scaled
+        + (one.clone() - low_freqs_mask.clone()) * inv_freq;
+
+    let high_freqs_mask = lt(builder, wavelen.clone(), high_freq_wavelength);
+    let high_freqs_mask = cast(builder, high_freqs_mask, Dtype::F32);
+
+    let not_high = one.clone() - high_freqs_mask;
+    let not_low = one.clone() - low_freqs_mask;
+    let mid_freqs_mask = not_high * not_low;
+
+    let smooth_factor = (old_context_len / wavelen - low_freq_factor.clone())
+        / (high_freq_factor - low_freq_factor);
+
+    let smoothed_inv_freq = smooth_factor.clone() * inv_freq.clone()
+        + (one.clone() - smooth_factor) * inv_freq.clone() / factor;
+
+    let inv_freq = mid_freqs_mask.clone() * smoothed_inv_freq + (one - mid_freqs_mask) * inv_freq;
+
+    let seq_len = seq_len.to_nat(builder);
+    let sh = shape!(builder, seq_len, half_dim);
+    let inv_freq = broadcast(builder, inv_freq, sh);
+
+    let pos = arange(builder, seq_len.clone());
+    let pos = cast(builder, pos, Dtype::F32);
+    let sh = shape!(builder, seq_len, 1);
+    let pos = reshape(builder, sh, pos);
+    let sh = shape(builder, inv_freq.clone());
+    let pos = broadcast(builder, pos, sh);
+    let pos = pos * inv_freq;
+    let cos = cos(builder, pos.clone());
+    let sin = sin(builder, pos);
+
+    let cos = concat(builder, 1, cos.clone(), cos);
+    let sin = concat(builder, 1, sin.clone(), sin);
+
+    (cos, sin)
+}
+
+fn clamp(builder: &Builder, x: Var, min_val: f32, max_val: f32) -> Var {
+    let sh = shape(builder, x.clone());
+    let min_t = constant(builder, min_val, &sh);
+    let max_t = constant(builder, max_val, &sh);
+    let one = constant(builder, 1.0, &sh);
+
+    let mask_min = lt(builder, x.clone(), min_t.clone());
+    let mask_min = cast(builder, mask_min, Dtype::F32);
+    let x = mask_min.clone() * min_t + (one.clone() - mask_min) * x;
+
+    let mask_max = lt(builder, max_t.clone(), x.clone());
+    mask_max.clone() * max_t + (one - mask_max) * x
+}
+
+fn rope_yarn_get_mscale(scale: f32) -> f32 {
+    if scale <= 1.0 {
+        return 1.0;
+    }
+    0.1 * scale.ln() + 1.0
+}
+
+fn find_correction_dim(
+    num_rotations: f32,
+    dim: usize,
+    base: f32,
+    max_position_embeddings: usize,
+) -> f32 {
+    (dim as f32
+        * (max_position_embeddings as f32 / (num_rotations * 2.0 * std::f32::consts::PI)).ln())
+        / (2. * base.ln())
+}
+
+fn find_correction_range(
+    low: f32,
+    high: f32,
+    dim: usize,
+    base: f32,
+    max_position_embeddings: usize,
+) -> (f32, f32) {
+    let low = find_correction_dim(low, dim, base, max_position_embeddings);
+    let high = find_correction_dim(high, dim, base, max_position_embeddings);
+    (low, high)
+}
+
+fn linear_ramp_factor(builder: &Builder, min: f32, max: f32, dim: usize) -> Var {
+    let r = arange(builder, dim);
+    let r = cast(builder, r, Dtype::F32);
+    let sh = shape(builder, r.clone());
+    let d = constant(builder, max - min, &sh);
+    let min_val = constant(builder, min, &sh);
+    let r = r - min_val;
+    let r = r / d;
+    clamp(builder, r, 0.0, 1.0)
+}
+
+pub fn rope_tables_yarn(
+    builder: &Builder,
+    theta: f32,
+    rope_scaling: &YarnRopeScaling,
+    seq_len: impl IntoNatVar,
+    head_dim: usize,
+) -> (Var, Var) {
+    let half_dim = head_dim / 2;
+
+    let (low, high) = find_correction_range(
+        rope_scaling.beta_fast,
+        rope_scaling.beta_slow,
+        head_dim,
+        theta,
+        rope_scaling.original_max_position_embeddings,
+    );
+
+    let f = arange(builder, half_dim);
+    let f = cast(builder, f, Dtype::F32);
+    let sh = shape(builder, f.clone());
+    let two = constant(builder, 2.0 / (head_dim as f32), &sh);
+    let f = f * two;
+    let theta_val = constant(builder, theta, &sh);
+    let freq = pow(builder, theta_val, f);
+
+    let inv_freq_extrapolation = inverse(builder, freq);
+    let inv_freq_extrapolation_factor = linear_ramp_factor(builder, low, high, half_dim);
+    let sh = shape(builder, inv_freq_extrapolation_factor.clone());
+    let one = constant(builder, 1.0, &sh);
+    let inv_freq_extrapolation_factor = one.clone() - inv_freq_extrapolation_factor;
+
+    let factor = constant(builder, rope_scaling.factor, &sh);
+    let inv_freq_interpolation = inv_freq_extrapolation.clone() / factor;
+
+    let inv_freq = inv_freq_interpolation * (one - inv_freq_extrapolation_factor.clone())
+        + inv_freq_extrapolation * inv_freq_extrapolation_factor;
+
+    let seq_len = seq_len.to_nat(builder);
+    let sh = shape!(builder, seq_len, half_dim);
+    let inv_freq = broadcast(builder, inv_freq, sh);
+
+    let scale = rope_yarn_get_mscale(rope_scaling.factor);
+    let sh = shape!(builder, 1);
+    let scale = constant(builder, scale, &sh);
+
+    let pos = arange(builder, seq_len.clone());
+    let pos = cast(builder, pos, Dtype::F32);
+    let sh = shape!(builder, seq_len, 1);
+    let pos = reshape(builder, sh, pos);
+    let sh = shape(builder, inv_freq.clone());
+    let pos = broadcast(builder, pos, sh.clone());
+    let pos = pos * inv_freq;
+    let scale = broadcast(builder, scale, sh);
+    let cos = cos(builder, pos.clone());
+    let cos = cos * scale.clone();
+    let sin = sin(builder, pos);
+    let sin = sin * scale;
 
     let cos = concat(builder, 1, cos.clone(), cos);
     let sin = concat(builder, 1, sin.clone(), sin);
