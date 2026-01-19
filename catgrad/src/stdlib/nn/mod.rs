@@ -185,9 +185,14 @@ pub fn linear_b_param(
     let [batch_size, _, _] = unpack::<3>(builder, sh);
     let in_dim = in_dim.to_nat(builder);
     let out_dim = out_dim.to_nat(builder);
-    let sh = pack::<3>(builder, [batch_size, in_dim, out_dim]);
+    let sh = pack::<3>(
+        builder,
+        [1.to_nat(builder), in_dim.clone(), out_dim.clone()],
+    );
 
     let w_t = reshape(builder, sh, w_t);
+    let sh = pack::<3>(builder, [batch_size, in_dim, out_dim]);
+    let w_t = broadcast(builder, w_t, sh);
 
     let m = matmul(builder, x, w_t);
     if let Some(b) = bias {
