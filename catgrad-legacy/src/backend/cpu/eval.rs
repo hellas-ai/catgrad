@@ -290,6 +290,13 @@ impl EvalState {
                         b.set(indices, half::f16::to_f32(v) as i32);
                     });
                 }
+                Ok([I32(a), F16(b)]) => {
+                    let a_data = a.data.borrow();
+                    let mut b_data = b.data.borrow_mut();
+                    a_data.iter().zip(b_data.iter_mut()).for_each(|(src, dst)| {
+                        *dst = half::f16::from_f32(*src as f32);
+                    });
+                }
                 Ok([F16(a), F32(b)]) => {
                     b.clone().shape.for_each_index(|_, indices| {
                         let v = a.get(indices);
