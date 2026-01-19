@@ -312,7 +312,7 @@ impl Model {
             mask,
         );
         let mask = reshape(builder, scores_for_choice.label.shape.clone(), mask);
-        let mask = cast(builder, Dtype::F32, mask);
+        let mask = cast(builder, config.dtype, mask);
         let scores_for_choice = mask * scores_for_choice;
 
         let vi = topk(builder, config.num_experts_per_tok, scores_for_choice);
