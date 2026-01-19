@@ -31,10 +31,19 @@ pub fn read_safetensors_file(
                     .par_chunks_exact(4)
                     .map(|b| f32::from_le_bytes(b.try_into().unwrap()))
                     .collect();
-                map.insert(
-                    name.to_string(),
-                    TaggedNdArray::F32(NdArray::new(data, shape)),
-                );
+                if use_fp16 {
+                    let data: Vec<half::f16> =
+                        data.iter().map(|&x| half::f16::from_f32(x)).collect();
+                    map.insert(
+                        name.to_string(),
+                        TaggedNdArray::F16(NdArray::new(data, shape)),
+                    );
+                } else {
+                    map.insert(
+                        name.to_string(),
+                        TaggedNdArray::F32(NdArray::new(data, shape)),
+                    );
+                }
             }
             // cast BF16 to F16 or F32
             safetensors::Dtype::BF16 => {
