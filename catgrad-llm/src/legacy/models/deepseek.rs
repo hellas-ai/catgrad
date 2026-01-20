@@ -2,7 +2,7 @@
 
 use super::utils::{Cache, Config, ModelBuilder};
 use crate::legacy::nn::layers::*;
-use crate::legacy::nn::rope::apply_rope_embedding;
+use crate::legacy::nn::rope::apply_rope_embedding_interleaved;
 use catgrad_legacy::backend::cpu::eval::Builder;
 use catgrad_legacy::core::{Dtype, NdArrayType, Shape, Var};
 
@@ -184,8 +184,20 @@ impl Model {
             k_rot,
         );
 
-        let q_rot = apply_rope_embedding(builder, pos, cache.cos.clone(), cache.sin.clone(), q_rot);
-        let k_rot = apply_rope_embedding(builder, pos, cache.cos.clone(), cache.sin.clone(), k_rot);
+        let q_rot = apply_rope_embedding_interleaved(
+            builder,
+            pos,
+            cache.cos.clone(),
+            cache.sin.clone(),
+            q_rot,
+        );
+        let k_rot = apply_rope_embedding_interleaved(
+            builder,
+            pos,
+            cache.cos.clone(),
+            cache.sin.clone(),
+            k_rot,
+        );
 
         let mut new_shape = k_pass.label.shape.0.clone();
         new_shape[3] = k_rot.label.shape.0[3];
@@ -219,18 +231,24 @@ impl Model {
         )
     }
 
-    pub fn mlp(builder: &Builder, config: &Config, name: &str, x: Var) -> Var {
+    pub fn mlp(
+        builder: &Builder,
+        hidden_size: usize,
+        intermediate_size: usize,
+        name: &str,
+        x: Var,
+    ) -> Var {
         let gated = linear_no_bias(
             builder,
-            config.hidden_size,
-            config.intermediate_size,
+            hidden_size,
+            intermediate_size,
             &format!("{name}.gate_proj"),
             x.clone(),
         );
         let up = linear_no_bias(
             builder,
-            config.hidden_size,
-            config.intermediate_size,
+            hidden_size,
+            intermediate_size,
             &format!("{name}.up_proj"),
             x,
         );
@@ -238,8 +256,8 @@ impl Model {
 
         linear_no_bias(
             builder,
-            config.intermediate_size,
-            config.hidden_size,
+            intermediate_size,
+            hidden_size,
             &format!("{name}.down_proj"),
             x,
         )
@@ -357,7 +375,7 @@ impl Model {
             mask,
         );
         let mask = reshape(builder, scores_for_choice.label.shape.clone(), mask);
-        let mask = cast(builder, Dtype::F32, mask);
+        let mask = cast(builder, config.dtype, mask);
         let scores_for_choice = mask * scores_for_choice;
 
         let vi = topk(builder, config.num_experts_per_tok, scores_for_choice);
@@ -422,7 +440,13 @@ impl Model {
             }
             sumk_all = concat(builder, 1, sumk_all, sumk);
         }
-        let shared = Model::mlp(builder, config, &format!("{name}.shared_experts"), res);
+        let shared = Model::mlp(
+            builder,
+            config.hidden_size,
+            config.moe_intermediate_size,
+            &format!("{name}.shared_experts"),
+            res,
+        );
         sumk_all + shared
     }
 
@@ -463,7 +487,13 @@ impl Model {
         let x = if layer_id >= config.first_k_dense_replace {
             Model::moe(builder, config, &format!("{name}.mlp"), x)
         } else {
-            Model::mlp(builder, config, &format!("{name}.mlp"), x)
+            Model::mlp(
+                builder,
+                config.hidden_size,
+                config.intermediate_size,
+                &format!("{name}.mlp"),
+                x,
+            )
         };
         res + x
     }
