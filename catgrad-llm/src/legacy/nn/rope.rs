@@ -228,6 +228,59 @@ pub fn apply_rope_embedding(builder: &Builder, pos: usize, cos: Var, sin: Var, x
     r
 }
 
+/// Apply RoPE (Rotary Positional Embedding) to the input tensor by reusing calculated tables
+/// in interleaved format
+pub fn apply_rope_embedding_interleaved(
+    builder: &Builder,
+    pos: usize,
+    cos: Var,
+    sin: Var,
+    x: Var,
+) -> Var {
+    // b, h, s, d = q.shape
+    // q = q.view(b, h, s, d // 2, 2).transpose(4, 3).reshape(b, h, s, d)
+    let x = reshape(
+        builder,
+        Shape(vec![
+            x.label.shape.0[0],
+            x.label.shape.0[1],
+            x.label.shape.0[2],
+            x.label.shape.0[3] / 2,
+            2,
+        ]),
+        x,
+    );
+    let x = transpose(builder, 4, 3, x);
+    let x = reshape(
+        builder,
+        Shape(vec![
+            x.label.shape.0[0],
+            x.label.shape.0[1],
+            x.label.shape.0[2],
+            x.label.shape.0[4] * 2,
+        ]),
+        x,
+    );
+    let seq_len = x.label.shape.0[2];
+    let cos = narrow(builder, 0, pos, seq_len, cos);
+    let sin = narrow(builder, 0, pos, seq_len, sin);
+    let cos = expand(builder, x.label.shape.clone(), cos);
+    let sin = expand(builder, x.label.shape.clone(), sin);
+
+    let xdtype = x.label.dtype;
+    let mut x = x;
+    if xdtype != Dtype::F32 {
+        x = cast(builder, Dtype::F32, x);
+    }
+    let rotated_x = rotate_half(builder, x.clone());
+
+    let mut r = cos * x + sin * rotated_x;
+    if xdtype != Dtype::F32 {
+        r = cast(builder, xdtype, r);
+    }
+    r
+}
+
 /// Apply RoPE (Rotary Positional Embedding) to the input tensor by calculating the tables
 pub fn rope(builder: &Builder, theta: f32, pos: usize, seq_len: usize, x: Var) -> Var {
     let head_dim = x.label.shape.0[3];
