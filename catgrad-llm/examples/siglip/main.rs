@@ -5,7 +5,8 @@ use catgrad::prelude::ops::*;
 use catgrad::prelude::*;
 use catgrad::stdlib::nn::*;
 use catgrad::typecheck::TypeExpr;
-use catgrad_llm::helpers::layernorm;
+use catgrad_llm::helpers::*;
+use catgrad_llm::utils::get_model_files;
 use clap::Parser;
 use image::imageops::FilterType;
 use rayon::prelude::*;
@@ -52,6 +53,14 @@ fn default_max_position_embeddings() -> usize {
     64
 }
 
+fn default_patch_size() -> usize {
+    16
+}
+
+fn default_image_size() -> usize {
+    224
+}
+
 #[derive(Debug, Clone, serde::Deserialize)]
 struct TransformerConfig {
     #[serde(default = "default_hidden_size")]
@@ -78,6 +87,10 @@ struct TextConfig {
 struct VisionConfig {
     #[serde(flatten)]
     transformer: TransformerConfig,
+    #[serde(default = "default_patch_size")]
+    patch_size: usize,
+    #[serde(default = "default_image_size")]
+    image_size: usize,
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -169,8 +182,8 @@ impl SiglipModel {
     }
 
     fn vision_embeddings(&self, builder: &Builder, config: &VisionConfig, p: Path, x: Var) -> Var {
-        let patch_size = 16;
-        let image_size = 224;
+        let patch_size = config.patch_size;
+        let image_size = config.image_size;
         let num_patches = (image_size / patch_size) * (image_size / patch_size);
         let num_channels = 3;
         let hidden_size = config.transformer.hidden_size;
@@ -185,7 +198,12 @@ impl SiglipModel {
 
         let patch_weight_flat_t = transpose(builder, 0, 1, patch_weight_flat);
 
-        let sh_expand = shape!(builder, 1, 768, 768);
+        let sh_expand = shape!(
+            builder,
+            1,
+            num_channels * patch_size * patch_size,
+            hidden_size
+        );
         let patch_weight_flat_t = broadcast(builder, patch_weight_flat_t, sh_expand);
 
         let mut patch_embeddings = matmul(builder, x, patch_weight_flat_t);
@@ -223,8 +241,8 @@ impl SiglipModel {
         let weight = param(builder, &p.extend(["in_proj_weight"]).unwrap());
         let bias = param(builder, &p.extend(["in_proj_bias"]).unwrap());
 
-        let ws = catgrad_llm::helpers::chunk(builder, 0, 3, dim, weight);
-        let bs = catgrad_llm::helpers::chunk(builder, 0, 3, dim, bias);
+        let ws = chunk(builder, 0, 3, dim, weight);
+        let bs = chunk(builder, 0, 3, dim, bias);
 
         let q = linear_param(builder, dim, dim, ws[0].clone(), bs[0].clone(), probe);
         let k = linear_param(builder, dim, dim, ws[1].clone(), bs[1].clone(), x.clone());
@@ -382,7 +400,6 @@ impl Module<2, 2> for SiglipModel {
         let dim = config.vision_config.transformer.hidden_size;
 
         let [n_text, _] = unpack::<2>(builder, shape(builder, text.clone()));
-        let [n_img, _, _] = unpack::<3>(builder, shape(builder, image.clone()));
 
         let text_features = self.text_model(
             builder,
@@ -393,7 +410,8 @@ impl Module<2, 2> for SiglipModel {
         let text_features = self.div_l2_norm(builder, text_features);
         let sh_text = shape!(builder, n_text, dim);
         let text_features = reshape(builder, sh_text, text_features);
-        // return [text_features, image];
+
+        let [n_img, _, _] = unpack::<3>(builder, shape(builder, image.clone()));
 
         let image_features = self.vision_model(
             builder,
@@ -424,9 +442,11 @@ impl Module<2, 2> for SiglipModel {
 }
 
 // Loads the image and returns flattened data + shape
-fn load_and_preprocess_image(image_path: &PathBuf) -> (Vec<f32>, Shape) {
-    let image_size = 224;
-    let patch_size = 16;
+fn load_and_preprocess_image(
+    image_path: &PathBuf,
+    image_size: usize,
+    patch_size: usize,
+) -> (Vec<f32>, Shape) {
     let num_patches: usize = (image_size / patch_size) * (image_size / patch_size);
     let num_channels = 3;
 
@@ -499,8 +519,7 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::init();
     let args = Args::parse();
 
-    let (model_paths, config_path, tokenizer_path, _) =
-        catgrad_llm::utils::get_model_files(&args.model_name, "main")?;
+    let (model_paths, config_path, tokenizer_path, _) = get_model_files(&args.model_name, "main")?;
 
     let config: SiglipConfig = serde_json::from_str(&std::fs::read_to_string(config_path)?)?;
 
@@ -511,7 +530,11 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
     let parameters = load_tensors(model_paths, &backend)?;
     println!("SigLIP model {} loaded successfully.", args.model_name);
 
-    let (image_data, image_shape) = load_and_preprocess_image(&args.image);
+    let (image_data, image_shape) = load_and_preprocess_image(
+        &args.image,
+        config.vision_config.image_size,
+        config.vision_config.patch_size,
+    );
     let image_tensor = interpreter::tensor(&backend, image_shape, image_data)
         .map_err(|e| anyhow::anyhow!("BackendError: {:?}", e))?;
 
