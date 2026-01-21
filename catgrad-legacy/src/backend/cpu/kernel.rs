@@ -397,13 +397,26 @@ impl<T: Numeric + PartialOrd> UnaryOp<T> for MaxOp {
 }
 
 pub struct SumOp;
-
-impl<T: Numeric + PartialOrd + std::iter::Sum> UnaryOp<T> for SumOp {
+impl<T: Numeric + PartialOrd + std::iter::Sum + std::ops::AddAssign> UnaryOp<T> for SumOp {
     fn apply(&self, a: &NdArray<T>, b: &mut NdArray<T>) {
         let last_dim = a.shape.0[a.shape.0.len() - 1];
-        let mut b_data = b.data.borrow_mut();
-        for (i, chunk) in a.data.borrow().chunks(last_dim).enumerate() {
-            b_data[i] = chunk.iter().copied().sum();
+        if a.is_contiguous() {
+            let mut b_data = b.data.borrow_mut();
+            for (i, chunk) in a.data.borrow().chunks(last_dim).enumerate() {
+                b_data[i] = chunk.iter().copied().sum();
+            }
+        } else {
+            let mut b_data = b.data.borrow_mut();
+            b.shape.for_each_index(|i, indices| {
+                let mut s: T = T::zero();
+                let mut a_indices = indices.to_vec();
+                let li = a_indices.len() - 1;
+                for j in 0..last_dim {
+                    a_indices[li] = j;
+                    s += a.get(&a_indices);
+                }
+                b_data[i] = s;
+            });
         }
     }
 }
