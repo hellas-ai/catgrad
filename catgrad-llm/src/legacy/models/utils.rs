@@ -272,6 +272,8 @@ pub fn get_model(arch: &str) -> crate::Result<Box<dyn ModelBuilder>> {
         "GraniteMoeHybridForCausalLM" => Ok(Box::new(GraniteModel {})),
         "GptOssForCausalLM" => Ok(Box::new(GPTOssModel {})),
         "Glm4MoeForCausalLM" => Ok(Box::new(GLM4Model {})),
+        // GLM-4.7 Flash seems to be a DeepSeekV3 model
+        "Glm4MoeLiteForCausalLM" => Ok(Box::new(DeepSeekV3Model {})),
         "ModernBertDecoderForCausalLM" => Ok(Box::new(ModernBertDecoderModel {})),
         "Phi3ForCausalLM" => Ok(Box::new(PhiModel {})),
         "SmolLM3ForCausalLM" => Ok(Box::new(SmolLM3Model {})),
