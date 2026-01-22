@@ -2,7 +2,6 @@
 
 use super::utils::{Cache, Config, ModelBuilder};
 use crate::legacy::nn::layers::*;
-use crate::legacy::nn::rope::apply_rope_embedding;
 use catgrad_legacy::backend::cpu::eval::Builder;
 use catgrad_legacy::core::{Dtype, NdArrayType, Shape, Var};
 
@@ -57,6 +56,70 @@ impl ModelBuilder for Model {
             result,
         )
     }
+}
+
+fn rotate_half(builder: &Builder, x: Var) -> Var {
+    let w = x.label.shape.0[3];
+
+    let x1 = range_indices(builder, 0, w, 2);
+    let x1 = index(builder, 3, x.clone(), x1);
+
+    let x2 = range_indices(builder, 1, w + 1, 2);
+    let x2 = index(builder, 3, x, x2);
+
+    let x1 = unsqueeze(builder, -1, x1);
+    let x2 = unsqueeze(builder, -1, x2);
+    let r = concat(builder, 4, -x2, x1);
+    let mut sh = r.label.shape.0.clone();
+    sh[3] *= sh[4];
+    let sh = Shape(sh[..4].to_vec());
+
+    reshape(builder, sh, r)
+}
+
+fn apply_rope_embedding_glm4(builder: &Builder, pos: usize, cos: Var, sin: Var, x: Var) -> Var {
+    let seq_len = x.label.shape.0[2];
+    let cos = narrow(builder, 0, pos, seq_len, cos);
+    let sin = narrow(builder, 0, pos, seq_len, sin);
+
+    let cos = unsqueeze(builder, 0, cos);
+    let cos = unsqueeze(builder, 0, cos);
+    let sin = unsqueeze(builder, 0, sin);
+    let sin = unsqueeze(builder, 0, sin);
+
+    let sh_orig = cos.label.shape.clone();
+    let cos = narrow(builder, 3, 0, 32, cos);
+    let sin = narrow(builder, 3, 0, 32, sin);
+
+    let sh = cos.label.shape.clone();
+    let ns = sh.concatenate(&Shape(vec![2]));
+    let cos = unsqueeze(builder, -1, cos);
+    let cos = expand(builder, ns.clone(), cos);
+    let cos = reshape(builder, sh_orig.clone(), cos);
+
+    let sin = unsqueeze(builder, -1, sin);
+    let sin = expand(builder, ns, sin);
+    let sin = reshape(builder, sh_orig, sin);
+
+    let xdtype = x.label.dtype;
+    let x = chunk(builder, -1, 2, x);
+    let x_rot = x[0].clone();
+    let x_pass = x[1].clone();
+
+    let mut x = x_rot;
+    if xdtype != Dtype::F32 {
+        x = cast(builder, Dtype::F32, x);
+    }
+    let rotated_x = rotate_half(builder, x.clone());
+
+    let cos = expand(builder, x.label.shape.clone(), cos);
+    let sin = expand(builder, rotated_x.label.shape.clone(), sin);
+    let mut r = cos * x + sin * rotated_x;
+    if xdtype != Dtype::F32 {
+        r = cast(builder, xdtype, r);
+    }
+
+    concat(builder, 3, r, x_pass)
 }
 
 impl Model {
@@ -124,20 +187,8 @@ impl Model {
         let k = transpose(builder, 1, 2, k);
         let v = transpose(builder, 1, 2, v);
 
-        // Split q and k in two, corresponding to config.partial_rotary_factor of 0.5
-        let q_split = chunk(builder, -1, 2, q);
-        let q_rot = q_split[0].clone();
-        let q_pass = q_split[1].clone();
-
-        let k_split = chunk(builder, -1, 2, k);
-        let k_rot = k_split[0].clone();
-        let k_pass = k_split[1].clone();
-
-        let q_rot = apply_rope_embedding(builder, pos, cache.cos.clone(), cache.sin.clone(), q_rot);
-        let k_rot = apply_rope_embedding(builder, pos, cache.cos.clone(), cache.sin.clone(), k_rot);
-
-        let q = concat(builder, 3, q_rot, q_pass);
-        let k = concat(builder, 3, k_rot, k_pass);
+        let q = apply_rope_embedding_glm4(builder, pos, cache.cos.clone(), cache.sin.clone(), q);
+        let k = apply_rope_embedding_glm4(builder, pos, cache.cos.clone(), cache.sin.clone(), k);
 
         let (k, v) = cache.update_kv_cache(builder, layer_id, k, v);
 
@@ -167,174 +218,43 @@ impl Model {
         )
     }
 
-    fn attention_deepseek(
-        builder: &Builder,
-        layer_id: usize,
-        config: &Config,
-        cache: &mut Cache,
-        pos: usize,
-        name: &str,
-        x: Var,
-    ) -> Var {
-        let num_heads = config.num_attention_heads;
-        let num_kv_heads = config.num_key_value_heads;
-        let rep = num_heads / num_kv_heads;
-        let b = x.label.shape.0[0];
-        let s = x.label.shape.0[1];
-
-        let qk_head_dim = config.qk_nope_head_dim + config.qk_rope_head_dim;
-        let q = linear_no_bias(
+    pub fn mlp(builder: &Builder, config: &Config, name: &str, x: Var) -> Var {
+        let gate_up = linear_no_bias(
             builder,
             config.hidden_size,
-            config.q_lora_rank,
-            &format!("{name}.q_a_proj"),
-            x.clone(),
-        );
-        let q = rmsnorm(
-            builder,
-            config.rms_norm_eps,
-            &format!("{name}.q_a_layernorm"),
-            q,
-        );
-        let q = linear_no_bias(
-            builder,
-            config.q_lora_rank,
-            qk_head_dim * num_heads,
-            &format!("{name}.q_b_proj"),
-            q,
-        );
-
-        let q = reshape_flex(
-            builder,
-            &[b as isize, s as isize, -1, qk_head_dim as isize],
-            q,
-        );
-        let q = transpose(builder, 1, 2, q);
-
-        let q_split = split(
-            builder,
-            -1,
-            &[config.qk_nope_head_dim, config.qk_rope_head_dim],
-            q,
-        );
-
-        let q_pass = q_split[0].clone();
-        let q_rot = q_split[1].clone();
-
-        let compressed_kv = linear_no_bias(
-            builder,
-            config.hidden_size,
-            config.kv_lora_rank + config.qk_rope_head_dim,
-            &format!("{name}.kv_a_proj_with_mqa"),
+            config.intermediate_size * 2,
+            &format!("{name}.gate_up_proj"),
             x,
         );
 
-        let kp = split(
-            builder,
-            -1,
-            &[config.kv_lora_rank, config.qk_rope_head_dim],
-            compressed_kv,
-        );
+        let gate_up = chunk(builder, 2, 2, gate_up);
 
-        let k_pass = kp[0].clone();
-        let k_rot = kp[1].clone();
+        let gate = gate_up[0].clone();
+        let up = gate_up[1].clone();
 
-        let k_pass = rmsnorm(
-            builder,
-            config.rms_norm_eps,
-            &format!("{name}.kv_a_layernorm"),
-            k_pass,
-        );
+        let x = silu(builder, gate) * up; // SwiGLU
 
-        let k_pass = linear_no_bias(
-            builder,
-            config.kv_lora_rank,
-            num_heads * (config.qk_nope_head_dim + config.v_head_dim),
-            &format!("{name}.kv_b_proj"),
-            k_pass,
-        );
-
-        let k_pass = reshape_flex(
-            builder,
-            &[
-                b as isize,
-                s as isize,
-                -1,
-                (config.qk_nope_head_dim + config.v_head_dim) as isize,
-            ],
-            k_pass,
-        );
-        let k_pass = transpose(builder, 1, 2, k_pass);
-
-        let kp = split(
-            builder,
-            -1,
-            &[config.qk_nope_head_dim, config.v_head_dim],
-            k_pass,
-        );
-
-        let k_pass = kp[0].clone();
-        let v = kp[1].clone();
-
-        let k_rot = reshape(
-            builder,
-            Shape(vec![b, 1, s, config.qk_rope_head_dim]),
-            k_rot,
-        );
-
-        let q_rot = apply_rope_embedding(builder, pos, cache.cos.clone(), cache.sin.clone(), q_rot);
-        let k_rot = apply_rope_embedding(builder, pos, cache.cos.clone(), cache.sin.clone(), k_rot);
-
-        let mut new_shape = k_pass.label.shape.0.clone();
-        new_shape[3] = k_rot.label.shape.0[3];
-        let k_rot = expand(builder, Shape(new_shape), k_rot);
-        let q = concat(builder, 3, q_pass, q_rot);
-        let k = concat(builder, 3, k_pass, k_rot);
-        let (k, v) = cache.update_kv_cache(builder, layer_id, k, v);
-
-        let k = repeat_kv(builder, rep, k);
-        let v = repeat_kv(builder, rep, v);
-
-        let tk = transpose(builder, 2, 3, k);
-        let attn = mat_mul(builder, q, tk);
-        let denom = constant(builder, attn.label.clone(), f32::sqrt(qk_head_dim as f32));
-        let attn = attn / denom;
-
-        let mask = causal_mask(builder, s, attn.label.dtype);
-        let mask = expand(builder, attn.label.shape.clone(), mask);
-        let attn = attn + mask;
-
-        let attn = softmax(builder, attn);
-        let attn = mat_mul(builder, attn, v);
-        let x = transpose(builder, 1, 2, attn);
-        let x = reshape_flex(builder, &[b as isize, s as isize, -1], x);
         linear_no_bias(
             builder,
-            num_heads * config.v_head_dim,
+            config.intermediate_size,
             config.hidden_size,
-            &format!("{name}.o_proj"),
+            &format!("{name}.down_proj"),
             x,
         )
     }
 
-    pub fn mlp(
-        builder: &Builder,
-        hidden_size: usize,
-        intermediate_size: usize,
-        name: &str,
-        x: Var,
-    ) -> Var {
+    pub fn moe_mlp(builder: &Builder, config: &Config, name: &str, x: Var) -> Var {
         let gated = linear_no_bias(
             builder,
-            hidden_size,
-            intermediate_size,
+            config.hidden_size,
+            config.intermediate_size,
             &format!("{name}.gate_proj"),
             x.clone(),
         );
         let up = linear_no_bias(
             builder,
-            hidden_size,
-            intermediate_size,
+            config.hidden_size,
+            config.intermediate_size,
             &format!("{name}.up_proj"),
             x,
         );
@@ -342,8 +262,8 @@ impl Model {
 
         linear_no_bias(
             builder,
-            intermediate_size,
-            hidden_size,
+            config.intermediate_size,
+            config.hidden_size,
             &format!("{name}.down_proj"),
             x,
         )
@@ -527,13 +447,7 @@ impl Model {
             }
             sumk_all = concat(builder, 1, sumk_all, sumk);
         }
-        let shared = Model::mlp(
-            builder,
-            config.hidden_size,
-            config.moe_intermediate_size,
-            &format!("{name}.shared_experts"),
-            res,
-        );
+        let shared = Model::moe_mlp(builder, config, &format!("{name}.shared_experts"), res);
         sumk_all + shared
     }
 
@@ -553,29 +467,24 @@ impl Model {
             &format!("{name}.input_layernorm"),
             x,
         );
+        let mut x = Model::attention(
+            builder,
+            layer_id,
+            config,
+            cache,
+            pos,
+            &format!("{name}.self_attn"),
+            x,
+        );
 
-        // GLM4MoeLite uses DeepSeek attention
-        let x = if config.model_type == "glm4_moe_lite" {
-            Model::attention_deepseek(
+        if config.model_type == "glm4" {
+            x = rmsnorm(
                 builder,
-                layer_id,
-                config,
-                cache,
-                pos,
-                &format!("{name}.self_attn"),
+                config.rms_norm_eps,
+                &format!("{name}.post_self_attn_layernorm"),
                 x,
-            )
-        } else {
-            Model::attention(
-                builder,
-                layer_id,
-                config,
-                cache,
-                pos,
-                &format!("{name}.self_attn"),
-                x,
-            )
-        };
+            );
+        }
 
         let x = res + x;
         let res = x.clone();
@@ -585,17 +494,23 @@ impl Model {
             &format!("{name}.post_attention_layernorm"),
             x,
         );
-        let x = if layer_id >= config.first_k_dense_replace {
-            Model::moe(builder, config, &format!("{name}.mlp"), x)
+
+        let x = if config.model_type == "glm4_moe" {
+            if layer_id >= config.first_k_dense_replace {
+                Model::moe(builder, config, &format!("{name}.mlp"), x)
+            } else {
+                Model::moe_mlp(builder, config, &format!("{name}.mlp"), x)
+            }
         } else {
-            Model::mlp(
+            let x = Model::mlp(builder, config, &format!("{name}.mlp"), x);
+            rmsnorm(
                 builder,
-                config.hidden_size,
-                config.intermediate_size,
-                &format!("{name}.mlp"),
+                config.rms_norm_eps,
+                &format!("{name}.post_mlp_layernorm"),
                 x,
             )
         };
+
         res + x
     }
 }
