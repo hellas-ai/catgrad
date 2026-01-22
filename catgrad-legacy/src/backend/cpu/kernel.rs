@@ -193,6 +193,7 @@ fn binop_iterator<T: Numeric, F>(a: &NdArray<T>, b: &NdArray<T>, c: &mut NdArray
 where
     F: Fn(T, T) -> T + Send + Sync,
 {
+    assert_eq!(a.shape, b.shape);
     if a.strides == b.strides && a.strides == c.strides {
         let a_data = a.data.borrow();
         let b_data = b.data.borrow();
@@ -315,6 +316,7 @@ fn unaryop_iterator<T: Numeric, F>(a: &NdArray<T>, b: &mut NdArray<T>, op: F)
 where
     F: Fn(T) -> T + Send + Sync,
 {
+    assert_eq!(a.shape, b.shape);
     if a.strides == b.strides {
         let a_data = a.data.borrow();
         let mut b_data = b.data.borrow_mut();
