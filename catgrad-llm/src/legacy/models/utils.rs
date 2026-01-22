@@ -47,6 +47,8 @@ pub enum RopeScaling {
     Yarn(YarnRopeScaling),
 }
 
+use super::lfm2::Lfm2Config;
+
 // This configuration contains the union of relevant fields from all supported models.
 // Models ignore fields they don't need. The aliases are for GPT-2 alternative names.
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -109,6 +111,8 @@ pub struct Config {
     // This is set by the app to determine whether to use f16 or f32 for weights at runtime
     #[serde(skip)]
     pub dtype: Dtype,
+    #[serde(flatten)]
+    pub lfm2: Lfm2Config,
 }
 
 fn default_partial_rotary_factor() -> f32 {
@@ -249,6 +253,7 @@ use super::glm4::Model as GLM4Model;
 use super::gpt_oss::Model as GPTOssModel;
 use super::gpt2::Model as GPT2Model;
 use super::granite::Model as GraniteModel;
+use super::lfm2::Model as LFM2Model;
 use super::llama::Model as LlamaModel;
 use super::modernbert::Model as ModernBertDecoderModel;
 use super::olmo::Model as OlmoModel;
@@ -274,7 +279,7 @@ pub fn get_model(arch: &str) -> crate::Result<Box<dyn ModelBuilder>> {
         "Glm4MoeForCausalLM" | "Glm4ForCausalLM" => Ok(Box::new(GLM4Model {})),
         // GLM-4.7 Flash seems to be a DeepSeekV3 model
         "Glm4MoeLiteForCausalLM" => Ok(Box::new(DeepSeekV3Model {})),
-
+        "Lfm2ForCausalLM" => Ok(Box::new(LFM2Model {})),
         "ModernBertDecoderForCausalLM" => Ok(Box::new(ModernBertDecoderModel {})),
         "Phi3ForCausalLM" => Ok(Box::new(PhiModel {})),
         "SmolLM3ForCausalLM" => Ok(Box::new(SmolLM3Model {})),

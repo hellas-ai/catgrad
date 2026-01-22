@@ -283,6 +283,7 @@ pub fn main() -> Result<()> {
         ("gemma", "google/gemma-3-1b-it"),
         ("qwen3", "Qwen/Qwen3-0.6B"),
         ("qwen2", "Qwen/Qwen2.5-0.5B"),
+        ("lfm", "LiquidAI/LFM2-350M"),
         ("qwenmoe", "Qwen/Qwen3-30B-A3B-Instruct-2507"),
         ("deepseek", "tiny-random/deepseek-v3.1"),
         ("granitemoe", "ibm-granite/granite-3.1-1b-a400m-instruct"),
