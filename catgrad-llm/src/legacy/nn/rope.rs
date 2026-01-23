@@ -1,11 +1,42 @@
 use super::layers::*;
-use crate::legacy::models::utils::{Llama3RopeScaling, YarnRopeScaling};
+use crate::legacy::models::utils::{Llama3RopeScaling, LongRopeScaling, YarnRopeScaling};
 use catgrad_legacy::backend::cpu::eval::Builder;
 use catgrad_legacy::core::{Dtype, Shape, Var};
 use std::f32::consts::PI;
 
 // Generate rope tables. This part is usually precomputed
 pub fn rope_tables(builder: &Builder, theta: f32, seq_len: usize, head_dim: usize) -> (Var, Var) {
+    let half_dim = head_dim / 2;
+
+    let f = arange(builder, half_dim, Dtype::F32);
+    let two = constant(builder, f.label.clone(), 2.0 / (head_dim as f32));
+    let f = f * two;
+    let theta = constant(builder, f.label.clone(), theta);
+    let freq = power(builder, theta, f);
+    let inv_freq = inverse(builder, freq);
+    let inv_freq = expand(builder, Shape(vec![seq_len, half_dim]), inv_freq);
+
+    let pos = arange(builder, seq_len, Dtype::F32);
+    let pos = reshape(builder, Shape(vec![seq_len, 1]), pos);
+    let pos = expand(builder, inv_freq.label.shape.clone(), pos);
+    let pos = pos * inv_freq;
+    let cos = cos(builder, pos.clone());
+    let sin = sin(builder, pos);
+
+    let cos = concat(builder, 1, cos.clone(), cos);
+    let sin = concat(builder, 1, sin.clone(), sin);
+
+    (cos, sin)
+}
+
+// Generate rope tables. This part is usually precomputed
+pub fn rope_tables_longrope(
+    builder: &Builder,
+    theta: f32,
+    _rope_scaling: &LongRopeScaling,
+    seq_len: usize,
+    head_dim: usize,
+) -> (Var, Var) {
     let half_dim = head_dim / 2;
 
     let f = arange(builder, half_dim, Dtype::F32);

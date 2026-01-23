@@ -1,5 +1,7 @@
 use crate::legacy::nn::layers::concat;
-use crate::legacy::nn::rope::{rope_tables, rope_tables_llama3, rope_tables_yarn};
+use crate::legacy::nn::rope::{
+    rope_tables, rope_tables_llama3, rope_tables_longrope, rope_tables_yarn,
+};
 use catgrad_legacy::{
     backend::cpu::{eval::Builder, ndarray::TaggedNdArray},
     core::{Dtype, NdArrayType, Shape, Var},
@@ -39,12 +41,22 @@ pub struct YarnRopeScaling {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+pub struct LongRopeScaling {
+    pub long_factor: Vec<f32>,
+    pub short_factor: Vec<f32>,
+    #[serde(alias = "type")]
+    pub rope_type: String,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
 #[serde(untagged)]
 pub enum RopeScaling {
     #[serde(alias = "llama3")]
     Llama3(Llama3RopeScaling),
     #[serde(alias = "yarn")]
     Yarn(YarnRopeScaling),
+    #[serde(alias = "longrope")]
+    LongRope(LongRopeScaling),
 }
 
 use super::lfm2::Lfm2Config;
@@ -185,6 +197,13 @@ impl Cache {
                 config.get_head_dim(),
             ),
             Some(RopeScaling::Yarn(params)) => rope_tables_yarn(
+                builder,
+                config.rope_theta,
+                params,
+                positions,
+                config.get_head_dim(),
+            ),
+            Some(RopeScaling::LongRope(params)) => rope_tables_longrope(
                 builder,
                 config.rope_theta,
                 params,
