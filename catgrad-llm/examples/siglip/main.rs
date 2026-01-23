@@ -1,13 +1,17 @@
-use catgrad_legacy::backend::cpu::eval::{Builder, EvalState};
-use catgrad_legacy::backend::cpu::ndarray::{NdArray, TaggedNdArray};
-use catgrad_legacy::core::{Dtype, NdArrayType, Shape, Var};
-use catgrad_llm::legacy::nn::layers::*;
-use catgrad_llm::utils::{get_model_files, read_safetensors_multiple};
+use anyhow::Result;
+use catgrad::interpreter::backend::candle::CandleBackend;
+use catgrad::interpreter::{self, Backend, Interpreter};
+use catgrad::prelude::ops::*;
+use catgrad::prelude::*;
+use catgrad::stdlib::nn::*;
+use catgrad::typecheck::TypeExpr;
+use catgrad_llm::helpers::*;
+use catgrad_llm::utils::get_model_files;
 use clap::Parser;
 use image::imageops::FilterType;
+use rayon::prelude::*;
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::rc::Rc;
 use tokenizers::Tokenizer;
 
 #[derive(Parser, Debug)]
@@ -49,6 +53,14 @@ fn default_max_position_embeddings() -> usize {
     64
 }
 
+fn default_patch_size() -> usize {
+    16
+}
+
+fn default_image_size() -> usize {
+    224
+}
+
 #[derive(Debug, Clone, serde::Deserialize)]
 struct TransformerConfig {
     #[serde(default = "default_hidden_size")]
@@ -67,7 +79,6 @@ struct TransformerConfig {
 struct TextConfig {
     #[serde(flatten)]
     transformer: TransformerConfig,
-    vocab_size: usize,
     #[serde(default = "default_max_position_embeddings")]
     max_position_embeddings: usize,
 }
@@ -76,6 +87,10 @@ struct TextConfig {
 struct VisionConfig {
     #[serde(flatten)]
     transformer: TransformerConfig,
+    #[serde(default = "default_patch_size")]
+    patch_size: usize,
+    #[serde(default = "default_image_size")]
+    image_size: usize,
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -84,361 +99,354 @@ struct SiglipConfig {
     vision_config: VisionConfig,
 }
 
-fn attention(builder: &Builder, config: &TransformerConfig, name: &str, x: Var) -> Var {
-    let dim = config.hidden_size;
-    let num_heads = config.num_attention_heads;
-    let head_dim = config.hidden_size / config.num_attention_heads;
-    let b = x.label.shape.0[0];
-    let s = x.label.shape.0[1];
-
-    let q = linear(builder, dim, dim, &format!("{name}.q_proj"), x.clone());
-    let k = linear(builder, dim, dim, &format!("{name}.k_proj"), x.clone());
-    let v = linear(builder, dim, dim, &format!("{name}.v_proj"), x);
-
-    let q = reshape(builder, Shape(vec![b, s, num_heads, head_dim]), q);
-    let k = reshape(builder, Shape(vec![b, s, num_heads, head_dim]), k);
-    let v = reshape(builder, Shape(vec![b, s, num_heads, head_dim]), v);
-
-    let q = transpose(builder, 1, 2, q);
-    let k = transpose(builder, 1, 2, k);
-    let v = transpose(builder, 1, 2, v);
-
-    let tk = transpose(builder, 2, 3, k);
-    let attn = mat_mul(builder, q, tk);
-    let denom = constant(builder, attn.label.clone(), (head_dim as f32).sqrt());
-    let attn = attn / denom;
-
-    let attn = softmax(builder, attn);
-    let attn = mat_mul(builder, attn, v);
-    let x = transpose(builder, 1, 2, attn);
-    let x = reshape(builder, Shape(vec![b, s, dim]), x);
-
-    linear(builder, dim, dim, &format!("{name}.out_proj"), x)
+struct SiglipModel {
+    config: SiglipConfig,
 }
 
-fn mlp(builder: &Builder, config: &TransformerConfig, name: &str, x: Var) -> Var {
-    let x = linear(
-        builder,
-        config.hidden_size,
-        config.intermediate_size,
-        &format!("{name}.fc1"),
-        x,
-    );
-    let x = gelu(builder, x);
-    linear(
-        builder,
-        config.intermediate_size,
-        config.hidden_size,
-        &format!("{name}.fc2"),
-        x,
-    )
-}
+impl SiglipModel {
+    fn attention(&self, builder: &Builder, config: &TransformerConfig, p: Path, x: Var) -> Var {
+        let dim = config.hidden_size;
+        let num_heads = config.num_attention_heads;
+        let head_dim = config.hidden_size / config.num_attention_heads;
 
-fn encoder_layer(builder: &Builder, config: &TransformerConfig, name: &str, x: Var) -> Var {
-    let res = x.clone();
-    let x = layernorm(
-        builder,
-        config.layer_norm_eps,
-        &format!("{name}.layer_norm1"),
-        x,
-    );
-    let x = attention(builder, config, &format!("{name}.self_attn"), x);
-    let x = x + res;
+        let [b, s, _] = unpack::<3>(builder, shape(builder, x.clone()));
 
-    let res = x.clone();
-    let x = layernorm(
-        builder,
-        config.layer_norm_eps,
-        &format!("{name}.layer_norm2"),
-        x,
-    );
-    let x = mlp(builder, config, &format!("{name}.mlp"), x);
-    x + res
-}
+        let q = linear(builder, dim, dim, p.extend(["q_proj"]).unwrap(), x.clone());
+        let k = linear(builder, dim, dim, p.extend(["k_proj"]).unwrap(), x.clone());
+        let v = linear(builder, dim, dim, p.extend(["v_proj"]).unwrap(), x);
 
-// Instead of using a convolutional layer to extract patches, we use a linear layer.
-fn vision_embeddings(builder: &Builder, config: &VisionConfig, name: &str, x: Var) -> Var {
-    let patch_size = 16;
-    let image_size = 224;
-    let num_patches = (image_size / patch_size) * (image_size / patch_size);
-    let num_channels = 3;
-    let hidden_size = config.transformer.hidden_size;
+        let sh = shape!(builder, b, s, num_heads, head_dim);
+        let q = reshape(builder, sh.clone(), q);
+        let k = reshape(builder, sh.clone(), k);
+        let v = reshape(builder, sh, v);
 
-    // Patch embeddings from convolution
-    // The weight is for a conv2d, so we need to reshape it for matmul.
-    let patch_weight_t = NdArrayType::new(
-        Shape(vec![hidden_size, num_channels, patch_size, patch_size]),
-        Dtype::F32,
-    );
-    let patch_weight = parameter(
-        builder,
-        patch_weight_t,
-        format!("{name}.patch_embedding.weight"),
-    );
+        let q = transpose(builder, 1, 2, q);
+        let k = transpose(builder, 1, 2, k);
+        let v = transpose(builder, 1, 2, v);
 
-    let patch_weight_permuted = transpose(builder, 1, 2, patch_weight);
-    let patch_weight_permuted = transpose(builder, 2, 3, patch_weight_permuted);
+        let tk = transpose(builder, 2, 3, k);
+        let attn = matmul(builder, q, tk);
 
-    let patch_weight_flat = reshape(
-        builder,
-        Shape(vec![hidden_size, num_channels * patch_size * patch_size]),
-        patch_weight_permuted,
-    );
+        let head_dim_float = head_dim as f32;
+        let sh_attn = shape(builder, attn.clone());
+        let denom = constant(builder, head_dim_float.sqrt(), &sh_attn);
+        let attn = attn / denom;
 
-    let patch_weight_flat_t = transpose(builder, 0, 1, patch_weight_flat);
-    let patch_weight_flat_t = expand(builder, Shape(vec![1, 768, 768]), patch_weight_flat_t);
-    let mut patch_embeddings = mat_mul(builder, x, patch_weight_flat_t);
+        let attn = softmax(builder, attn);
+        let attn = matmul(builder, attn, v);
+        let x = transpose(builder, 1, 2, attn);
+        let sh = shape!(builder, b, s, dim);
+        let x = reshape(builder, sh, x);
 
-    let bias_t = NdArrayType::new(Shape(vec![hidden_size]), Dtype::F32);
-    let bias = parameter(builder, bias_t, format!("{name}.patch_embedding.bias"));
-    let bias_expanded = expand(builder, patch_embeddings.label.shape.clone(), bias);
-    patch_embeddings = patch_embeddings + bias_expanded;
+        linear(builder, dim, dim, p.extend(["out_proj"]).unwrap(), x)
+    }
 
-    // Position embeddings
-    let t = NdArrayType::new(
-        Shape(vec![num_patches, config.transformer.hidden_size]),
-        Dtype::F32,
-    );
-    let weights = parameter(builder, t, format!("{name}.position_embedding.weight"));
-    let pe = expand(
-        builder,
-        Shape(vec![1, num_patches, config.transformer.hidden_size]),
-        weights,
-    );
-
-    patch_embeddings + pe
-}
-
-fn vision_head_attention(
-    builder: &Builder,
-    config: &TransformerConfig,
-    name: &str,
-    probe: Var,
-    x: Var,
-) -> Var {
-    let dim = config.hidden_size;
-    let num_heads = config.num_attention_heads;
-    let head_dim = config.hidden_size / config.num_attention_heads;
-    let b = x.label.shape.0[0];
-    let s = x.label.shape.0[1];
-
-    let w_type = NdArrayType::new(Shape(vec![3 * dim, dim]), x.label.dtype);
-    let weight = parameter(builder, w_type, format!("{name}.in_proj_weight"));
-    let b_type = NdArrayType::new(Shape(vec![3 * dim]), x.label.dtype);
-    let bias = parameter(builder, b_type, format!("{name}.in_proj_bias"));
-
-    let ws = chunk(builder, 0, 3, weight);
-    let bs = chunk(builder, 0, 3, bias);
-
-    let q = linear_param(builder, dim, dim, ws[0].clone(), bs[0].clone(), probe);
-    let k = linear_param(builder, dim, dim, ws[1].clone(), bs[1].clone(), x.clone());
-    let v = linear_param(builder, dim, dim, ws[2].clone(), bs[2].clone(), x);
-
-    let q = reshape(builder, Shape(vec![b, 1, num_heads, head_dim]), q);
-    let k = reshape(builder, Shape(vec![b, s, num_heads, head_dim]), k);
-    let v = reshape(builder, Shape(vec![b, s, num_heads, head_dim]), v);
-
-    let q = transpose(builder, 1, 2, q);
-    let k = transpose(builder, 1, 2, k);
-    let v = transpose(builder, 1, 2, v);
-
-    let tk = transpose(builder, 2, 3, k);
-    let attn = mat_mul(builder, q, tk);
-    let denom = constant(builder, attn.label.clone(), (head_dim as f32).sqrt());
-    let attn = attn / denom;
-
-    let attn = softmax(builder, attn);
-    let attn = mat_mul(builder, attn, v);
-    let x = transpose(builder, 1, 2, attn);
-    let x = reshape(builder, Shape(vec![b, 1, dim]), x);
-
-    linear(builder, dim, dim, &format!("{name}.out_proj"), x)
-}
-
-fn vision_head(builder: &Builder, config: &VisionConfig, name: &str, x: Var) -> Var {
-    let config = &config.transformer;
-    let probe_type = NdArrayType::new(Shape(vec![1, 1, config.hidden_size]), Dtype::F32);
-    let probe = parameter(builder, probe_type, format!("{name}.probe"));
-    let x = vision_head_attention(builder, config, &format!("{name}.attention"), probe, x);
-    let res = x.clone();
-    let x = layernorm(
-        builder,
-        config.layer_norm_eps,
-        &format!("{name}.layernorm"),
-        x,
-    );
-
-    let x = mlp(builder, config, &format!("{name}.mlp"), x);
-    let res = x + res;
-    narrow(builder, 1, 0, 1, res)
-}
-
-fn vision_model(builder: &Builder, config: &VisionConfig, x: Var) -> Var {
-    let mut x = vision_embeddings(builder, config, "vision_model.embeddings", x);
-    let vconfig = config;
-    let config = &config.transformer;
-    for i in 0..config.num_hidden_layers {
-        x = encoder_layer(
+    fn mlp(&self, builder: &Builder, config: &TransformerConfig, p: Path, x: Var) -> Var {
+        let x = linear(
             builder,
-            config,
-            &format!("vision_model.encoder.layers.{i}"),
+            config.hidden_size,
+            config.intermediate_size,
+            p.extend(["fc1"]).unwrap(),
             x,
         );
-    }
-    let x = layernorm(
-        builder,
-        config.layer_norm_eps,
-        "vision_model.post_layernorm",
-        x,
-    );
-
-    vision_head(builder, vconfig, "vision_model.head", x)
-}
-
-fn text_embeddings(builder: &Builder, config: &TextConfig, name: &str, x: Var) -> Var {
-    let t = NdArrayType::new(
-        Shape(vec![config.vocab_size, config.transformer.hidden_size]),
-        Dtype::F32,
-    );
-    let weights = parameter(builder, t, format!("{name}.token_embedding.weight"));
-    let we = embedding(builder, x.clone(), weights);
-
-    let t = NdArrayType::new(
-        Shape(vec![
-            config.max_position_embeddings,
-            config.transformer.hidden_size,
-        ]),
-        Dtype::F32,
-    );
-    let pos = arange(builder, x.label.shape.0[1], Dtype::I32);
-    let weights = parameter(builder, t, format!("{name}.position_embedding.weight"));
-    let pe = embedding(builder, pos, weights);
-    let pe = expand(builder, we.label.shape.clone(), pe);
-
-    we + pe
-}
-
-fn text_model(builder: &Builder, config: &TextConfig, x: Var) -> Var {
-    let mut x = text_embeddings(builder, config, "text_model.embeddings", x);
-    let config = &config.transformer;
-    for i in 0..config.num_hidden_layers {
-        x = encoder_layer(
+        let x = gelu(builder, x);
+        linear(
             builder,
-            config,
-            &format!("text_model.encoder.layers.{i}"),
+            config.intermediate_size,
+            config.hidden_size,
+            p.extend(["fc2"]).unwrap(),
+            x,
+        )
+    }
+
+    fn encoder_layer(&self, builder: &Builder, config: &TransformerConfig, p: Path, x: Var) -> Var {
+        let res = x.clone();
+        let x = layernorm(
+            builder,
+            config.layer_norm_eps,
+            p.extend(["layer_norm1"]).unwrap(),
             x,
         );
+        let x = self.attention(builder, config, p.extend(["self_attn"]).unwrap(), x);
+        let x = x + res;
+
+        let res = x.clone();
+        let x = layernorm(
+            builder,
+            config.layer_norm_eps,
+            p.extend(["layer_norm2"]).unwrap(),
+            x,
+        );
+        let x = self.mlp(builder, config, p.extend(["mlp"]).unwrap(), x);
+        x + res
     }
-    let x = layernorm(
-        builder,
-        config.layer_norm_eps,
-        "text_model.final_layer_norm",
-        x,
-    );
-    let x = narrow(builder, 1, 63, 1, x);
 
-    linear(
-        builder,
-        config.hidden_size,
-        config.hidden_size,
-        "text_model.head",
-        x,
-    )
-}
+    fn vision_embeddings(&self, builder: &Builder, config: &VisionConfig, p: Path, x: Var) -> Var {
+        let patch_size = config.patch_size;
+        let image_size = config.image_size;
+        let num_patches = (image_size / patch_size) * (image_size / patch_size);
+        let num_channels = 3;
+        let hidden_size = config.transformer.hidden_size;
 
-fn div_l2_norm(builder: &Builder, x: Var) -> Var {
-    let sqr = x.clone() * x.clone();
-    let l2_norm = sum(builder, sqr);
-    let l2_norm = sqrt(builder, l2_norm);
-    let l2_norm = expand(builder, x.label.shape.clone(), l2_norm);
-    x / l2_norm
-}
+        let patch_weight = param(builder, &p.extend(["patch_embedding", "weight"]).unwrap());
 
-fn siglip(builder: &Builder, config: &SiglipConfig, text: Var, image: Var) -> (Var, Var) {
-    let scalar_type = NdArrayType::new(Shape(vec![1]), Dtype::F32);
+        let patch_weight_permuted = transpose(builder, 1, 2, patch_weight);
+        let patch_weight_permuted = transpose(builder, 2, 3, patch_weight_permuted);
 
-    let dim = config.vision_config.transformer.hidden_size;
-    let n_text = text.label.shape.0[0];
-    let n_img = image.label.shape.0[0];
-    let text_features = text_model(builder, &config.text_config, text);
-    let text_features = div_l2_norm(builder, text_features);
-    let text_features = reshape(builder, Shape(vec![n_text, dim]), text_features);
+        let sh_flat = shape!(builder, hidden_size, num_channels * patch_size * patch_size);
+        let patch_weight_flat = reshape(builder, sh_flat, patch_weight_permuted);
 
-    let image_features = vision_model(builder, &config.vision_config, image);
-    let image_features = div_l2_norm(builder, image_features);
-    let image_features = reshape(builder, Shape(vec![n_img, dim]), image_features);
+        let patch_weight_flat_t = transpose(builder, 0, 1, patch_weight_flat);
 
-    let rt = transpose(builder, 0, 1, image_features);
-    let logits_per_text = mat_mul(builder, text_features, rt);
+        let sh_expand = shape!(
+            builder,
+            1,
+            num_channels * patch_size * patch_size,
+            hidden_size
+        );
+        let patch_weight_flat_t = broadcast(builder, patch_weight_flat_t, sh_expand);
 
-    let logit_scale = parameter(builder, scalar_type.clone(), "logit_scale".to_string());
-    let logit_bias = parameter(builder, scalar_type, "logit_bias".to_string());
-    let logit_scale = exp(builder, logit_scale);
+        let mut patch_embeddings = matmul(builder, x, patch_weight_flat_t);
 
-    let logit_scale = expand(builder, logits_per_text.label.shape.clone(), logit_scale);
-    let logit_bias = expand(builder, logits_per_text.label.shape.clone(), logit_bias);
-    let logits_per_text = logits_per_text * logit_scale + logit_bias;
-    let logits_per_image = transpose(builder, 0, 1, logits_per_text.clone());
-    (logits_per_text, logits_per_image)
-}
+        let bias = param(builder, &p.extend(["patch_embedding", "bias"]).unwrap());
+        let sh_emb = shape(builder, patch_embeddings.clone());
+        let bias_expanded = broadcast(builder, bias, sh_emb);
+        patch_embeddings = patch_embeddings + bias_expanded;
 
-struct ModelRunner {
-    pub state: Option<EvalState>,
-    pub tensors: Rc<HashMap<String, TaggedNdArray>>,
-    pub config: SiglipConfig,
-}
+        let weights = param(
+            builder,
+            &p.extend(["position_embedding", "weight"]).unwrap(),
+        );
 
-impl ModelRunner {
-    fn new(config: SiglipConfig) -> Self {
-        Self {
-            tensors: Rc::new(HashMap::new()),
-            state: None,
-            config,
+        let sh_pe = shape!(builder, 1, num_patches, config.transformer.hidden_size);
+        let pe = broadcast(builder, weights, sh_pe);
+
+        patch_embeddings + pe
+    }
+
+    fn vision_head_attention(
+        &self,
+        builder: &Builder,
+        config: &TransformerConfig,
+        p: Path,
+        probe: Var,
+        x: Var,
+    ) -> Var {
+        let dim = config.hidden_size;
+        let num_heads = config.num_attention_heads;
+        let head_dim = config.hidden_size / config.num_attention_heads;
+
+        let [b, s, _] = unpack::<3>(builder, shape(builder, x.clone()));
+
+        let weight = param(builder, &p.extend(["in_proj_weight"]).unwrap());
+        let bias = param(builder, &p.extend(["in_proj_bias"]).unwrap());
+
+        let ws = chunk(builder, 0, 3, dim, weight);
+        let bs = chunk(builder, 0, 3, dim, bias);
+
+        let q = linear_param(builder, dim, dim, ws[0].clone(), bs[0].clone(), probe);
+        let k = linear_param(builder, dim, dim, ws[1].clone(), bs[1].clone(), x.clone());
+        let v = linear_param(builder, dim, dim, ws[2].clone(), bs[2].clone(), x);
+
+        let sh_q = shape!(builder, b, 1, num_heads, head_dim);
+        let sh_kv = shape!(builder, b, s, num_heads, head_dim);
+
+        let q = reshape(builder, sh_q, q);
+        let k = reshape(builder, sh_kv.clone(), k);
+        let v = reshape(builder, sh_kv, v);
+
+        let q = transpose(builder, 1, 2, q);
+        let k = transpose(builder, 1, 2, k);
+        let v = transpose(builder, 1, 2, v);
+
+        let tk = transpose(builder, 2, 3, k);
+        let attn = matmul(builder, q, tk);
+        let head_dim_float = head_dim as f32;
+        let sh_attn = shape(builder, attn.clone());
+        let denom = constant(builder, head_dim_float.sqrt(), &sh_attn);
+        let attn = attn / denom;
+
+        let attn = softmax(builder, attn);
+        let attn = matmul(builder, attn, v);
+        let x = transpose(builder, 1, 2, attn);
+        let sh_out = shape!(builder, b, 1, dim);
+        let x = reshape(builder, sh_out, x);
+
+        linear(builder, dim, dim, p.extend(["out_proj"]).unwrap(), x)
+    }
+
+    fn vision_head(&self, builder: &Builder, config: &VisionConfig, p: Path, x: Var) -> Var {
+        let t_config = &config.transformer;
+        let probe = param(builder, &p.extend(["probe"]).unwrap());
+
+        let sh_probe = shape!(builder, 1, 1, t_config.hidden_size);
+        let probe = reshape(builder, sh_probe, probe);
+
+        let x = self.vision_head_attention(
+            builder,
+            t_config,
+            p.extend(["attention"]).unwrap(),
+            probe,
+            x,
+        );
+        let res = x.clone();
+        let x = layernorm(
+            builder,
+            t_config.layer_norm_eps,
+            p.extend(["layernorm"]).unwrap(),
+            x,
+        );
+
+        let x = self.mlp(builder, t_config, p.extend(["mlp"]).unwrap(), x);
+        let res = x + res;
+
+        slice(builder, 1, 0, 1, res)
+    }
+
+    fn vision_model(&self, builder: &Builder, config: &VisionConfig, p: Path, x: Var) -> Var {
+        let mut x = self.vision_embeddings(builder, config, p.extend(["embeddings"]).unwrap(), x);
+        let vconfig = config;
+        let config = &config.transformer;
+        for i in 0..config.num_hidden_layers {
+            x = self.encoder_layer(
+                builder,
+                config,
+                p.extend(["encoder", "layers", &i.to_string()]).unwrap(),
+                x,
+            );
         }
+        let x = layernorm(
+            builder,
+            config.layer_norm_eps,
+            p.extend(["post_layernorm"]).unwrap(),
+            x,
+        );
+
+        self.vision_head(builder, vconfig, p.extend(["head"]).unwrap(), x)
     }
 
-    fn load(&mut self, model_paths: Vec<PathBuf>) {
-        let tensors = read_safetensors_multiple(model_paths, false).expect("loading model weights");
-        self.tensors = Rc::new(tensors);
+    fn text_embeddings(&self, builder: &Builder, config: &TextConfig, p: Path, x: Var) -> Var {
+        let [b, s] = unpack::<2>(builder, shape(builder, x.clone()));
+        let sh = shape!(builder, b, s, config.transformer.hidden_size);
+
+        let wte = param(builder, &p.extend(["token_embedding", "weight"]).unwrap());
+        let we = index(builder, 0, x, wte);
+        let we = reshape(builder, sh.clone(), we);
+
+        let pos = arange(builder, s);
+
+        let pe_weights = param(
+            builder,
+            &p.extend(["position_embedding", "weight"]).unwrap(),
+        );
+        let pe = index(builder, 0, pos, pe_weights);
+
+        let pe = broadcast(builder, pe, sh);
+
+        we + pe
     }
 
-    fn build_graph(&mut self, batches: usize, num_tokens: usize) {
-        let text_in_type = NdArrayType::new(Shape(vec![batches, num_tokens]), Dtype::I32);
-        let image_in_type = NdArrayType::new(Shape(vec![1, 196, 768]), Dtype::F32);
+    fn text_model(&self, builder: &Builder, config: &TextConfig, p: Path, x: Var) -> Var {
+        let mut x = self.text_embeddings(builder, config, p.extend(["embeddings"]).unwrap(), x);
+        let config_t = &config.transformer;
+        for i in 0..config_t.num_hidden_layers {
+            x = self.encoder_layer(
+                builder,
+                config_t,
+                p.extend(["encoder", "layers", &i.to_string()]).unwrap(),
+                x,
+            );
+        }
+        let x = layernorm(
+            builder,
+            config_t.layer_norm_eps,
+            p.extend(["final_layer_norm"]).unwrap(),
+            x,
+        );
 
-        let state = EvalState::build(|builder| {
-            let text = Var::new(builder.clone(), text_in_type.clone());
-            let image = Var::new(builder.clone(), image_in_type.clone());
-            let (_logits_per_text, logits_per_image) =
-                siglip(builder, &self.config, text.clone(), image.clone());
+        let x = slice(builder, 1, 63, 1, x);
 
-            // Get the probabilities of each label matching this image
-            let probs = softmax(builder, logits_per_image);
-            let sources_vec = vec![text, image];
-
-            let targets_vec = vec![probs];
-            (sources_vec, targets_vec)
-        });
-
-        self.state = Some(state);
-        self.state
-            .as_mut()
-            .unwrap()
-            .set_parameters(Rc::clone(&self.tensors));
+        linear(
+            builder,
+            config.transformer.hidden_size,
+            config.transformer.hidden_size,
+            p.extend(["head"]).unwrap(),
+            x,
+        )
     }
 
-    fn run(&mut self, text: &NdArray<i32>, image: &NdArray<f32>) -> Vec<&TaggedNdArray> {
-        let sources = vec![text.clone().into(), image.clone().into()];
-
-        self.state.as_mut().unwrap().eval_with(sources)
+    fn div_l2_norm(&self, builder: &Builder, x: Var) -> Var {
+        let sqr = x.clone() * x.clone();
+        let l2_norm = sum(builder, sqr);
+        let l2_norm = sqrt(builder, l2_norm);
+        let sh_x = shape(builder, x.clone());
+        let l2_norm = broadcast(builder, l2_norm, sh_x);
+        x / l2_norm
     }
 }
 
-// Loads the image and returns it as a sequence of flattened 16x16 patches
-// corresponding to the image tokens going into the model
-fn load_and_preprocess_image(image_path: &PathBuf) -> NdArray<f32> {
-    let image_size = 224;
-    let patch_size = 16;
+impl Module<2, 2> for SiglipModel {
+    fn ty(&self) -> ([Type; 2], [Type; 2]) {
+        let t = Type::Tensor(TypeExpr::Var(0));
+        ([t.clone(), t.clone()], [t.clone(), t])
+    }
+
+    fn path(&self) -> Path {
+        path(vec!["siglip"]).unwrap()
+    }
+
+    fn def(&self, builder: &Builder, [text, image]: [Var; 2]) -> [Var; 2] {
+        let config = &self.config;
+        let dim = config.vision_config.transformer.hidden_size;
+
+        let [n_text, _] = unpack::<2>(builder, shape(builder, text.clone()));
+
+        let text_features = self.text_model(
+            builder,
+            &config.text_config,
+            path(vec!["text_model"]).unwrap(),
+            text,
+        );
+        let text_features = self.div_l2_norm(builder, text_features);
+        let sh_text = shape!(builder, n_text, dim);
+        let text_features = reshape(builder, sh_text, text_features);
+
+        let [n_img, _, _] = unpack::<3>(builder, shape(builder, image.clone()));
+
+        let image_features = self.vision_model(
+            builder,
+            &config.vision_config,
+            path(vec!["vision_model"]).unwrap(),
+            image,
+        );
+        let image_features = self.div_l2_norm(builder, image_features);
+        let sh_img = shape!(builder, n_img, dim);
+        let image_features = reshape(builder, sh_img, image_features);
+
+        let rt = transpose(builder, 0, 1, image_features);
+        let logits_per_text = matmul(builder, text_features, rt);
+
+        let logit_scale = param(builder, &path(vec!["logit_scale"]).unwrap());
+        let logit_bias = param(builder, &path(vec!["logit_bias"]).unwrap());
+        let logit_scale = exp(builder, logit_scale);
+
+        let sh_logits = shape(builder, logits_per_text.clone());
+        let logit_scale = broadcast(builder, logit_scale, sh_logits.clone());
+        let logit_bias = broadcast(builder, logit_bias, sh_logits);
+
+        let logits_per_text = logits_per_text * logit_scale + logit_bias;
+        let logits_per_image = transpose(builder, 0, 1, logits_per_text.clone());
+
+        [logits_per_text, logits_per_image]
+    }
+}
+
+// Loads the image and returns flattened data + shape
+fn load_and_preprocess_image(
+    image_path: &PathBuf,
+    image_size: usize,
+    patch_size: usize,
+) -> (Vec<f32>, Shape) {
     let num_patches: usize = (image_size / patch_size) * (image_size / patch_size);
     let num_channels = 3;
 
@@ -463,29 +471,72 @@ fn load_and_preprocess_image(image_path: &PathBuf) -> NdArray<f32> {
             }
         }
     }
-    NdArray::new(
+    (
         patches,
         Shape(vec![1, num_patches, patch_size * patch_size * num_channels]),
     )
+}
+
+fn load_tensors(
+    paths: Vec<PathBuf>,
+    backend: &CandleBackend,
+) -> Result<interpreter::Parameters<CandleBackend>> {
+    let mut map = HashMap::new();
+
+    for file_path in paths {
+        let file = std::fs::File::open(file_path)?;
+        let data = unsafe { memmap2::Mmap::map(&file)? };
+        let tensors = safetensors::SafeTensors::deserialize(&data)?;
+
+        for (name, view) in tensors.tensors() {
+            let shape = Shape(view.shape().to_vec());
+            let tensor_data = view.data();
+
+            // Load as F32
+            let data: Vec<f32> = match view.dtype() {
+                safetensors::Dtype::F32 => tensor_data
+                    .par_chunks_exact(4)
+                    .map(|b| f32::from_le_bytes(b.try_into().unwrap()))
+                    .collect(),
+                safetensors::Dtype::BF16 => tensor_data
+                    .par_chunks_exact(2)
+                    .map(|b| half::bf16::from_le_bytes(b.try_into().unwrap()).to_f32())
+                    .collect(),
+                _ => panic!("Unsupported dtype: {:?}", view.dtype()),
+            };
+
+            let tensor = interpreter::tensor(backend, shape, data)
+                .map_err(|e| anyhow::anyhow!("BackendError: {:?}", e))?;
+            let key = path(name.split(".").collect()).expect("invalid param path");
+            map.insert(key, tensor);
+        }
+    }
+
+    Ok(interpreter::Parameters::from(map))
 }
 
 pub fn main() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::init();
     let args = Args::parse();
 
-    let (model_paths, config_path, tokenizer_path, _) =
-        get_model_files(&args.model_name, "main").expect("loading model files");
+    let (model_paths, config_path, tokenizer_path, _) = get_model_files(&args.model_name, "main")?;
 
     let config: SiglipConfig = serde_json::from_str(&std::fs::read_to_string(config_path)?)?;
 
     let tokenizer = Tokenizer::from_file(tokenizer_path)
         .map_err(|e| format!("Failed to load tokenizer: {e}"))?;
 
-    let mut runner = ModelRunner::new(config.clone());
-    runner.load(model_paths);
+    let backend = CandleBackend::new();
+    let parameters = load_tensors(model_paths, &backend)?;
     println!("SigLIP model {} loaded successfully.", args.model_name);
 
-    let image_tensor = load_and_preprocess_image(&args.image);
+    let (image_data, image_shape) = load_and_preprocess_image(
+        &args.image,
+        config.vision_config.image_size,
+        config.vision_config.patch_size,
+    );
+    let image_tensor = interpreter::tensor(&backend, image_shape, image_data)
+        .map_err(|e| anyhow::anyhow!("BackendError: {:?}", e))?;
 
     let labels = args.labels;
     let mut encodings = vec![];
@@ -503,12 +554,48 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let batches = encodings.len() / max_len;
-    let input = NdArray::new(encodings, Shape(vec![batches, max_len]));
-    runner.build_graph(batches, max_len);
-    let result = runner.run(&input, &image_tensor);
+    let input_shape = Shape(vec![batches, max_len]);
+
+    // Convert encodings (i32) to u32 for interpreter
+    let encodings_u32: Vec<u32> = encodings.iter().map(|&x| x as u32).collect();
+    let input_tensor = interpreter::tensor(&backend, input_shape, encodings_u32)
+        .map_err(|e| anyhow::anyhow!("BackendError: {:?}", e))?;
+
+    // Build model
+    let model = SiglipModel { config };
+    let typed_term = model.term().expect("failed to build model term");
+
+    let mut env = catgrad::stdlib::stdlib();
+    let param_keys: Vec<Path> = parameters.0.keys().cloned().collect();
+    env.declarations
+        .extend(catgrad::stdlib::to_load_ops(Path::empty(), &param_keys));
+
+    let interp = Interpreter::new(backend, env, parameters);
+
+    let results = interp.eval(
+        interp.environment.to_core(typed_term.term),
+        vec![input_tensor, image_tensor],
+    )?;
+    let result_tensor = match &results[1] {
+        interpreter::Value::Tensor(t) => t,
+        _ => panic!("Expected tensor output"),
+    };
+
+    let vec_res = interp.backend.to_vec(result_tensor.clone());
+
+    let probs = match vec_res {
+        interpreter::TaggedVec::F32(v) => v,
+        _ => panic!("Expected F32 data"),
+    };
+
+    let max_val = probs.iter().fold(f32::NEG_INFINITY, |a, &b| a.max(b));
+    let exp_probs: Vec<f32> = probs.iter().map(|x| (x - max_val).exp()).collect();
+    let sum_exp: f32 = exp_probs.iter().sum();
+    let softmax_probs: Vec<f32> = exp_probs.iter().map(|x| x / sum_exp).collect();
 
     for (i, label) in labels.iter().enumerate() {
-        println!("{label}: {:.4}%", result[0].get(&[0, i]) * 100.);
+        println!("{label}: {:.4}%", softmax_probs[i] * 100.);
     }
+
     Ok(())
 }
