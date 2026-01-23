@@ -99,11 +99,16 @@ struct SiglipConfig {
     vision_config: VisionConfig,
 }
 
-struct SiglipModel {
-    config: SiglipConfig,
+struct SiglipVisionBackbone {
+    config: VisionConfig,
 }
 
-impl SiglipModel {
+struct SiglipModel {
+    config: SiglipConfig,
+    vision_backbone: SiglipVisionBackbone,
+}
+
+impl SiglipVisionBackbone {
     fn attention(&self, builder: &Builder, config: &TransformerConfig, p: Path, x: Var) -> Var {
         let dim = config.hidden_size;
         let num_heads = config.num_attention_heads;
@@ -140,7 +145,6 @@ impl SiglipModel {
 
         linear(builder, dim, dim, p.extend(["out_proj"]).unwrap(), x)
     }
-
     fn mlp(&self, builder: &Builder, config: &TransformerConfig, p: Path, x: Var) -> Var {
         let x = linear(
             builder,
@@ -224,6 +228,27 @@ impl SiglipModel {
         patch_embeddings + pe
     }
 
+    fn vision_model(&self, builder: &Builder, config: &VisionConfig, p: Path, x: Var) -> Var {
+        let mut x = self.vision_embeddings(builder, config, p.extend(["embeddings"]).unwrap(), x);
+        let config = &config.transformer;
+        for i in 0..config.num_hidden_layers {
+            x = self.encoder_layer(
+                builder,
+                config,
+                p.extend(["encoder", "layers", &i.to_string()]).unwrap(),
+                x,
+            );
+        }
+        layernorm(
+            builder,
+            config.layer_norm_eps,
+            p.extend(["post_layernorm"]).unwrap(),
+            x,
+        )
+    }
+}
+
+impl SiglipModel {
     fn vision_head_attention(
         &self,
         builder: &Builder,
@@ -297,32 +322,25 @@ impl SiglipModel {
             x,
         );
 
-        let x = self.mlp(builder, t_config, p.extend(["mlp"]).unwrap(), x);
+        let x = self
+            .vision_backbone
+            .mlp(builder, t_config, p.extend(["mlp"]).unwrap(), x);
         let res = x + res;
 
         slice(builder, 1, 0, 1, res)
     }
 
-    fn vision_model(&self, builder: &Builder, config: &VisionConfig, p: Path, x: Var) -> Var {
-        let mut x = self.vision_embeddings(builder, config, p.extend(["embeddings"]).unwrap(), x);
-        let vconfig = config;
-        let config = &config.transformer;
-        for i in 0..config.num_hidden_layers {
-            x = self.encoder_layer(
-                builder,
-                config,
-                p.extend(["encoder", "layers", &i.to_string()]).unwrap(),
-                x,
-            );
-        }
-        let x = layernorm(
-            builder,
-            config.layer_norm_eps,
-            p.extend(["post_layernorm"]).unwrap(),
-            x,
-        );
-
-        self.vision_head(builder, vconfig, p.extend(["head"]).unwrap(), x)
+    fn vision_model_with_head(
+        &self,
+        builder: &Builder,
+        config: &VisionConfig,
+        p: Path,
+        x: Var,
+    ) -> Var {
+        let x = self
+            .vision_backbone
+            .vision_model(builder, config, p.clone(), x);
+        self.vision_head(builder, config, p.extend(["head"]).unwrap(), x)
     }
 
     fn text_embeddings(&self, builder: &Builder, config: &TextConfig, p: Path, x: Var) -> Var {
@@ -350,7 +368,7 @@ impl SiglipModel {
         let mut x = self.text_embeddings(builder, config, p.extend(["embeddings"]).unwrap(), x);
         let config_t = &config.transformer;
         for i in 0..config_t.num_hidden_layers {
-            x = self.encoder_layer(
+            x = self.vision_backbone.encoder_layer(
                 builder,
                 config_t,
                 p.extend(["encoder", "layers", &i.to_string()]).unwrap(),
@@ -385,6 +403,27 @@ impl SiglipModel {
     }
 }
 
+impl Module<1, 1> for SiglipVisionBackbone {
+    fn ty(&self) -> ([Type; 1], [Type; 1]) {
+        let t = Type::Tensor(TypeExpr::Var(0));
+        ([t.clone()], [t])
+    }
+
+    fn path(&self) -> Path {
+        path(vec!["siglip_vision_backbone"]).unwrap()
+    }
+
+    fn def(&self, builder: &Builder, [image]: [Var; 1]) -> [Var; 1] {
+        let image_features = self.vision_model(
+            builder,
+            &self.config,
+            path(vec!["vision_model"]).unwrap(),
+            image,
+        );
+        [image_features]
+    }
+}
+
 impl Module<2, 2> for SiglipModel {
     fn ty(&self) -> ([Type; 2], [Type; 2]) {
         let t = Type::Tensor(TypeExpr::Var(0));
@@ -396,14 +435,13 @@ impl Module<2, 2> for SiglipModel {
     }
 
     fn def(&self, builder: &Builder, [text, image]: [Var; 2]) -> [Var; 2] {
-        let config = &self.config;
-        let dim = config.vision_config.transformer.hidden_size;
+        let dim = self.config.vision_config.transformer.hidden_size;
 
         let [n_text, _] = unpack::<2>(builder, shape(builder, text.clone()));
 
         let text_features = self.text_model(
             builder,
-            &config.text_config,
+            &self.config.text_config,
             path(vec!["text_model"]).unwrap(),
             text,
         );
@@ -413,9 +451,9 @@ impl Module<2, 2> for SiglipModel {
 
         let [n_img, _, _] = unpack::<3>(builder, shape(builder, image.clone()));
 
-        let image_features = self.vision_model(
+        let image_features = self.vision_model_with_head(
             builder,
-            &config.vision_config,
+            &self.config.vision_config,
             path(vec!["vision_model"]).unwrap(),
             image,
         );
@@ -562,7 +600,12 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
         .map_err(|e| anyhow::anyhow!("BackendError: {:?}", e))?;
 
     // Build model
-    let model = SiglipModel { config };
+    let model = SiglipModel {
+        config: config.clone(),
+        vision_backbone: SiglipVisionBackbone {
+            config: config.vision_config,
+        },
+    };
     let typed_term = model.term().expect("failed to build model term");
 
     let mut env = catgrad::stdlib::stdlib();
