@@ -1,5 +1,5 @@
+use crate::config::Config;
 use crate::helpers::*;
-use crate::legacy::models::utils::Config;
 use catgrad::prelude::ops::*;
 use catgrad::prelude::*;
 

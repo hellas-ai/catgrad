@@ -1,5 +1,4 @@
-use crate::legacy::models::utils::Config;
-use crate::legacy::models::utils::{Llama3RopeScaling, RopeScaling, YarnRopeScaling};
+use crate::config::{Config, Llama3RopeScaling, RopeScaling, YarnRopeScaling};
 use catgrad::prelude::ops::*;
 use catgrad::prelude::*;
 use catgrad::stdlib::nn::*;
