@@ -6,11 +6,9 @@ use catgrad::prelude::*;
 use catgrad::stdlib::nn::*;
 use catgrad::typecheck::TypeExpr;
 use catgrad_llm::helpers::*;
-use catgrad_llm::utils::get_model_files;
+use catgrad_llm::utils::{get_model_files, load_model_weights};
 use clap::Parser;
 use image::imageops::FilterType;
-use rayon::prelude::*;
-use std::collections::HashMap;
 use std::path::PathBuf;
 use tokenizers::Tokenizer;
 
@@ -515,44 +513,6 @@ fn load_and_preprocess_image(
     )
 }
 
-fn load_tensors(
-    paths: Vec<PathBuf>,
-    backend: &CandleBackend,
-) -> Result<interpreter::Parameters<CandleBackend>> {
-    let mut map = HashMap::new();
-
-    for file_path in paths {
-        let file = std::fs::File::open(file_path)?;
-        let data = unsafe { memmap2::Mmap::map(&file)? };
-        let tensors = safetensors::SafeTensors::deserialize(&data)?;
-
-        for (name, view) in tensors.tensors() {
-            let shape = Shape(view.shape().to_vec());
-            let tensor_data = view.data();
-
-            // Load as F32
-            let data: Vec<f32> = match view.dtype() {
-                safetensors::Dtype::F32 => tensor_data
-                    .par_chunks_exact(4)
-                    .map(|b| f32::from_le_bytes(b.try_into().unwrap()))
-                    .collect(),
-                safetensors::Dtype::BF16 => tensor_data
-                    .par_chunks_exact(2)
-                    .map(|b| half::bf16::from_le_bytes(b.try_into().unwrap()).to_f32())
-                    .collect(),
-                _ => panic!("Unsupported dtype: {:?}", view.dtype()),
-            };
-
-            let tensor = interpreter::tensor(backend, shape, data)
-                .map_err(|e| anyhow::anyhow!("BackendError: {:?}", e))?;
-            let key = path(name.split(".").collect()).expect("invalid param path");
-            map.insert(key, tensor);
-        }
-    }
-
-    Ok(interpreter::Parameters::from(map))
-}
-
 pub fn main() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::init();
     let args = Args::parse();
@@ -565,7 +525,7 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
         .map_err(|e| format!("Failed to load tokenizer: {e}"))?;
 
     let backend = CandleBackend::new();
-    let parameters = load_tensors(model_paths, &backend)?;
+    let (parameters, _) = load_model_weights(model_paths, &backend)?;
     println!("SigLIP model {} loaded successfully.", args.model_name);
 
     let (image_data, image_shape) = load_and_preprocess_image(

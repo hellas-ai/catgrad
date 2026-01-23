@@ -1,14 +1,16 @@
-use crate::{LLMError, Result};
+use catgrad::prelude::Dtype;
 use catgrad::prelude::Module;
 use catgrad_legacy::backend::cpu::ndarray::{NdArray, TaggedNdArray};
 use catgrad_legacy::core::Shape;
 use hf_hub::{Repo, RepoType, api::sync::Api};
-use std::collections::{HashMap, HashSet};
-use std::path::Path;
-use std::path::PathBuf;
-
-use crate::models::*;
 use rayon::prelude::*;
+use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
+use tokenizers::tokenizer::Tokenizer;
+
+use crate::config::Config;
+use crate::models::*;
+use crate::{LLMError, Result};
 
 pub fn read_safetensors_file(
     path: impl AsRef<Path>,
@@ -181,8 +183,6 @@ pub fn get_model_chat_template(model: &str, revision: &str) -> Result<String> {
     }
 }
 
-use crate::config::Config;
-
 pub fn get_model(config: &Config, max_sequence_length: usize) -> Result<Box<dyn Module<1, 1>>> {
     let arch = config.architectures[0].as_str();
     match arch {
@@ -334,29 +334,14 @@ pub fn post_process_weights<B: interpreter::Backend>(
     concat_moe_experts(config, backend, parameter_values, parameter_types)
 }
 
-use catgrad::prelude::Dtype;
-use tokenizers::tokenizer::Tokenizer;
-
-pub fn load_model<B: interpreter::Backend>(
-    model_name: &str,
-    revision: &str,
+pub fn load_model_weights<B: interpreter::Backend>(
+    model_paths: Vec<PathBuf>,
     backend: &B,
-) -> Result<(
-    interpreter::Parameters<B>,
-    typecheck::Parameters,
-    Config,
-    Tokenizer,
-)> {
-    let (model_paths, config_path, tokenizer_path, _) = get_model_files(model_name, revision)?;
-    let config: Config = serde_json::from_str(&std::fs::read_to_string(config_path)?)?;
-    let tokenizer = Tokenizer::from_file(tokenizer_path)
-        .map_err(|err| LLMError::TokenizerError(format!("tokenizer load error {:?}", err)))?;
-
+) -> Result<(interpreter::Parameters<B>, typecheck::Parameters)> {
     // Read each tensor
     let mut type_map = HashMap::new();
     let mut data_map = HashMap::new();
 
-    let start_load = std::time::Instant::now();
     for file_path in model_paths {
         let file = std::fs::File::open(file_path)?;
         let data = unsafe { memmap2::Mmap::map(&file)? };
@@ -396,15 +381,38 @@ pub fn load_model<B: interpreter::Backend>(
         }
     }
 
-    let mut parameter_values = interpreter::Parameters::from(data_map);
-    let mut parameter_types = typecheck::Parameters::from(type_map);
+    let parameter_values = interpreter::Parameters::from(data_map);
+    let parameter_types = typecheck::Parameters::from(type_map);
 
+    Ok((parameter_values, parameter_types))
+}
+
+pub fn load_model<B: interpreter::Backend>(
+    model_name: &str,
+    revision: &str,
+    backend: &B,
+) -> Result<(
+    interpreter::Parameters<B>,
+    typecheck::Parameters,
+    Config,
+    Tokenizer,
+)> {
+    let (model_paths, config_path, tokenizer_path, _) = get_model_files(model_name, revision)?;
+    let config: Config = serde_json::from_str(&std::fs::read_to_string(config_path)?)?;
+    let tokenizer = Tokenizer::from_file(tokenizer_path)
+        .map_err(|err| LLMError::TokenizerError(format!("tokenizer load error {:?}", err)))?;
+
+    let start_load = std::time::Instant::now();
     let elapsed_load = start_load.elapsed();
+
+    let (mut parameter_values, mut parameter_types) = load_model_weights(model_paths, backend)?;
+
     log::info!(
         "Model weights loaded for {} in {:.2} seconds",
         model_name,
         elapsed_load.as_secs_f64()
     );
+
     post_process_weights(
         &config,
         backend,
