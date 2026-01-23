@@ -5,7 +5,7 @@ use std::io::Write;
 use anyhow::Result;
 use std::collections::HashMap;
 
-use catgrad_llm::legacy::models::utils::Config;
+use catgrad_llm::config::Config;
 use catgrad_llm::utils::{get_model, get_model_files};
 use clap::Parser;
 use tokenizers::tokenizer::Tokenizer;

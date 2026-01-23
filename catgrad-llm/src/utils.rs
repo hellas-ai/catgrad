@@ -181,7 +181,7 @@ pub fn get_model_chat_template(model: &str, revision: &str) -> Result<String> {
     }
 }
 
-use crate::legacy::models::utils::Config;
+use crate::config::Config;
 
 pub fn get_model(config: &Config, max_sequence_length: usize) -> Result<Box<dyn Module<1, 1>>> {
     let arch = config.architectures[0].as_str();
