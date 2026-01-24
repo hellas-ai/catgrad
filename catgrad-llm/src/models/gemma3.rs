@@ -5,6 +5,7 @@ use catgrad::prelude::*;
 use nn::*;
 
 pub struct Gemma3Model {
+    pub root: String,
     pub config: Config,
     pub max_sequence_length: usize,
 }
@@ -244,15 +245,16 @@ impl Module<1, 1> for Gemma3Model {
     }
 
     fn def(&self, builder: &Builder, [x]: [Var; 1]) -> [Var; 1] {
-        let root = self.path();
+        let mut root = self.path();
+        if !self.root.is_empty() {
+            root = root
+                .extend(self.root.split('.').collect::<Vec<&str>>())
+                .unwrap();
+        }
 
         let mut cache = Cache::init(builder, &self.config, self.max_sequence_length);
 
-        let mut x = embeddings(
-            builder,
-            root.extend(vec!["model", "embed_tokens"]).unwrap(),
-            x,
-        );
+        let mut x = embeddings(builder, root.extend(vec!["embed_tokens"]).unwrap(), x);
 
         let sh = shape(builder, x.clone());
         let normalizer = constant(builder, f32::sqrt(self.config.hidden_size as f32), &sh);
@@ -265,7 +267,7 @@ impl Module<1, 1> for Gemma3Model {
                 i,
                 &mut cache,
                 0,
-                root.extend(["model", "layers", &i.to_string()]).unwrap(),
+                root.extend(["layers", &i.to_string()]).unwrap(),
                 x,
             );
         }
@@ -273,7 +275,7 @@ impl Module<1, 1> for Gemma3Model {
         x = self.rmsnorm::<3>(
             builder,
             self.config.rms_norm_eps,
-            root.extend(["model", "norm"]).unwrap(),
+            root.extend(["norm"]).unwrap(),
             x,
         );
 
@@ -281,7 +283,7 @@ impl Module<1, 1> for Gemma3Model {
             builder,
             self.config.hidden_size,
             self.config.vocab_size,
-            root.extend(["model", "embed_tokens"]).unwrap(),
+            root.extend(["embed_tokens"]).unwrap(),
             x,
         );
 
