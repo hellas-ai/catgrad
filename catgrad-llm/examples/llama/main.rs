@@ -47,6 +47,13 @@ struct Args {
     /// Load model from a previously dumped JSON graph
     #[arg(long)]
     load: Option<PathBuf>,
+    /// Benchmark
+    #[arg(
+        long,
+        num_args = 2,
+        value_names = ["PP", "TG"]
+    )]
+    bench: Option<Vec<usize>>,
 }
 
 #[derive(Copy, Clone, Debug, ValueEnum)]
@@ -76,7 +83,21 @@ fn run_with_backend<B: interpreter::Backend>(args: &Args, backend: B) -> Result<
     let chat_template =
         get_model_chat_template(&args.model_name, &args.revision).unwrap_or_default();
 
-    let prompt = if chat_template.is_empty() || args.raw {
+    let benchmarking = args.bench.is_some();
+    let mut pp = 0;
+    let mut tg = 0;
+    let mut max_seq_len = args.max_seq_len;
+
+    let prompt = if let Some(bench) = &args.bench {
+        pp = bench[0];
+        tg = bench[1];
+        max_seq_len = tg;
+        println!(
+            "Benchmarking {} with prefill size {} and sequence length {}",
+            args.model_name, pp, tg
+        );
+        "The".repeat(pp)
+    } else if chat_template.is_empty() || args.raw {
         args.prompt.clone()
     } else {
         let mut env = Environment::new();
@@ -95,7 +116,7 @@ fn run_with_backend<B: interpreter::Backend>(args: &Args, backend: B) -> Result<
 
     let mut token_ids = encoding.get_ids().to_vec();
 
-    let max_sequence_length = args.max_seq_len + token_ids.len();
+    let max_sequence_length = max_seq_len + token_ids.len();
     let model = get_model(&config, max_sequence_length)?;
 
     let typed_term = if let Some(load_path) = &args.load {
@@ -127,29 +148,52 @@ fn run_with_backend<B: interpreter::Backend>(args: &Args, backend: B) -> Result<
             .map_err(|err| anyhow::anyhow!("check error {:?}", err))?;
     }
 
-    print!("{}", prompt);
-    let start_gen = std::time::Instant::now();
+    let mut generated_tokens = 0;
+    if !benchmarking {
+        print!("{}", prompt);
+    }
+    let mut start_gen = std::time::Instant::now();
+    let mut elapsed_pp = std::time::Duration::ZERO;
     let interpreter = interpreter::Interpreter::new(backend, env, parameter_values);
     // Run interpreter
-    for _ in 0..args.max_seq_len {
+    for i in 0..max_seq_len {
         let next_token_id = run_interpreter(&typed_term, &interpreter, &token_ids)?;
-        if config.get_eos_token_ids().contains(&(next_token_id as i32)) {
+        if i == 0 {
+            elapsed_pp = start_gen.elapsed();
+            start_gen = std::time::Instant::now();
+        }
+        generated_tokens += 1;
+        if config.get_eos_token_ids().contains(&(next_token_id as i32)) && !benchmarking {
             break;
         }
-        let decoded_token = tokenizer.decode(&[next_token_id], false).unwrap();
         token_ids.push(next_token_id);
-        print!("{}", decoded_token);
-        std::io::stdout().flush()?;
+        if !benchmarking {
+            let decoded_token = tokenizer.decode(&[next_token_id], false).unwrap();
+            print!("{}", decoded_token);
+            std::io::stdout().flush()?;
+        }
     }
 
     let elapsed_gen = start_gen.elapsed();
-    let generated_tokens = args.max_seq_len;
     println!(
         "\n{} tokens generated in {} seconds. ({:.2} tps)",
         generated_tokens,
-        elapsed_gen.as_secs(),
-        generated_tokens as f64 / elapsed_gen.as_secs_f64(),
+        (elapsed_pp + elapsed_gen).as_secs(),
+        generated_tokens as f64 / (elapsed_pp + elapsed_gen).as_secs_f64(),
     );
+
+    if benchmarking {
+        println!(
+            "PP {pp} in {} ms {:.2} tps",
+            elapsed_pp.as_millis(),
+            pp as f64 / elapsed_pp.as_secs_f64()
+        );
+        println!(
+            "TG {tg} in {} ms {:.2} tps",
+            elapsed_gen.as_millis(),
+            tg as f64 / elapsed_gen.as_secs_f64()
+        );
+    }
     Ok(())
 }
 
