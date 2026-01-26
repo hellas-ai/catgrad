@@ -77,7 +77,7 @@ fn main() -> Result<()> {
 }
 
 fn run_with_backend<B: interpreter::Backend>(args: &Args, backend: B) -> Result<()> {
-    let (parameter_values, parameter_types, config, tokenizer) =
+    let (parameter_values, parameter_types, config, tokenizer, total_params) =
         load_model(&args.model_name, &args.revision, &backend)?;
 
     let chat_template =
@@ -175,23 +175,49 @@ fn run_with_backend<B: interpreter::Backend>(args: &Args, backend: B) -> Result<
     }
 
     let elapsed_gen = start_gen.elapsed();
-    println!(
-        "\n{} tokens generated in {} seconds. ({:.2} tps)",
-        generated_tokens,
-        (elapsed_pp + elapsed_gen).as_secs(),
-        generated_tokens as f64 / (elapsed_pp + elapsed_gen).as_secs_f64(),
-    );
-
     if benchmarking {
+        // hardcode size multiplier as 4.0 since we only load in F32
+        let size_gib = (total_params as f64 * 4.0) / (1024.0 * 1024.0 * 1024.0);
+        let params_m = total_params as f64 / 1_000_000.0;
+        let b_str = match args.backend {
+            BackendChoice::Ndarray => "Ndarray",
+            BackendChoice::Candle => "Candle",
+        };
+
         println!(
-            "PP {pp} in {} ms {:.2} tps",
-            elapsed_pp.as_millis(),
-            pp as f64 / elapsed_pp.as_secs_f64()
+            "| model                                    | size       | params     | backend    |            test |                  t/s |"
         );
         println!(
-            "TG {tg} in {} ms {:.2} tps",
-            elapsed_gen.as_millis(),
-            tg as f64 / elapsed_gen.as_secs_f64()
+            "| ---------------------------------------- | ---------- | ---------- | ---------- | --------------- | -------------------- |"
+        );
+
+        let tps_pp = pp as f64 / elapsed_pp.as_secs_f64();
+        println!(
+            "| {:<40} | {:>6.2} GiB | {:>8.2} M | {:<10} | {:>15} | {:>20.2} |",
+            args.model_name,
+            size_gib,
+            params_m,
+            b_str,
+            format!("pp{}", pp),
+            tps_pp
+        );
+
+        let tps_tg = tg as f64 / elapsed_gen.as_secs_f64();
+        println!(
+            "| {:<40} | {:>6.2} GiB | {:>8.2} M | {:<10} | {:>15} | {:>20.2} |",
+            args.model_name,
+            size_gib,
+            params_m,
+            b_str,
+            format!("tg{}", tg),
+            tps_tg
+        );
+    } else {
+        println!(
+            "\n{} tokens generated in {} seconds. ({:.2} tps)",
+            generated_tokens,
+            (elapsed_pp + elapsed_gen).as_secs(),
+            generated_tokens as f64 / (elapsed_pp + elapsed_gen).as_secs_f64(),
         );
     }
     Ok(())

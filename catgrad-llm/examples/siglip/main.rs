@@ -525,7 +525,7 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
         .map_err(|e| format!("Failed to load tokenizer: {e}"))?;
 
     let backend = CandleBackend::new();
-    let (parameters, _) = load_model_weights(model_paths, &backend)?;
+    let (parameters, _, _) = load_model_weights(model_paths, &backend)?;
     println!("SigLIP model {} loaded successfully.", args.model_name);
 
     let (image_data, image_shape) = load_and_preprocess_image(
