@@ -36,7 +36,7 @@ struct Args {
     #[arg(short = 't', long)]
     typecheck: bool,
     /// Backend to use
-    #[arg(short = 'b', long, value_enum, default_value_t = BackendChoice::Ndarray)]
+    #[arg(short = 'b', long, value_enum, default_value_t = BackendChoice::Candle)]
     backend: BackendChoice,
     /// Enable Candle backend acceleration
     #[arg(short = 'a', long)]
