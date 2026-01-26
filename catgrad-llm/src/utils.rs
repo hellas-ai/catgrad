@@ -338,10 +338,11 @@ pub fn post_process_weights<B: interpreter::Backend>(
 pub fn load_model_weights<B: interpreter::Backend>(
     model_paths: Vec<PathBuf>,
     backend: &B,
-) -> Result<(interpreter::Parameters<B>, typecheck::Parameters)> {
+) -> Result<(interpreter::Parameters<B>, typecheck::Parameters, usize)> {
     // Read each tensor
     let mut type_map = HashMap::new();
     let mut data_map = HashMap::new();
+    let mut total_params = 0;
 
     for file_path in model_paths {
         let file = std::fs::File::open(file_path)?;
@@ -367,6 +368,7 @@ pub fn load_model_weights<B: interpreter::Backend>(
                     panic!("Unsupported dtype: {:?}", view.dtype());
                 }
             };
+            total_params += data.len();
 
             let tensor = interpreter::tensor(backend, interpreter::Shape(shape.clone()), data)
                 .expect("failed to create tensor");
@@ -385,7 +387,7 @@ pub fn load_model_weights<B: interpreter::Backend>(
     let parameter_values = interpreter::Parameters::from(data_map);
     let parameter_types = typecheck::Parameters::from(type_map);
 
-    Ok((parameter_values, parameter_types))
+    Ok((parameter_values, parameter_types, total_params))
 }
 
 pub fn load_model<B: interpreter::Backend>(
@@ -397,6 +399,7 @@ pub fn load_model<B: interpreter::Backend>(
     typecheck::Parameters,
     Config,
     Tokenizer,
+    usize,
 )> {
     let (model_paths, config_path, tokenizer_path, _) = get_model_files(model_name, revision)?;
     let config: Config = serde_json::from_str(&std::fs::read_to_string(config_path)?)?;
@@ -406,7 +409,8 @@ pub fn load_model<B: interpreter::Backend>(
     let start_load = std::time::Instant::now();
     let elapsed_load = start_load.elapsed();
 
-    let (mut parameter_values, mut parameter_types) = load_model_weights(model_paths, backend)?;
+    let (mut parameter_values, mut parameter_types, total_params) =
+        load_model_weights(model_paths, backend)?;
 
     log::info!(
         "Model weights loaded for {} in {:.2} seconds",
@@ -421,5 +425,11 @@ pub fn load_model<B: interpreter::Backend>(
         &mut parameter_types,
     )?;
 
-    Ok((parameter_values, parameter_types, config, tokenizer))
+    Ok((
+        parameter_values,
+        parameter_types,
+        config,
+        tokenizer,
+        total_params,
+    ))
 }
