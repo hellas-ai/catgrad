@@ -1,4 +1,4 @@
-use crate::config::{Config, Llama3RopeScaling, RopeScaling, YarnRopeScaling};
+use crate::config::{LLMConfig, Llama3RopeScaling, RopeScaling, YarnRopeScaling};
 use catgrad::prelude::ops::*;
 use catgrad::prelude::*;
 use catgrad::stdlib::nn::*;
@@ -30,27 +30,28 @@ pub struct Cache {
 }
 
 impl Cache {
-    pub fn init(builder: &Builder, config: &Config, positions: usize) -> Self {
-        let (cos, sin) = match &config.rope_scaling {
+    pub fn init(builder: &Builder, config: &dyn LLMConfig, positions: usize) -> Self {
+        let (cos, sin) = match config.rope_scaling() {
             Some(RopeScaling::Yarn(params)) => rope_tables_yarn(
                 builder,
-                config.rope_theta,
-                params,
+                config.rope_theta(),
+                &params,
                 positions,
                 config.get_head_dim(),
             ),
             Some(RopeScaling::Llama3(params)) => rope_tables_llama3(
                 builder,
-                config.rope_theta,
-                params,
+                config.rope_theta(),
+                &params,
                 positions,
                 config.get_head_dim(),
             ),
             _ => rope_tables(
                 builder,
-                config.rope_theta,
+                config.rope_theta(),
                 positions.to_nat(builder),
-                ((config.get_head_dim() as f32) * config.partial_rotary_factor) as usize,
+                ((config.get_head_dim() as f32) * config.partial_rotary_factor()) as usize,
+                1.0,
             ),
         };
 
@@ -177,7 +178,13 @@ pub fn repeat_kv(builder: &Builder, rep: usize, x: Var) -> Var {
 }
 
 // Generate rope tables. This part is usually precomputed
-pub fn rope_tables(builder: &Builder, theta: f32, seq_len: Var, head_dim: usize) -> (Var, Var) {
+pub fn rope_tables(
+    builder: &Builder,
+    theta: f32,
+    seq_len: Var,
+    head_dim: usize,
+    factor: f32,
+) -> (Var, Var) {
     let half_dim = head_dim / 2;
 
     let f = arange(builder, half_dim);
@@ -190,7 +197,10 @@ pub fn rope_tables(builder: &Builder, theta: f32, seq_len: Var, head_dim: usize)
     let inv_freq = inverse(builder, freq);
 
     let sh = shape!(builder, seq_len, half_dim);
-    let inv_freq = broadcast(builder, inv_freq, sh);
+    let inv_freq = broadcast(builder, inv_freq, sh.clone());
+
+    let factor = constant(builder, factor, &sh);
+    let inv_freq = inv_freq / factor;
 
     let pos = arange(builder, seq_len.clone());
     let pos = cast(builder, pos, Dtype::F32);
@@ -443,11 +453,12 @@ pub fn rope(
     pos: impl IntoNatVar,
     seq_len: &impl IntoNatVar,
     head_dim: usize,
+    factor: f32,
     x: Var,
 ) -> Var {
     let pos = pos.to_nat(builder);
     let seq_len = seq_len.to_nat(builder);
-    let (cos, sin) = rope_tables(builder, theta, pos.clone() + seq_len, head_dim);
+    let (cos, sin) = rope_tables(builder, theta, pos.clone() + seq_len, head_dim, factor);
 
     apply_rope_embedding(builder, pos, head_dim, cos, sin, x)
 }

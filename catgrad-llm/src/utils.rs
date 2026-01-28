@@ -8,7 +8,8 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use tokenizers::tokenizer::Tokenizer;
 
-use crate::config::Config;
+use crate::config::{Config, LLMConfig};
+use crate::models::gemma3::{Gemma3Model, GemmaConfig, GemmaTextConfig};
 use crate::models::*;
 use crate::{LLMError, Result};
 
@@ -183,40 +184,90 @@ pub fn get_model_chat_template(model: &str, revision: &str) -> Result<String> {
     }
 }
 
-pub fn get_model(config: &Config, max_sequence_length: usize) -> Result<Box<dyn Module<1, 1>>> {
-    let arch = config.architectures[0].as_str();
+pub fn parse_config(config_json: &serde_json::Value) -> Result<Box<dyn LLMConfig>> {
+    let arch = config_json["architectures"][0]
+        .as_str()
+        .ok_or(LLMError::InvalidModelConfig(
+            "Missing architectures field".to_string(),
+        ))?;
+
     match arch {
+        "Gemma2ForCausalLM" | "Gemma3ForCausalLM" => {
+            let config: GemmaTextConfig = serde_json::from_value(config_json.clone())?;
+            Ok(Box::new(config))
+        }
+        "Gemma3ForConditionalGeneration" => {
+            let config: GemmaConfig = serde_json::from_value(config_json.clone())?;
+            match config {
+                GemmaConfig::Text(config) => Ok(Box::new(config)),
+                GemmaConfig::VLM { text_config, .. } => Ok(Box::new(text_config)),
+            }
+        }
+        _ => {
+            let config: Config = serde_json::from_value(config_json.clone())?;
+            Ok(Box::new(config))
+        }
+    }
+}
+
+pub fn get_model(
+    config_json: &serde_json::Value,
+    max_sequence_length: usize,
+) -> Result<Box<dyn Module<1, 1>>> {
+    let arch = config_json["architectures"][0]
+        .as_str()
+        .ok_or(LLMError::InvalidModelConfig(
+            "Missing architectures field".to_string(),
+        ))?;
+
+    let config: Config = serde_json::from_value(config_json.clone())?;
+
+    match arch {
+        "Gemma2ForCausalLM" | "Gemma3ForCausalLM" => {
+            let config: GemmaTextConfig = serde_json::from_value(config_json.clone())?;
+            Ok(Box::new(Gemma3Model {
+                root: "model".to_string(),
+                config,
+                max_sequence_length,
+            }))
+        }
+        "Gemma3ForConditionalGeneration" => {
+            let GemmaConfig::VLM { text_config, .. } = serde_json::from_value(config_json.clone())?
+            else {
+                unreachable!()
+            };
+            Ok(Box::new(Gemma3Model {
+                root: "language_model.model".to_string(),
+                config: text_config,
+                max_sequence_length,
+            }))
+        }
         "LlamaForCausalLM" => Ok(Box::new(llama::LlamaModel {
-            config: config.clone(),
+            config,
             max_sequence_length,
         })),
         "Phi3ForCausalLM" | "Phi4MMForCausalLM" => Ok(Box::new(phi3::Phi3Model {
-            config: config.clone(),
+            config,
             max_sequence_length,
         })),
         "Olmo2ForCausalLM" | "Olmo3ForCausalLM" => Ok(Box::new(olmo::OlmoModel {
-            config: config.clone(),
-            max_sequence_length,
-        })),
-        "Gemma3ForCausalLM" => Ok(Box::new(gemma3::Gemma3Model {
-            root: "model".to_string(),
-            config: config.clone(),
+            config,
             max_sequence_length,
         })),
         "Qwen3ForCausalLM" | "Qwen3MoeForCausalLM" => Ok(Box::new(qwen3::Qwen3Model {
-            config: config.clone(),
+            config,
             max_sequence_length,
         })),
         "GraniteForCausalLM" | "GraniteMoeForCausalLM" => Ok(Box::new(granite::GraniteModel {
-            config: config.clone(),
+            config,
             max_sequence_length,
         })),
         "DeepseekV3ForCausalLM" => Ok(Box::new(deepseek::DeepSeekModel {
-            config: config.clone(),
+            config,
             max_sequence_length,
         })),
         "GPT2LMHeadModel" => Ok(Box::new(gpt2::GPT2Model {
-            config: config.clone(),
+            config,
             max_sequence_length,
         })),
         _ => Err(LLMError::UnsupportedModel(arch.to_string())),
@@ -230,7 +281,7 @@ use catgrad::typecheck;
 // Concatenates MoE expert weights from separate tensors into single tensors per layer
 // to avoid the need for dynamic parameter names
 fn concat_moe_experts<B: interpreter::Backend>(
-    config: &Config,
+    config: &dyn LLMConfig,
     backend: &B,
     parameter_values: &mut interpreter::Parameters<B>,
     parameter_types: &mut typecheck::Parameters,
@@ -239,13 +290,13 @@ fn concat_moe_experts<B: interpreter::Backend>(
 
     let proj_names = ["down_proj", "gate_proj", "up_proj"];
 
-    for layer_idx in 0..config.num_hidden_layers {
+    for layer_idx in 0..config.num_hidden_layers() {
         for proj_name in &proj_names {
             // Collect all expert tensors for this layer and projection
             let mut expert_tensors = Vec::new();
             let mut expert_keys = Vec::new();
 
-            for expert_idx in 0..config.num_local_experts {
+            for expert_idx in 0..config.num_local_experts() {
                 let key_str = format!(
                     "model.layers.{}.mlp.experts.{}.{}.weight",
                     layer_idx, expert_idx, proj_name
@@ -263,10 +314,10 @@ fn concat_moe_experts<B: interpreter::Backend>(
                 continue;
             }
 
-            if expert_tensors.len() != config.num_local_experts {
+            if expert_tensors.len() != config.num_local_experts() {
                 return Err(LLMError::InvalidModelConfig(format!(
                     "Expected {} experts for layer {} {}, found {}",
-                    config.num_local_experts,
+                    config.num_local_experts(),
                     layer_idx,
                     proj_name,
                     expert_tensors.len()
@@ -276,7 +327,7 @@ fn concat_moe_experts<B: interpreter::Backend>(
             let original_shape = expert_tensors[0].shape();
             let original_dims = original_shape.0.clone();
 
-            let mut new_shape_dims = vec![config.num_local_experts];
+            let mut new_shape_dims = vec![config.num_local_experts()];
             new_shape_dims.extend(original_dims.clone());
 
             let mut reshaped_tensors = Vec::new();
@@ -323,12 +374,12 @@ fn concat_moe_experts<B: interpreter::Backend>(
 }
 
 pub fn post_process_weights<B: interpreter::Backend>(
-    config: &Config,
+    config: &dyn LLMConfig,
     backend: &B,
     parameter_values: &mut interpreter::Parameters<B>,
     parameter_types: &mut typecheck::Parameters,
 ) -> Result<()> {
-    if config.num_local_experts == 0 {
+    if config.num_local_experts() == 0 {
         return Ok(());
     }
 
@@ -397,12 +448,13 @@ pub fn load_model<B: interpreter::Backend>(
 ) -> Result<(
     interpreter::Parameters<B>,
     typecheck::Parameters,
-    Config,
+    serde_json::Value,
     Tokenizer,
     usize,
 )> {
     let (model_paths, config_path, tokenizer_path, _) = get_model_files(model_name, revision)?;
-    let config: Config = serde_json::from_str(&std::fs::read_to_string(config_path)?)?;
+    let config_json: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(config_path)?)?;
     let tokenizer = Tokenizer::from_file(tokenizer_path)
         .map_err(|err| LLMError::TokenizerError(format!("tokenizer load error {:?}", err)))?;
 
@@ -418,8 +470,10 @@ pub fn load_model<B: interpreter::Backend>(
         elapsed_load.as_secs_f64()
     );
 
+    let config = parse_config(&config_json)?;
+
     post_process_weights(
-        &config,
+        config.as_ref(),
         backend,
         &mut parameter_values,
         &mut parameter_types,
@@ -428,7 +482,7 @@ pub fn load_model<B: interpreter::Backend>(
     Ok((
         parameter_values,
         parameter_types,
-        config,
+        config_json,
         tokenizer,
         total_params,
     ))

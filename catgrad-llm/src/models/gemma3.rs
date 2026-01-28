@@ -1,16 +1,159 @@
-use crate::config::Config;
+use crate::config::{EosTokenId, LLMConfig, RopeScaling};
 use crate::helpers::*;
 use catgrad::prelude::ops::*;
 use catgrad::prelude::*;
-use nn::*;
+use catgrad::stdlib::nn::*;
+use serde::Deserialize;
+
+#[derive(Debug, Clone, Deserialize)]
+pub enum GemmaConfig {
+    #[serde(untagged)]
+    VLM {
+        text_config: GemmaTextConfig,
+        image_token_index: usize,
+        mm_tokens_per_image: usize,
+    },
+    #[serde(untagged)]
+    Text(GemmaTextConfig),
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct LinearRopeScaling {
+    pub factor: f32,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct GemmaTextConfig {
+    pub model_type: String,
+    pub hidden_size: usize,
+    pub intermediate_size: usize,
+    pub num_hidden_layers: usize,
+
+    #[serde(default = "default_num_attention_heads")]
+    pub num_attention_heads: usize,
+    #[serde(default = "default_num_key_value_heads")]
+    pub num_key_value_heads: usize,
+    #[serde(default = "default_head_dim")]
+    pub head_dim: usize,
+    #[serde(default = "default_vocab_size")]
+    pub vocab_size: usize,
+    #[serde(default = "default_rms_norm_eps")]
+    pub rms_norm_eps: f32,
+    #[serde(default = "default_rope_theta")]
+    pub rope_theta: f32,
+    #[serde(default = "default_sliding_window_pattern")]
+    #[serde(alias = "_sliding_window_pattern")]
+    pub sliding_window_pattern: usize,
+    #[serde(default = "default_rope_local_base_freq")]
+    pub rope_local_base_freq: f32,
+
+    #[serde(default = "default_query_pre_attn_scalar")]
+    pub query_pre_attn_scalar: usize,
+    #[serde(default)]
+    pub attn_logit_softcapping: Option<f32>,
+    #[serde(default)]
+    pub final_logit_softcapping: Option<f32>,
+    #[serde(default = "default_max_position_embeddings")]
+    pub max_position_embeddings: usize,
+    #[serde(default)]
+    pub rope_scaling: Option<LinearRopeScaling>,
+    #[serde(default = "default_partial_rotary_factor")]
+    pub partial_rotary_factor: f32,
+    pub eos_token_id: Option<EosTokenId>,
+    #[serde(default)]
+    pub tie_word_embeddings: bool,
+}
+
+fn default_query_pre_attn_scalar() -> usize {
+    256
+}
+
+fn default_sliding_window_pattern() -> usize {
+    6
+}
+
+fn default_max_position_embeddings() -> usize {
+    131072
+}
+
+fn default_rope_local_base_freq() -> f32 {
+    10000.0
+}
+
+fn default_rope_theta() -> f32 {
+    1000000.0
+}
+
+fn default_rms_norm_eps() -> f32 {
+    1e-6
+}
+
+fn default_num_attention_heads() -> usize {
+    8
+}
+
+fn default_num_key_value_heads() -> usize {
+    4
+}
+
+fn default_partial_rotary_factor() -> f32 {
+    1.0
+}
+
+fn default_head_dim() -> usize {
+    256
+}
+fn default_vocab_size() -> usize {
+    262208
+}
+impl LLMConfig for GemmaTextConfig {
+    fn num_hidden_layers(&self) -> usize {
+        self.num_hidden_layers
+    }
+    fn num_key_value_heads(&self) -> usize {
+        self.num_key_value_heads
+    }
+    fn num_local_experts(&self) -> usize {
+        0
+    }
+    fn rope_theta(&self) -> f32 {
+        self.rope_theta
+    }
+    fn rope_scaling(&self) -> Option<RopeScaling> {
+        None
+    }
+    fn partial_rotary_factor(&self) -> f32 {
+        self.partial_rotary_factor
+    }
+
+    fn get_head_dim(&self) -> usize {
+        self.head_dim
+    }
+    fn get_qk_head_dim(&self) -> usize {
+        self.head_dim
+    }
+    fn get_v_head_dim(&self) -> usize {
+        self.head_dim
+    }
+    fn eos_token_id(&self) -> Option<EosTokenId> {
+        self.eos_token_id.clone()
+    }
+}
 
 pub struct Gemma3Model {
     pub root: String,
-    pub config: Config,
+    pub config: GemmaTextConfig,
     pub max_sequence_length: usize,
 }
 
 impl Gemma3Model {
+    fn softcap(&self, builder: &Builder, softcap: f32, x: Var) -> Var {
+        let sh = shape(builder, x.clone());
+        let s = constant(builder, softcap, &sh);
+        let x = x / s.clone();
+        let x = tanh(builder, x);
+        x * s
+    }
     fn mlp(&self, builder: &Builder, p: Path, x: Var) -> Var {
         let gate = linear_no_bias(
             builder,
@@ -83,6 +226,7 @@ impl Gemma3Model {
         let rep = num_heads / num_kv_heads;
         let head_dim = self.config.head_dim;
 
+        let is_gemma3 = self.config.model_type == "gemma3_text";
         let [b, s, _] = unpack::<3>(builder, shape(builder, x.clone()));
 
         let q = linear_no_bias(
@@ -126,40 +270,50 @@ impl Gemma3Model {
             b.clone() * s.clone() * num_heads.to_nat(builder),
             head_dim
         );
-        let q = reshape(builder, sh, q);
+        let mut q = reshape(builder, sh, q);
         let sh = shape!(
             builder,
             b.clone() * s.clone() * num_kv_heads.to_nat(builder),
             head_dim
         );
-        let k = reshape(builder, sh, k);
+        let mut k = reshape(builder, sh, k);
 
-        let q = self.rmsnorm::<2>(
-            builder,
-            self.config.rms_norm_eps,
-            p.extend(["q_norm"]).unwrap(),
-            q,
-        );
-        let k = self.rmsnorm::<2>(
-            builder,
-            self.config.rms_norm_eps,
-            p.extend(["k_norm"]).unwrap(),
-            k,
-        );
+        if is_gemma3 {
+            q = self.rmsnorm::<2>(
+                builder,
+                self.config.rms_norm_eps,
+                p.extend(["q_norm"]).unwrap(),
+                q,
+            );
+            k = self.rmsnorm::<2>(
+                builder,
+                self.config.rms_norm_eps,
+                p.extend(["k_norm"]).unwrap(),
+                k,
+            );
+        };
 
         let sh = shape!(builder, b, num_heads, s, head_dim);
         let q = reshape(builder, sh, q);
         let sh = shape!(builder, b, num_kv_heads, s, head_dim);
         let k = reshape(builder, sh, k);
 
-        // Every 6th layer uses global attention, otherwise local attention, with different rope frequencies
-        let theta = if !(layer_id + 1).is_multiple_of(self.config.sliding_window_pattern) {
-            self.config.rope_local_base_freq
-        } else {
-            self.config.rope_theta
-        };
-        let q = rope(builder, theta, pos, &s, head_dim, q);
-        let k = rope(builder, theta, pos, &s, head_dim, k);
+        // Every 6th layer of Gemma3 uses global attention, otherwise local attention, with different rope frequencies
+        let theta =
+            if is_gemma3 && !(layer_id + 1).is_multiple_of(self.config.sliding_window_pattern) {
+                self.config.rope_local_base_freq
+            } else {
+                self.config.rope_theta
+            };
+
+        let factor = self
+            .config
+            .rope_scaling
+            .as_ref()
+            .map_or(1.0, |rs| rs.factor);
+
+        let q = rope(builder, theta, pos, &s, head_dim, factor, q);
+        let k = rope(builder, theta, pos, &s, head_dim, factor, k);
 
         let k = repeat_kv(builder, rep, k);
         let v = repeat_kv(builder, rep, v);
@@ -167,9 +321,16 @@ impl Gemma3Model {
         let tk = transpose(builder, 2, 3, k);
         let attn = matmul(builder, q, tk);
         let sh = shape(builder, attn.clone());
-        let denom = constant(builder, f32::sqrt(head_dim as f32), &sh);
+        let denom = constant(
+            builder,
+            f32::sqrt(self.config.query_pre_attn_scalar as f32),
+            &sh,
+        );
         let mut attn = attn / denom;
 
+        if let Some(softcap) = self.config.attn_logit_softcapping {
+            attn = self.softcap(builder, softcap, attn);
+        }
         let mask = causal_mask(builder, s.clone());
         let mask = broadcast(builder, mask, sh);
         attn = attn + mask;
@@ -286,6 +447,10 @@ impl Module<1, 1> for Gemma3Model {
             root.extend(["embed_tokens"]).unwrap(),
             x,
         );
+
+        if let Some(softcap) = self.config.final_logit_softcapping {
+            x = self.softcap(builder, softcap, x);
+        }
 
         x = argmax(builder, x);
         [x]
