@@ -5,8 +5,7 @@ use std::io::Write;
 use anyhow::Result;
 use std::collections::HashMap;
 
-use catgrad_llm::config::Config;
-use catgrad_llm::utils::{get_model, get_model_files};
+use catgrad_llm::utils::{get_model, get_model_files, parse_config};
 use clap::Parser;
 use tokenizers::tokenizer::Tokenizer;
 
@@ -32,7 +31,9 @@ struct Args {
 pub fn main() -> Result<()> {
     let args = Args::parse();
 
-    let (param_values, parameters, config, tokenizer) = load_model(&args.model_name, "main")?;
+    let (param_values, parameters, config_json, tokenizer) = load_model(&args.model_name, "main")?;
+
+    let config = parse_config(&config_json)?;
 
     let encoding = tokenizer
         .encode(args.prompt.clone(), true)
@@ -41,7 +42,7 @@ pub fn main() -> Result<()> {
     let mut token_ids = encoding.get_ids().to_vec();
 
     let max_sequence_length = args.max_seq_len + token_ids.len();
-    let model = get_model(&config, max_sequence_length)?;
+    let model = get_model(&config_json, max_sequence_length)?;
 
     let typed_term = model.term().expect("Failed to create typed term");
 
@@ -102,11 +103,12 @@ fn load_model(
 ) -> Result<(
     HashMap<Path, catgrad_mlir::runtime::MlirValue>,
     typecheck::Parameters,
-    Config,
+    serde_json::Value,
     Tokenizer,
 )> {
     let (model_paths, config_path, tokenizer_path, _) = get_model_files(model_name, revision)?;
-    let config: Config = serde_json::from_str(&std::fs::read_to_string(config_path)?)?;
+    let config_json: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(config_path)?)?;
     let tokenizer = Tokenizer::from_file(tokenizer_path)
         .map_err(|err| anyhow::anyhow!("tokenizer load error {:?}", err))?;
 
@@ -155,7 +157,7 @@ fn load_model(
     Ok((
         data_map,
         typecheck::Parameters::from(type_map),
-        config,
+        config_json,
         tokenizer,
     ))
 }
