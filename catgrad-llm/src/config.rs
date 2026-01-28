@@ -39,6 +39,27 @@ pub enum RopeScaling {
     Yarn(YarnRopeScaling),
 }
 
+pub trait LLMConfig {
+    fn num_hidden_layers(&self) -> usize;
+    fn num_key_value_heads(&self) -> usize;
+    fn num_local_experts(&self) -> usize;
+    fn rope_theta(&self) -> f32;
+    fn rope_scaling(&self) -> Option<RopeScaling>;
+    fn partial_rotary_factor(&self) -> f32;
+
+    fn get_head_dim(&self) -> usize;
+    fn get_qk_head_dim(&self) -> usize;
+    fn get_v_head_dim(&self) -> usize;
+    fn eos_token_id(&self) -> Option<EosTokenId>;
+    fn get_eos_token_ids(&self) -> Vec<i32> {
+        match self.eos_token_id() {
+            Some(EosTokenId::Single(id)) => vec![id],
+            Some(EosTokenId::Multiple(ref ids)) => ids.clone(),
+            None => vec![],
+        }
+    }
+}
+
 // This configuration contains the union of relevant fields from all supported models.
 // Models ignore fields they don't need. The aliases are for GPT-2 alternative names.
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -104,9 +125,33 @@ fn default_partial_rotary_factor() -> f32 {
     1.0
 }
 
-impl Config {
+impl LLMConfig for Config {
+    fn num_hidden_layers(&self) -> usize {
+        self.num_hidden_layers
+    }
+    fn num_key_value_heads(&self) -> usize {
+        if self.num_key_value_heads == 0 {
+            self.num_attention_heads
+        } else {
+            self.num_key_value_heads
+        }
+    }
+
+    fn num_local_experts(&self) -> usize {
+        self.num_local_experts
+    }
+    fn rope_theta(&self) -> f32 {
+        self.rope_theta
+    }
+    fn rope_scaling(&self) -> Option<RopeScaling> {
+        self.rope_scaling.clone()
+    }
+    fn partial_rotary_factor(&self) -> f32 {
+        self.partial_rotary_factor
+    }
+
     // Sometimes the head_dim fields is missing
-    pub fn get_head_dim(&self) -> usize {
+    fn get_head_dim(&self) -> usize {
         if self.qk_rope_head_dim != 0 {
             self.qk_rope_head_dim
         } else if self.head_dim == 0 {
@@ -117,7 +162,7 @@ impl Config {
     }
 
     // DeepSeek Multihead Latent Attention uses different head dimensions for queries, keys and values
-    pub fn get_qk_head_dim(&self) -> usize {
+    fn get_qk_head_dim(&self) -> usize {
         let qk_head_dim = self.qk_nope_head_dim + self.qk_rope_head_dim;
         if qk_head_dim != 0 {
             qk_head_dim
@@ -126,7 +171,7 @@ impl Config {
         }
     }
 
-    pub fn get_v_head_dim(&self) -> usize {
+    fn get_v_head_dim(&self) -> usize {
         if self.v_head_dim != 0 {
             self.v_head_dim
         } else {
@@ -134,19 +179,7 @@ impl Config {
         }
     }
 
-    pub fn get_num_kv_heads(&self) -> usize {
-        if self.num_key_value_heads == 0 {
-            self.num_attention_heads
-        } else {
-            self.num_key_value_heads
-        }
-    }
-
-    pub fn get_eos_token_ids(&self) -> Vec<i32> {
-        match self.eos_token_id {
-            Some(EosTokenId::Single(id)) => vec![id],
-            Some(EosTokenId::Multiple(ref ids)) => ids.clone(),
-            None => vec![],
-        }
+    fn eos_token_id(&self) -> Option<EosTokenId> {
+        self.eos_token_id.clone()
     }
 }

@@ -9,7 +9,7 @@ use minijinja_contrib::pycompat::unknown_method_callback;
 use std::io::Write;
 use std::path::PathBuf;
 
-use catgrad_llm::utils::{get_model, get_model_chat_template, load_model};
+use catgrad_llm::utils::{get_model, get_model_chat_template, load_model, parse_config};
 
 #[derive(Parser, Debug)]
 struct Args {
@@ -77,8 +77,10 @@ fn main() -> Result<()> {
 }
 
 fn run_with_backend<B: interpreter::Backend>(args: &Args, backend: B) -> Result<()> {
-    let (parameter_values, parameter_types, config, tokenizer, total_params) =
+    let (parameter_values, parameter_types, config_json, tokenizer, total_params) =
         load_model(&args.model_name, &args.revision, &backend)?;
+
+    let config = parse_config(&config_json)?;
 
     let chat_template =
         get_model_chat_template(&args.model_name, &args.revision).unwrap_or_default();
@@ -117,7 +119,7 @@ fn run_with_backend<B: interpreter::Backend>(args: &Args, backend: B) -> Result<
     let mut token_ids = encoding.get_ids().to_vec();
 
     let max_sequence_length = max_seq_len + token_ids.len();
-    let model = get_model(&config, max_sequence_length)?;
+    let model = get_model(&config_json, max_sequence_length)?;
 
     let typed_term = if let Some(load_path) = &args.load {
         let file = std::fs::File::open(load_path)?;
