@@ -242,7 +242,7 @@ pub fn get_model(
                 max_sequence_length,
             }))
         }
-        "LlamaForCausalLM" => Ok(Box::new(llama::LlamaModel {
+        "MistralForCausalLM" | "LlamaForCausalLM" => Ok(Box::new(llama::LlamaModel {
             config,
             max_sequence_length,
         })),
