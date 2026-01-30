@@ -11,6 +11,7 @@ pub enum GemmaConfig {
     VLM {
         text_config: GemmaTextConfig,
         image_token_index: usize,
+        #[serde(default)]
         mm_tokens_per_image: usize,
     },
     #[serde(untagged)]

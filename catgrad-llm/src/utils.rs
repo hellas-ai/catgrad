@@ -243,6 +243,7 @@ pub fn get_model(
             ))
         }
         "MistralForCausalLM" | "LlamaForCausalLM" => Box::new(llama::LlamaModel {
+            root: "".to_string(),
             config: config.clone(),
             max_sequence_length,
         }),
