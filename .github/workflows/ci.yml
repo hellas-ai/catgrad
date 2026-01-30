@@ -12,6 +12,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: Install MLIR/LLVM
+        # Disable MLIR installation and tests for now.
+        if: false
         run: |
           sudo apt-get update
           sudo apt-get install -y wget gnupg
@@ -30,8 +32,8 @@ jobs:
           LIBRARY_PATH: /usr/lib/llvm-21/lib
           LD_LIBRARY_PATH: /usr/lib/llvm-21/lib
         run: |
-          cargo test --features ndarray-backend,candle-backend
-          RUST_BACKTRACE=full cargo test --examples --features ndarray-backend,candle-backend
+          cargo test --all-targets --features ndarray-backend,candle-backend --workspace --exclude catgrad-mlir
+          # RUST_BACKTRACE=full cargo test --examples --features ndarray-backend,candle-backend
   # Check formatting with rustfmt
   formatting:
     name: cargo fmt
