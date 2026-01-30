@@ -5,7 +5,7 @@ use std::io::Write;
 use anyhow::Result;
 use std::collections::HashMap;
 
-use catgrad_llm::utils::{get_model, get_model_files, parse_config};
+use catgrad_llm::utils::{get_model, get_model_files};
 use clap::Parser;
 use tokenizers::tokenizer::Tokenizer;
 
@@ -33,8 +33,6 @@ pub fn main() -> Result<()> {
 
     let (param_values, parameters, config_json, tokenizer) = load_model(&args.model_name, "main")?;
 
-    let config = parse_config(&config_json)?;
-
     let encoding = tokenizer
         .encode(args.prompt.clone(), true)
         .map_err(|err| anyhow::anyhow!("tokenizer error {:?}", err))?;
@@ -42,7 +40,7 @@ pub fn main() -> Result<()> {
     let mut token_ids = encoding.get_ids().to_vec();
 
     let max_sequence_length = args.max_seq_len + token_ids.len();
-    let model = get_model(&config_json, max_sequence_length)?;
+    let (model, config) = get_model(&config_json, max_sequence_length)?;
 
     let typed_term = model.term().expect("Failed to create typed term");
 
