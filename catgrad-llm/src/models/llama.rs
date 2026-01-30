@@ -4,6 +4,7 @@ use catgrad::prelude::ops::*;
 use catgrad::prelude::*;
 use nn::*;
 pub struct LlamaModel {
+    pub root: String,
     pub config: Config,
     pub max_sequence_length: usize,
 }
@@ -65,8 +66,8 @@ impl LlamaModel {
 
         let sh = shape!(builder, b, s, num_kv_heads, head_dim);
         let k = reshape(builder, sh.clone(), k);
-
         let v = reshape(builder, sh, v);
+
         let sh = shape!(builder, b, s, num_heads, head_dim);
         let q = reshape(builder, sh, q);
 
@@ -157,7 +158,12 @@ impl Module<1, 1> for LlamaModel {
     }
 
     fn def(&self, builder: &Builder, [x]: [Var; 1]) -> [Var; 1] {
-        let root = self.path();
+        let mut root = self.path();
+        if !self.root.is_empty() {
+            root = root
+                .extend(self.root.split('.').collect::<Vec<&str>>())
+                .unwrap();
+        }
 
         let mut cache = Cache::init(builder, &self.config, self.max_sequence_length);
 
