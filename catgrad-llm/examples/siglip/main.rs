@@ -575,10 +575,7 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let interp = Interpreter::new(backend, env, parameters);
 
-    let results = interp.eval(
-        interp.environment.to_core(typed_term.term),
-        vec![input_tensor, image_tensor],
-    )?;
+    let results = interp.run(typed_term.term, vec![input_tensor, image_tensor])?;
     let result_tensor = match &results[1] {
         interpreter::Value::Tensor(t) => t,
         _ => panic!("Expected tensor output"),
