@@ -269,25 +269,27 @@ impl Gemma3Model {
         let k = reshape(builder, sh.clone(), k);
         let v = reshape(builder, sh, v);
 
-        let q = transpose(builder, 1, 2, q);
-        let k = transpose(builder, 1, 2, k);
+        let mut q = transpose(builder, 1, 2, q);
+        let mut k = transpose(builder, 1, 2, k);
         let v = transpose(builder, 1, 2, v);
 
         // Norm
-        let sh = shape!(
-            builder,
-            b.clone() * s.clone() * num_heads.to_nat(builder),
-            head_dim
-        );
-        let mut q = reshape(builder, sh, q);
-        let sh = shape!(
-            builder,
-            b.clone() * s.clone() * num_kv_heads.to_nat(builder),
-            head_dim
-        );
-        let mut k = reshape(builder, sh, k);
-
         if is_gemma3 {
+            let sh = shape!(
+                builder,
+                b.clone() * s.clone() * num_heads.to_nat(builder),
+                head_dim
+            );
+            q = reshape(builder, sh, q);
+
+            let sh = shape!(
+                builder,
+                b.clone() * s.clone() * num_kv_heads.to_nat(builder),
+                head_dim
+            );
+
+            k = reshape(builder, sh, k);
+
             q = rmsnorm_gemma::<2>(
                 builder,
                 self.config.rms_norm_eps,

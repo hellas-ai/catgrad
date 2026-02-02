@@ -75,9 +75,6 @@ impl LlamaModel {
         let k = transpose(builder, 1, 2, k);
         let v = transpose(builder, 1, 2, v);
 
-        let k = repeat_kv(builder, rep, k);
-        let v = repeat_kv(builder, rep, v);
-
         let q = apply_rope_embedding(
             builder,
             pos,
@@ -94,6 +91,9 @@ impl LlamaModel {
             cache.sin.clone(),
             k,
         );
+
+        let k = repeat_kv(builder, rep, k);
+        let v = repeat_kv(builder, rep, v);
 
         let tk = transpose(builder, 2, 3, k);
         let attn = matmul(builder, q, tk);
