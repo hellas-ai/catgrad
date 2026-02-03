@@ -216,9 +216,6 @@ impl Qwen3Model {
         let sh = shape!(builder, b, num_kv_heads, s, head_dim);
         let k = reshape(builder, sh, k);
 
-        let k = repeat_kv(builder, rep, k);
-        let v = repeat_kv(builder, rep, v);
-
         let q = apply_rope_embedding(
             builder,
             pos,
@@ -235,6 +232,9 @@ impl Qwen3Model {
             cache.sin.clone(),
             k,
         );
+
+        let k = repeat_kv(builder, rep, k);
+        let v = repeat_kv(builder, rep, v);
 
         let tk = transpose(builder, 2, 3, k);
         let attn = matmul(builder, q, tk);
