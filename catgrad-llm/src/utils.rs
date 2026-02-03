@@ -253,22 +253,24 @@ pub fn get_model(
     let model: Box<dyn Module<1, 1>> = match arch {
         "Gemma2ForCausalLM" | "Gemma3ForCausalLM" => {
             let config: GemmaTextConfig = serde_json::from_value(config_json.clone())?;
-            Box::new(Gemma3Model {
+            let model = Box::new(Gemma3Model {
                 root: "model".to_string(),
-                config,
+                config: config.clone(),
                 max_sequence_length,
-            })
+            });
+            return Ok((model, Box::new(config)));
         }
         "Gemma3ForConditionalGeneration" => {
             let GemmaConfig::VLM { text_config, .. } = serde_json::from_value(config_json.clone())?
             else {
                 unreachable!()
             };
-            Box::new(Gemma3Model::new(
+            let model = Box::new(Gemma3Model::new(
                 "language_model.model",
-                text_config,
+                text_config.clone(),
                 max_sequence_length,
-            ))
+            ));
+            return Ok((model, Box::new(text_config)));
         }
         "MistralForCausalLM" | "LlamaForCausalLM" => Box::new(llama::LlamaModel {
             root: "".to_string(),
