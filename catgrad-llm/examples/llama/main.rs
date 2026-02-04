@@ -2,14 +2,11 @@ use anyhow::Result;
 use catgrad::interpreter::backend::candle::CandleBackend;
 use catgrad::interpreter::backend::ndarray::NdArrayBackend;
 use catgrad::prelude::*;
-use chrono::Local;
 use clap::{Parser, ValueEnum};
-use minijinja::{Environment, context};
-use minijinja_contrib::pycompat::unknown_method_callback;
 use std::io::Write;
 use std::path::PathBuf;
 
-use catgrad_llm::utils::{get_model, get_model_chat_template, load_model};
+use catgrad_llm::utils::{get_model, get_model_chat_template, load_model, render_chat_template};
 
 #[derive(Parser, Debug)]
 struct Args {
@@ -62,10 +59,6 @@ enum BackendChoice {
     Candle,
 }
 
-fn strftime_now(format_str: String) -> String {
-    Local::now().format(&format_str).to_string()
-}
-
 /// Construct, shapecheck, and interpret the a given LLM using the selected backend.
 fn main() -> Result<()> {
     env_logger::init();
@@ -100,14 +93,7 @@ fn run_with_backend<B: interpreter::Backend>(args: &Args, backend: B) -> Result<
     } else if chat_template.is_empty() || args.raw {
         args.prompt.clone()
     } else {
-        let mut env = Environment::new();
-        env.set_unknown_method_callback(unknown_method_callback);
-        env.add_function("strftime_now", strftime_now);
-        env.add_template("chat", &chat_template).unwrap();
-        let tmpl = env.get_template("chat").unwrap();
-        tmpl.render(
-            context!(messages => vec![ context!(role => "user",content => args.prompt)], add_generation_prompt => true),
-        )?
+        render_chat_template(&chat_template, &args.prompt, false)?
     };
 
     let encoding = tokenizer

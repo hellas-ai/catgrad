@@ -5,17 +5,16 @@ use catgrad_legacy::{
     },
     core::{Dtype, NdArrayType, Shape, Var},
 };
-use chrono::Local;
 use clap::Parser;
-use minijinja::{Environment, context};
-use minijinja_contrib::pycompat::unknown_method_callback;
 use std::collections::HashMap;
 use std::io::Write;
 use std::path::PathBuf;
 use std::rc::Rc;
 use tokenizers::tokenizer::{Result, Tokenizer};
 
-use catgrad_llm::utils::{get_model_chat_template, get_model_files, read_safetensors_multiple};
+use catgrad_llm::utils::{
+    get_model_chat_template, get_model_files, read_safetensors_multiple, render_chat_template,
+};
 
 use catgrad_llm::legacy::models::utils::{Cache, Config, ModelBuilder, get_model};
 use catgrad_llm::legacy::nn::layers::{argmax, cast, reshape};
@@ -233,7 +232,7 @@ struct Args {
 
     /// Pass raw prompt without chat template
     #[arg(short = 'r', long)]
-    raw_prompt: bool,
+    raw: bool,
 
     /// Number of tokens to generate
     #[arg(short = 's', long, default_value_t = 1)]
@@ -263,10 +262,6 @@ struct Args {
            value_names = ["PP", "TG"]
        )]
     bench: Option<Vec<usize>>,
-}
-
-fn strftime_now(format_str: String) -> String {
-    Local::now().format(&format_str).to_string()
 }
 
 pub fn main() -> Result<()> {
@@ -331,17 +326,10 @@ pub fn main() -> Result<()> {
         let prompt = "The".repeat(pp);
         seq_len = tg;
         prompt
-    } else if chat_template.is_empty() || args.raw_prompt {
+    } else if chat_template.is_empty() || args.raw {
         args.prompt.clone()
     } else {
-        let mut env = Environment::new();
-        env.set_unknown_method_callback(unknown_method_callback);
-        env.add_function("strftime_now", strftime_now);
-        env.add_template("chat", &chat_template).unwrap();
-        let tmpl = env.get_template("chat").unwrap();
-        tmpl.render(
-                context!(messages => vec![ context!(role => "user",content => args.prompt)], add_generation_prompt => true, enable_thinking=>args.thinking)
-            )?
+        render_chat_template(&chat_template, &args.prompt, args.thinking).unwrap()
     };
 
     let encoding = tokenizer.encode(prompt.clone(), true)?;
