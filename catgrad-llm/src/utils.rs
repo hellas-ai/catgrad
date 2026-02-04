@@ -195,6 +195,7 @@ fn strftime_now(format_str: String) -> String {
 pub fn render_chat_template(
     chat_template: &str,
     prompt: &str,
+    has_image: bool,
     enable_thinking: bool,
 ) -> Result<String, minijinja::Error> {
     let mut env = Environment::new();
@@ -202,8 +203,12 @@ pub fn render_chat_template(
     env.add_function("strftime_now", strftime_now);
     env.add_template("chat", chat_template).unwrap();
     let tmpl = env.get_template("chat").unwrap();
+    let mut content = vec![context!(type => "text", text => prompt)];
+    if has_image {
+        content.push(context!(type => "image"));
+    };
     tmpl.render(
-            context!(messages => vec![ context!(role => "user",content => prompt)], add_generation_prompt => true, enable_thinking => enable_thinking)
+            context!(messages => vec![ context!(role => "user",content => content)], add_generation_prompt => true, enable_thinking => enable_thinking)
             )
 }
 

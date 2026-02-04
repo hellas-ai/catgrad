@@ -329,7 +329,7 @@ pub fn main() -> Result<()> {
     } else if chat_template.is_empty() || args.raw {
         args.prompt.clone()
     } else {
-        render_chat_template(&chat_template, &args.prompt, args.thinking).unwrap()
+        render_chat_template(&chat_template, &args.prompt, false, args.thinking).unwrap()
     };
 
     let encoding = tokenizer.encode(prompt.clone(), true)?;

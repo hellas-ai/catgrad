@@ -93,7 +93,7 @@ fn run_with_backend<B: interpreter::Backend>(args: &Args, backend: B) -> Result<
     } else if chat_template.is_empty() || args.raw {
         args.prompt.clone()
     } else {
-        render_chat_template(&chat_template, &args.prompt, false)?
+        render_chat_template(&chat_template, &args.prompt, false, false)?
     };
 
     let encoding = tokenizer
