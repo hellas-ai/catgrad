@@ -310,18 +310,23 @@ impl Gemma3Model {
         let k = reshape(builder, sh, k);
 
         // Every 6th layer of Gemma3 uses global attention, otherwise local attention, with different rope frequencies
-        let theta =
-            if is_gemma3 && !(layer_id + 1).is_multiple_of(self.config.sliding_window_pattern) {
-                self.config.rope_local_base_freq
-            } else {
-                self.config.rope_theta
-            };
+        let is_local_attention =
+            is_gemma3 && !(layer_id + 1).is_multiple_of(self.config.sliding_window_pattern);
 
-        let factor = self
-            .config
-            .rope_scaling
-            .as_ref()
-            .map_or(1.0, |rs| rs.factor);
+        let theta = if is_local_attention {
+            self.config.rope_local_base_freq
+        } else {
+            self.config.rope_theta
+        };
+
+        let factor = if is_local_attention {
+            1.0
+        } else {
+            self.config
+                .rope_scaling
+                .as_ref()
+                .map_or(1.0, |rs| rs.factor)
+        };
 
         let q = rope(builder, theta, pos, &s, head_dim, factor, q);
         let k = rope(builder, theta, pos, &s, head_dim, factor, k);
