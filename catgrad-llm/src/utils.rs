@@ -184,6 +184,29 @@ pub fn get_model_chat_template(model: &str, revision: &str) -> Result<String> {
     }
 }
 
+use chrono::Local;
+use minijinja::{Environment, context};
+use minijinja_contrib::pycompat::unknown_method_callback;
+
+fn strftime_now(format_str: String) -> String {
+    Local::now().format(&format_str).to_string()
+}
+
+pub fn render_chat_template(
+    chat_template: &str,
+    prompt: &str,
+    enable_thinking: bool,
+) -> Result<String, minijinja::Error> {
+    let mut env = Environment::new();
+    env.set_unknown_method_callback(unknown_method_callback);
+    env.add_function("strftime_now", strftime_now);
+    env.add_template("chat", chat_template).unwrap();
+    let tmpl = env.get_template("chat").unwrap();
+    tmpl.render(
+            context!(messages => vec![ context!(role => "user",content => prompt)], add_generation_prompt => true, enable_thinking => enable_thinking)
+            )
+}
+
 pub fn parse_config(config_json: &serde_json::Value) -> Result<Box<dyn LLMConfig>> {
     let arch = config_json["architectures"][0]
         .as_str()
