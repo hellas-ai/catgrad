@@ -6,9 +6,8 @@ use catgrad::prelude::*;
 use catgrad::stdlib::nn::*;
 use catgrad::typecheck::TypeExpr;
 use catgrad_llm::helpers::*;
-use catgrad_llm::utils::{get_model_files, load_model_weights};
+use catgrad_llm::utils::{get_model_files, load_and_preprocess_image, load_model_weights};
 use clap::Parser;
-use image::imageops::FilterType;
 use std::path::PathBuf;
 use tokenizers::Tokenizer;
 
@@ -97,9 +96,7 @@ struct SiglipConfig {
     vision_config: VisionConfig,
 }
 
-struct SiglipVisionBackbone {
-    config: VisionConfig,
-}
+struct SiglipVisionBackbone {}
 
 struct SiglipModel {
     config: SiglipConfig,
@@ -143,6 +140,7 @@ impl SiglipVisionBackbone {
 
         linear(builder, dim, dim, p.extend(["out_proj"]).unwrap(), x)
     }
+
     fn mlp(&self, builder: &Builder, config: &TransformerConfig, p: Path, x: Var) -> Var {
         let x = linear(
             builder,
@@ -186,48 +184,63 @@ impl SiglipVisionBackbone {
     fn vision_embeddings(&self, builder: &Builder, config: &VisionConfig, p: Path, x: Var) -> Var {
         let patch_size = config.patch_size;
         let image_size = config.image_size;
-        let num_patches = (image_size / patch_size) * (image_size / patch_size);
+        let num_patches = image_size / patch_size;
         let num_channels = 3;
         let hidden_size = config.transformer.hidden_size;
 
-        let patch_weight = param(builder, &p.extend(["patch_embedding", "weight"]).unwrap());
-
-        let patch_weight_permuted = transpose(builder, 1, 2, patch_weight);
-        let patch_weight_permuted = transpose(builder, 2, 3, patch_weight_permuted);
-
-        let sh_flat = shape!(builder, hidden_size, num_channels * patch_size * patch_size);
-        let patch_weight_flat = reshape(builder, sh_flat, patch_weight_permuted);
-
-        let patch_weight_flat_t = transpose(builder, 0, 1, patch_weight_flat);
-
-        let sh_expand = shape!(
+        let dim = num_channels * patch_size * patch_size;
+        let x = reshape(
             builder,
-            1,
-            num_channels * patch_size * patch_size,
-            hidden_size
+            shape!(
+                builder,
+                1,
+                num_channels,
+                num_patches,
+                patch_size,
+                num_patches,
+                patch_size
+            ),
+            x,
         );
-        let patch_weight_flat_t = broadcast(builder, patch_weight_flat_t, sh_expand);
 
-        let mut patch_embeddings = matmul(builder, x, patch_weight_flat_t);
+        let x = transpose(builder, 1, 2, x);
+        let x = transpose(builder, 2, 4, x);
+        let x = transpose(builder, 3, 4, x);
+
+        let x = reshape(
+            builder,
+            shape!(builder, 1, num_patches * num_patches, dim),
+            x,
+        );
+
+        let weight = param(builder, &p.extend(["patch_embedding", "weight"]).unwrap());
+
+        let weight = reshape(builder, shape!(builder, hidden_size, dim), weight);
+        let weight = transpose(builder, 0, 1, weight);
+
+        let sh = shape!(builder, 1, dim, hidden_size);
+        let weight = broadcast(builder, weight, sh);
+
+        let emb = matmul(builder, x, weight);
 
         let bias = param(builder, &p.extend(["patch_embedding", "bias"]).unwrap());
-        let sh_emb = shape(builder, patch_embeddings.clone());
-        let bias_expanded = broadcast(builder, bias, sh_emb);
-        patch_embeddings = patch_embeddings + bias_expanded;
+        let sh = shape(builder, emb.clone());
+        let bias = broadcast(builder, bias, sh.clone());
+        let emb = emb + bias;
 
-        let weights = param(
+        let pe = param(
             builder,
             &p.extend(["position_embedding", "weight"]).unwrap(),
         );
 
-        let sh_pe = shape!(builder, 1, num_patches, config.transformer.hidden_size);
-        let pe = broadcast(builder, weights, sh_pe);
+        let pe = broadcast(builder, pe, sh);
 
-        patch_embeddings + pe
+        emb + pe
     }
 
     fn vision_model(&self, builder: &Builder, config: &VisionConfig, p: Path, x: Var) -> Var {
         let mut x = self.vision_embeddings(builder, config, p.extend(["embeddings"]).unwrap(), x);
+
         let config = &config.transformer;
         for i in 0..config.num_hidden_layers {
             x = self.encoder_layer(
@@ -401,27 +414,6 @@ impl SiglipModel {
     }
 }
 
-impl Module<1, 1> for SiglipVisionBackbone {
-    fn ty(&self) -> ([Type; 1], [Type; 1]) {
-        let t = Type::Tensor(TypeExpr::Var(0));
-        ([t.clone()], [t])
-    }
-
-    fn path(&self) -> Path {
-        path(vec!["siglip_vision_backbone"]).unwrap()
-    }
-
-    fn def(&self, builder: &Builder, [image]: [Var; 1]) -> [Var; 1] {
-        let image_features = self.vision_model(
-            builder,
-            &self.config,
-            path(vec!["vision_model"]).unwrap(),
-            image,
-        );
-        [image_features]
-    }
-}
-
 impl Module<2, 2> for SiglipModel {
     fn ty(&self) -> ([Type; 2], [Type; 2]) {
         let t = Type::Tensor(TypeExpr::Var(0));
@@ -477,42 +469,6 @@ impl Module<2, 2> for SiglipModel {
     }
 }
 
-// Loads the image and returns flattened data + shape
-fn load_and_preprocess_image(
-    image_path: &PathBuf,
-    image_size: usize,
-    patch_size: usize,
-) -> (Vec<f32>, Shape) {
-    let num_patches: usize = (image_size / patch_size) * (image_size / patch_size);
-    let num_channels = 3;
-
-    let img = image::open(image_path).unwrap();
-    let resized_img =
-        img.resize_to_fill(image_size as u32, image_size as u32, FilterType::Triangle);
-    let rgb_img = resized_img.to_rgb8();
-    let img = rgb_img.into_raw();
-
-    let pixels: Vec<f32> = img.iter().map(|&x| x as f32 * (2. / 255.0) - 1.).collect();
-    let mut patches = vec![0.0; num_patches * patch_size * patch_size * num_channels];
-    for i in 0..num_patches {
-        let row = (i / (image_size / patch_size)) * patch_size;
-        let col = (i % (image_size / patch_size)) * patch_size;
-        for r in 0..patch_size {
-            for c in 0..patch_size {
-                for ch in 0..num_channels {
-                    patches[i * patch_size * patch_size * num_channels
-                        + (r * patch_size + c) * num_channels
-                        + ch] = pixels[((row + r) * image_size + col + c) * num_channels + ch];
-                }
-            }
-        }
-    }
-    (
-        patches,
-        Shape(vec![1, num_patches, patch_size * patch_size * num_channels]),
-    )
-}
-
 pub fn main() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::init();
     let args = Args::parse();
@@ -533,7 +489,8 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
         config.vision_config.image_size,
         config.vision_config.patch_size,
     );
-    let image_tensor = interpreter::tensor(&backend, image_shape, image_data)
+
+    let image_tensor = interpreter::tensor(&backend, Shape(image_shape), image_data)
         .map_err(|e| anyhow::anyhow!("BackendError: {:?}", e))?;
 
     let labels = args.labels;
@@ -561,10 +518,8 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Build model
     let model = SiglipModel {
-        config: config.clone(),
-        vision_backbone: SiglipVisionBackbone {
-            config: config.vision_config,
-        },
+        config,
+        vision_backbone: SiglipVisionBackbone {},
     };
     let typed_term = model.term().expect("failed to build model term");
 

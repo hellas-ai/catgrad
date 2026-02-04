@@ -26,6 +26,7 @@ log = "0.4.27"
 half = { workspace = true }
 thiserror = "2.0"
 rayon = "1.11.0"
+image = "0.25.6"
 
 
 [dev-dependencies]
@@ -35,6 +36,5 @@ graphviz-rust = "0.9.5"
 open-hypergraphs-dot = "0.2.1"
 env_logger = "0.11"
 test-log = "0.2.17"
-image = "0.25.6"
 catgrad = {path = "../catgrad", features=["ndarray-backend", "candle-backend", "svg", "serde"]}
 anyhow = "1.0.99"
