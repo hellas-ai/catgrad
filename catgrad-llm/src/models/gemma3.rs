@@ -147,6 +147,8 @@ pub struct Gemma3Model {
     pub max_sequence_length: usize,
 }
 
+impl LLMModel for Gemma3Model {}
+
 // Gemma uses a non-standard RMSNorm implementation.
 // Generic because of unpack needing the last dimension and it is being called
 // with ranks 2 and 3 too.
@@ -177,6 +179,40 @@ pub fn rmsnorm_gemma<const N: usize>(builder: &Builder, eps: f32, p: Path, x: Va
     let sh = shape(builder, gamma.clone());
     let one = constant(builder, 1.0, &sh);
     lr * (one + gamma)
+}
+
+/// Multi-modal projector for Gemma 3
+pub fn multi_modal_projector(builder: &Builder, p: Path, x: Var) -> Var {
+    // SigLIP parameters used in Gemma 3
+    let hidden_size = 1152;
+    let tokens_per_image = 256;
+    let image_size = 896;
+    let patch_size = 14;
+    let patches = image_size / patch_size;
+
+    let x = transpose(builder, 1, 2, x);
+    let sh = shape!(builder, 1, hidden_size, patches, patches);
+    let x = reshape(builder, sh, x);
+
+    let x = avgpool2d(builder, hidden_size, patches, 4, x);
+    let x = reshape(
+        builder,
+        shape!(builder, 1, hidden_size, tokens_per_image),
+        x,
+    );
+    let x = transpose(builder, 1, 2, x);
+    let x = rmsnorm_gemma::<3>(
+        builder,
+        1e-6,
+        p.extend(vec!["mm_soft_emb_norm"]).unwrap(),
+        x,
+    );
+    let proj = param(
+        builder,
+        &p.extend(vec!["mm_input_projection_weight"]).unwrap(),
+    );
+    let proj = unsqueeze::<2, 3>(builder, 0, proj);
+    matmul(builder, x, proj)
 }
 
 impl Gemma3Model {
@@ -414,6 +450,54 @@ impl Gemma3Model {
         );
         x + res
     }
+
+    // Forward pass with text tokens as input
+    pub fn forward(&self, builder: &Builder, p: Path, x: Var) -> Var {
+        let x = embeddings(builder, p.extend(vec!["embed_tokens"]).unwrap(), x);
+        self.forward_embeddings(builder, p, x)
+    }
+
+    // Forward pass with embeddings available.
+    pub fn forward_embeddings(&self, builder: &Builder, p: Path, x: Var) -> Var {
+        let mut cache = Cache::init(builder, &self.config, self.max_sequence_length);
+
+        let sh = shape(builder, x.clone());
+        let normalizer = constant(builder, f32::sqrt(self.config.hidden_size as f32), &sh);
+
+        let mut x = x * normalizer;
+
+        for i in 0..self.config.num_hidden_layers {
+            x = self.layer(
+                builder,
+                i,
+                &mut cache,
+                0,
+                p.extend(["layers", &i.to_string()]).unwrap(),
+                x,
+            );
+        }
+
+        x = rmsnorm_gemma::<3>(
+            builder,
+            self.config.rms_norm_eps,
+            p.extend(["norm"]).unwrap(),
+            x,
+        );
+
+        x = linear_no_bias(
+            builder,
+            self.config.hidden_size,
+            self.config.vocab_size,
+            p.extend(["embed_tokens"]).unwrap(),
+            x,
+        );
+
+        if let Some(softcap) = self.config.final_logit_softcapping {
+            x = self.softcap(builder, softcap, x);
+        }
+
+        argmax(builder, x)
+    }
 }
 
 impl Module<1, 1> for Gemma3Model {
@@ -428,47 +512,7 @@ impl Module<1, 1> for Gemma3Model {
                 .extend(self.root.split('.').collect::<Vec<&str>>())
                 .unwrap();
         }
-
-        let mut cache = Cache::init(builder, &self.config, self.max_sequence_length);
-
-        let mut x = embeddings(builder, root.extend(vec!["embed_tokens"]).unwrap(), x);
-
-        let sh = shape(builder, x.clone());
-        let normalizer = constant(builder, f32::sqrt(self.config.hidden_size as f32), &sh);
-
-        x = x * normalizer;
-
-        for i in 0..self.config.num_hidden_layers {
-            x = self.layer(
-                builder,
-                i,
-                &mut cache,
-                0,
-                root.extend(["layers", &i.to_string()]).unwrap(),
-                x,
-            );
-        }
-
-        x = rmsnorm_gemma::<3>(
-            builder,
-            self.config.rms_norm_eps,
-            root.extend(["norm"]).unwrap(),
-            x,
-        );
-
-        x = linear_no_bias(
-            builder,
-            self.config.hidden_size,
-            self.config.vocab_size,
-            root.extend(["embed_tokens"]).unwrap(),
-            x,
-        );
-
-        if let Some(softcap) = self.config.final_logit_softcapping {
-            x = self.softcap(builder, softcap, x);
-        }
-
-        x = argmax(builder, x);
+        let x = self.forward(builder, root, x);
         [x]
     }
 

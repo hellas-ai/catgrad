@@ -3,11 +3,14 @@ use crate::helpers::*;
 use catgrad::prelude::ops::*;
 use catgrad::prelude::*;
 use nn::*;
+
 pub struct LlamaModel {
     pub root: String,
     pub config: Config,
     pub max_sequence_length: usize,
 }
+
+impl LLMModel for LlamaModel {}
 
 impl LlamaModel {
     fn mlp(&self, builder: &Builder, p: Path, x: Var) -> Var {

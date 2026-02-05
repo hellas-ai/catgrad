@@ -9,6 +9,8 @@ pub struct Phi3Model {
     pub max_sequence_length: usize,
 }
 
+impl LLMModel for Phi3Model {}
+
 impl Phi3Model {
     fn get_proj(&self, p: &Path, name: &str) -> Path {
         if self.config.model_type == "phi4mm" {

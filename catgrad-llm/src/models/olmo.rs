@@ -3,10 +3,13 @@ use crate::helpers::*;
 use catgrad::prelude::ops::*;
 use catgrad::prelude::*;
 use nn::*;
+
 pub struct OlmoModel {
     pub config: Config,
     pub max_sequence_length: usize,
 }
+
+impl LLMModel for OlmoModel {}
 
 impl OlmoModel {
     fn mlp(&self, builder: &Builder, p: Path, x: Var) -> Var {

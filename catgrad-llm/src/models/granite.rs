@@ -9,6 +9,8 @@ pub struct GraniteModel {
     pub max_sequence_length: usize,
 }
 
+impl LLMModel for GraniteModel {}
+
 impl GraniteModel {
     fn mlp(&self, builder: &Builder, p: Path, x: Var) -> Var {
         let gate = linear_no_bias(
