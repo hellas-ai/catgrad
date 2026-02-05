@@ -6,3 +6,4 @@ pub mod llama;
 pub mod olmo;
 pub mod phi3;
 pub mod qwen3;
+pub mod siglip;
