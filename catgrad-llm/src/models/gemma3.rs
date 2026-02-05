@@ -181,6 +181,40 @@ pub fn rmsnorm_gemma<const N: usize>(builder: &Builder, eps: f32, p: Path, x: Va
     lr * (one + gamma)
 }
 
+/// Multi-modal projector for Gemma 3
+pub fn multi_modal_projector(builder: &Builder, p: Path, x: Var) -> Var {
+    // SigLIP parameters used in Gemma 3
+    let hidden_size = 1152;
+    let tokens_per_image = 256;
+    let image_size = 896;
+    let patch_size = 14;
+    let patches = image_size / patch_size;
+
+    let x = transpose(builder, 1, 2, x);
+    let sh = shape!(builder, 1, hidden_size, patches, patches);
+    let x = reshape(builder, sh, x);
+
+    let x = avgpool2d(builder, hidden_size, patches, 4, x);
+    let x = reshape(
+        builder,
+        shape!(builder, 1, hidden_size, tokens_per_image),
+        x,
+    );
+    let x = transpose(builder, 1, 2, x);
+    let x = rmsnorm_gemma::<3>(
+        builder,
+        1e-6,
+        p.extend(vec!["mm_soft_emb_norm"]).unwrap(),
+        x,
+    );
+    let proj = param(
+        builder,
+        &p.extend(vec!["mm_input_projection_weight"]).unwrap(),
+    );
+    let proj = unsqueeze::<2, 3>(builder, 0, proj);
+    matmul(builder, x, proj)
+}
+
 impl Gemma3Model {
     pub fn new(root: &str, config: GemmaTextConfig, max_sequence_length: usize) -> Self {
         Gemma3Model {
