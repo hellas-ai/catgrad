@@ -63,7 +63,14 @@ impl GPT2Model {
         self.gpt_linear(builder, dim * 4, dim, p.extend(["c_proj"]).unwrap(), x)
     }
 
-    fn attention(&self, builder: &Builder, _layer_id: usize, p: Path, x: Var) -> Var {
+    fn attention(
+        &self,
+        builder: &Builder,
+        layer_id: usize,
+        cache: &mut Cache,
+        p: Path,
+        x: Var,
+    ) -> Var {
         let dim = self.config.hidden_size;
         let num_heads = self.config.num_attention_heads;
         let head_dim = dim / num_heads;
@@ -85,6 +92,8 @@ impl GPT2Model {
         let q = transpose(builder, 1, 2, q);
         let k = transpose(builder, 1, 2, k);
         let v = transpose(builder, 1, 2, v);
+
+        let (k, v) = cache.update_kv_cache(builder, layer_id, k, v);
 
         let tk = transpose(builder, 2, 3, k);
         let attn = matmul(builder, q, tk);
@@ -109,7 +118,7 @@ impl GPT2Model {
         self.gpt_linear(builder, dim, dim, p.extend(["c_proj"]).unwrap(), attn)
     }
 
-    fn layer(&self, builder: &Builder, layer_id: usize, p: Path, x: Var) -> Var {
+    fn layer(&self, builder: &Builder, layer_id: usize, cache: &mut Cache, p: Path, x: Var) -> Var {
         // Params
         let ln_1 = p.extend(["ln_1"]).unwrap();
         let attn = p.extend(["attn"]).unwrap();
@@ -119,7 +128,7 @@ impl GPT2Model {
         // layers
         let res = x.clone();
         let x = layernorm(builder, self.config.layer_norm_epsilon, ln_1, x);
-        let x = self.attention(builder, layer_id, attn, x);
+        let x = self.attention(builder, layer_id, cache, attn, x);
         let x = res + x;
 
         let res = x.clone();
@@ -130,20 +139,25 @@ impl GPT2Model {
 }
 
 // Implement `Def`: this is like torch's `Module`.
-impl Module<1, 1> for GPT2Model {
+impl Module<3, 3> for GPT2Model {
     fn path(&self) -> Path {
         path(vec!["gpt2"]).expect("invalid model path")
     }
 
-    fn def(&self, builder: &Builder, [x]: [Var; 1]) -> [Var; 1] {
+    fn def(&self, builder: &Builder, [x, in_k, in_v]: [Var; 3]) -> [Var; 3] {
         let root = self.path();
 
-        // self.info();
-
+        let mut cache = Cache::init(builder, &self.config, self.max_sequence_length, in_k, in_v);
         let mut x = self.embeddings(builder, root.clone(), x);
 
         for i in 0..self.config.num_hidden_layers {
-            x = self.layer(builder, i, root.extend(["h", &i.to_string()]).unwrap(), x);
+            x = self.layer(
+                builder,
+                i,
+                &mut cache,
+                root.extend(["h", &i.to_string()]).unwrap(),
+                x,
+            );
         }
 
         x = layernorm(
@@ -163,11 +177,12 @@ impl Module<1, 1> for GPT2Model {
         );
 
         x = argmax(builder, x);
-        [x]
+        let (out_k, out_v) = cache.get_kv_cache(builder);
+        [x, out_k, out_v]
     }
 
     // This should return the *detailed* type of the model
-    fn ty(&self) -> ([Type; 1], [Type; 1]) {
-        llm_type()
+    fn ty(&self) -> ([Type; 3], [Type; 3]) {
+        llm_type(&self.config)
     }
 }

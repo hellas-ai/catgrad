@@ -40,9 +40,9 @@ impl OlmoModel {
     fn attention(
         &self,
         builder: &Builder,
-        _layer_id: usize,
+        layer_id: usize,
         cache: &mut Cache,
-        pos: usize,
+        pos: Var,
         p: Path,
         x: Var,
     ) -> Var {
@@ -98,7 +98,7 @@ impl OlmoModel {
 
         let q = apply_rope_embedding(
             builder,
-            pos,
+            pos.clone(),
             head_dim,
             cache.cos.clone(),
             cache.sin.clone(),
@@ -112,6 +112,8 @@ impl OlmoModel {
             cache.sin.clone(),
             k,
         );
+
+        let (k, v) = cache.update_kv_cache(builder, layer_id, k, v);
 
         let k = repeat_kv(builder, rep, k);
         let v = repeat_kv(builder, rep, v);
@@ -141,7 +143,7 @@ impl OlmoModel {
         builder: &Builder,
         layer_id: usize,
         cache: &mut Cache,
-        pos: usize,
+        pos: Var,
         p: Path,
         x: Var,
     ) -> Var {
@@ -176,15 +178,22 @@ impl OlmoModel {
     }
 }
 
-impl Module<1, 1> for OlmoModel {
+impl Module<3, 3> for OlmoModel {
     fn path(&self) -> Path {
         path(vec!["olmo"]).expect("invalid model path")
     }
 
-    fn def(&self, builder: &Builder, [x]: [Var; 1]) -> [Var; 1] {
+    fn def(&self, builder: &Builder, [x, in_k, in_v]: [Var; 3]) -> [Var; 3] {
         let root = self.path();
 
-        let mut cache = Cache::init(builder, &self.config, self.max_sequence_length);
+        let mut cache = Cache::init(
+            builder,
+            &self.config,
+            self.max_sequence_length,
+            in_k.clone(),
+            in_v,
+        );
+        let [_, _, _, cache_len, _] = unpack::<5>(builder, shape(builder, in_k));
 
         let mut x = embeddings(
             builder,
@@ -197,7 +206,7 @@ impl Module<1, 1> for OlmoModel {
                 builder,
                 i,
                 &mut cache,
-                0,
+                cache_len.clone(),
                 root.extend(["model", "layers", &i.to_string()]).unwrap(),
                 x,
             );
@@ -225,11 +234,12 @@ impl Module<1, 1> for OlmoModel {
         );
 
         x = argmax(builder, x);
-        [x]
+        let (out_k, out_v) = cache.get_kv_cache(builder);
+        [x, out_k, out_v]
     }
 
     // This should return the *detailed* type of the model
-    fn ty(&self) -> ([Type; 1], [Type; 1]) {
-        llm_type()
+    fn ty(&self) -> ([Type; 3], [Type; 3]) {
+        llm_type(&self.config)
     }
 }
