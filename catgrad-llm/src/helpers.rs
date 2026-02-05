@@ -177,6 +177,23 @@ pub fn repeat_kv(builder: &Builder, rep: usize, x: Var) -> Var {
     reshape(builder, sh, x)
 }
 
+/// Average pooling over a square 2D grid.
+pub fn avgpool2d(builder: &Builder, dim: usize, side: usize, k: usize, x: Var) -> Var {
+    let windows = side / k;
+    let x = reshape(builder, shape!(builder, 1, dim, windows, k, windows, k), x);
+    let x = transpose(builder, 3, 4, x);
+    let x = reshape(
+        builder,
+        shape!(builder, 1, dim, windows * windows, k * k),
+        x,
+    );
+
+    let x = sum(builder, x);
+    let sh = shape(builder, x.clone());
+    let d = constant(builder, 1.0 / ((k * k) as f32), &sh);
+    x * d
+}
+
 // Generate rope tables. This part is usually precomputed
 pub fn rope_tables(
     builder: &Builder,
