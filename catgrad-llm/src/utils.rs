@@ -1,5 +1,4 @@
 use catgrad::prelude::Dtype;
-use catgrad::prelude::Module;
 use catgrad_legacy::backend::cpu::ndarray::{NdArray, TaggedNdArray};
 use catgrad_legacy::core::Shape;
 use hf_hub::{Repo, RepoType, api::sync::Api};
@@ -9,6 +8,7 @@ use std::path::{Path, PathBuf};
 use tokenizers::tokenizer::Tokenizer;
 
 use crate::config::{Config, LLMConfig};
+use crate::helpers::LLMModel;
 use crate::models::gemma3::{Gemma3Model, GemmaConfig, GemmaTextConfig};
 use crate::models::*;
 use crate::{LLMError, Result};
@@ -241,7 +241,7 @@ pub fn parse_config(config_json: &serde_json::Value) -> Result<Box<dyn LLMConfig
 pub fn get_model(
     config_json: &serde_json::Value,
     max_sequence_length: usize,
-) -> Result<(Box<dyn Module<1, 1>>, Box<dyn LLMConfig>)> {
+) -> Result<(Box<dyn LLMModel>, Box<dyn LLMConfig>)> {
     let arch = config_json["architectures"][0]
         .as_str()
         .ok_or(LLMError::InvalidModelConfig(
@@ -250,7 +250,7 @@ pub fn get_model(
 
     let config: Config = serde_json::from_value(config_json.clone())?;
 
-    let model: Box<dyn Module<1, 1>> = match arch {
+    let model: Box<dyn LLMModel> = match arch {
         "Gemma2ForCausalLM" | "Gemma3ForCausalLM" => {
             let config: GemmaTextConfig = serde_json::from_value(config_json.clone())?;
             let model = Box::new(Gemma3Model {

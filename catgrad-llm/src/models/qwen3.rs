@@ -3,10 +3,13 @@ use crate::helpers::*;
 use catgrad::prelude::ops::*;
 use catgrad::prelude::*;
 use nn::*;
+
 pub struct Qwen3Model {
     pub config: Config,
     pub max_sequence_length: usize,
 }
+
+impl LLMModel for Qwen3Model {}
 
 impl Qwen3Model {
     fn mlp(&self, builder: &Builder, p: Path, x: Var) -> Var {

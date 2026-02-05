@@ -513,3 +513,5 @@ pub fn embeddings(builder: &Builder, p: Path, x: Var) -> Var {
 
     unsqueeze::<2, 3>(builder, 0, te)
 }
+
+pub trait LLMModel: Module<1, 1> {}

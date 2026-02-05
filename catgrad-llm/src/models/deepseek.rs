@@ -10,6 +10,8 @@ pub struct DeepSeekModel {
     pub max_sequence_length: usize,
 }
 
+impl LLMModel for DeepSeekModel {}
+
 impl DeepSeekModel {
     fn mlp(&self, builder: &Builder, p: Path, x: Var) -> Var {
         let gate = linear_no_bias(

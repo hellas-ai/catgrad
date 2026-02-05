@@ -147,6 +147,8 @@ pub struct Gemma3Model {
     pub max_sequence_length: usize,
 }
 
+impl LLMModel for Gemma3Model {}
+
 // Gemma uses a non-standard RMSNorm implementation.
 // Generic because of unpack needing the last dimension and it is being called
 // with ranks 2 and 3 too.

@@ -9,6 +9,8 @@ pub struct GPT2Model {
     pub max_sequence_length: usize,
 }
 
+impl LLMModel for GPT2Model {}
+
 impl GPT2Model {
     pub fn embeddings(&self, builder: &Builder, p: Path, x: Var) -> Var {
         let wte = param(builder, &p.extend(["wte", "weight"]).unwrap());
