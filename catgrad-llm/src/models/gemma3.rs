@@ -104,9 +104,11 @@ fn default_partial_rotary_factor() -> f32 {
 fn default_head_dim() -> usize {
     256
 }
+
 fn default_vocab_size() -> usize {
     262208
 }
+
 impl LLMConfig for GemmaTextConfig {
     fn num_hidden_layers(&self) -> usize {
         self.num_hidden_layers
@@ -145,6 +147,8 @@ pub struct Gemma3Model {
     pub root: String,
     pub config: GemmaTextConfig,
     pub max_sequence_length: usize,
+    // PaliGemma uses bidirectional attention on the image and prompt
+    pub use_causal_mask: bool,
 }
 
 impl LLMModel for Gemma3Model {}
@@ -221,6 +225,7 @@ impl Gemma3Model {
             root: root.to_string(),
             config,
             max_sequence_length,
+            use_causal_mask: true,
         }
     }
 
@@ -260,8 +265,8 @@ impl Gemma3Model {
         &self,
         builder: &Builder,
         layer_id: usize,
-        _cache: &mut Cache,
-        pos: usize,
+        cache: &mut Cache,
+        pos: Var,
         p: Path,
         x: Var,
     ) -> Var {
@@ -364,8 +369,10 @@ impl Gemma3Model {
                 .map_or(1.0, |rs| rs.factor)
         };
 
-        let q = rope(builder, theta, pos, &s, head_dim, factor, q);
+        let q = rope(builder, theta, pos.clone(), &s, head_dim, factor, q);
         let k = rope(builder, theta, pos, &s, head_dim, factor, k);
+
+        let (k, v) = cache.update_kv_cache(builder, layer_id, k, v);
 
         let k = repeat_kv(builder, rep, k);
         let v = repeat_kv(builder, rep, v);
@@ -383,9 +390,13 @@ impl Gemma3Model {
         if let Some(softcap) = self.config.attn_logit_softcapping {
             attn = self.softcap(builder, softcap, attn);
         }
-        let mask = causal_mask(builder, s.clone());
-        let mask = broadcast(builder, mask, sh);
-        attn = attn + mask;
+
+        if self.use_causal_mask {
+            let mask = causal_mask(builder, s.clone());
+            let mask = broadcast(builder, mask, sh);
+
+            attn = attn + mask;
+        }
 
         let attn = softmax(builder, attn);
         let attn = matmul(builder, attn, v);
@@ -408,7 +419,7 @@ impl Gemma3Model {
         builder: &Builder,
         layer_id: usize,
         cache: &mut Cache,
-        pos: usize,
+        pos: Var,
         p: Path,
         x: Var,
     ) -> Var {
@@ -452,14 +463,28 @@ impl Gemma3Model {
     }
 
     // Forward pass with text tokens as input
-    pub fn forward(&self, builder: &Builder, p: Path, x: Var) -> Var {
+    pub fn forward(&self, builder: &Builder, p: Path, x: Var, in_k: Var, in_v: Var) -> [Var; 3] {
         let x = embeddings(builder, p.extend(vec!["embed_tokens"]).unwrap(), x);
-        self.forward_embeddings(builder, p, x)
+        self.forward_embeddings(builder, p, x, in_k, in_v)
     }
 
     // Forward pass with embeddings available.
-    pub fn forward_embeddings(&self, builder: &Builder, p: Path, x: Var) -> Var {
-        let mut cache = Cache::init(builder, &self.config, self.max_sequence_length);
+    pub fn forward_embeddings(
+        &self,
+        builder: &Builder,
+        p: Path,
+        x: Var,
+        in_k: Var,
+        in_v: Var,
+    ) -> [Var; 3] {
+        let mut cache = Cache::init(
+            builder,
+            &self.config,
+            self.max_sequence_length,
+            in_k.clone(),
+            in_v,
+        );
+        let [_, _, _, cache_len, _] = unpack::<5>(builder, shape(builder, in_k));
 
         let sh = shape(builder, x.clone());
         let normalizer = constant(builder, f32::sqrt(self.config.hidden_size as f32), &sh);
@@ -471,7 +496,7 @@ impl Gemma3Model {
                 builder,
                 i,
                 &mut cache,
-                0,
+                cache_len.clone(),
                 p.extend(["layers", &i.to_string()]).unwrap(),
                 x,
             );
@@ -496,28 +521,28 @@ impl Gemma3Model {
             x = self.softcap(builder, softcap, x);
         }
 
-        argmax(builder, x)
+        x = argmax(builder, x);
+        let (out_k, out_v) = cache.get_kv_cache(builder);
+        [x, out_k, out_v]
     }
 }
 
-impl Module<1, 1> for Gemma3Model {
+impl Module<3, 3> for Gemma3Model {
     fn path(&self) -> Path {
         path(vec!["gemma3"]).expect("invalid model path")
     }
 
-    fn def(&self, builder: &Builder, [x]: [Var; 1]) -> [Var; 1] {
+    fn def(&self, builder: &Builder, [x, in_k, in_v]: [Var; 3]) -> [Var; 3] {
         let mut root = self.path();
         if !self.root.is_empty() {
             root = root
                 .extend(self.root.split('.').collect::<Vec<&str>>())
                 .unwrap();
         }
-        let x = self.forward(builder, root, x);
-        [x]
+        self.forward(builder, root, x, in_k, in_v)
     }
 
-    // This should return the *detailed* type of the model
-    fn ty(&self) -> ([Type; 1], [Type; 1]) {
-        llm_type()
+    fn ty(&self) -> ([Type; 3], [Type; 3]) {
+        llm_type(&self.config)
     }
 }

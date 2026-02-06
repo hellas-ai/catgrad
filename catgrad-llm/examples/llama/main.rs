@@ -6,6 +6,7 @@ use clap::{Parser, ValueEnum};
 use std::io::Write;
 use std::path::PathBuf;
 
+use catgrad_llm::config::LLMConfig;
 use catgrad_llm::utils::{get_model, get_model_chat_template, load_model, render_chat_template};
 
 #[derive(Parser, Debug)]
@@ -29,6 +30,9 @@ struct Args {
     /// Tokens to generate
     #[arg(short = 's', long, default_value_t = 1)]
     max_seq_len: usize,
+    /// Use KV-cache
+    #[arg(short = 'k', long)]
+    kv_cache: bool,
     /// Enable typecheck
     #[arg(short = 't', long)]
     typecheck: bool,
@@ -141,9 +145,18 @@ fn run_with_backend<B: interpreter::Backend>(args: &Args, backend: B) -> Result<
     let mut start_gen = std::time::Instant::now();
     let mut elapsed_pp = std::time::Duration::ZERO;
     let interpreter = interpreter::Interpreter::new(backend, env, parameter_values);
-    // Run interpreter
+    let empty_cache = empty_kv_cache(&interpreter.backend, config.as_ref())?;
+    let mut kv_cache = empty_cache.clone();
+
+    // Run inference loop
     for i in 0..max_seq_len {
-        let next_token_id = run_interpreter(&typed_term, &interpreter, &token_ids)?;
+        let cache = if args.kv_cache {
+            &kv_cache
+        } else {
+            &empty_cache
+        };
+        let (next_token_id, new_cache) =
+            run_interpreter(&typed_term, &interpreter, &token_ids, cache)?;
         if i == 0 {
             elapsed_pp = start_gen.elapsed();
             start_gen = std::time::Instant::now();
@@ -152,7 +165,12 @@ fn run_with_backend<B: interpreter::Backend>(args: &Args, backend: B) -> Result<
         if config.get_eos_token_ids().contains(&(next_token_id as i32)) && !benchmarking {
             break;
         }
-        token_ids.push(next_token_id);
+        if args.kv_cache {
+            kv_cache = new_cache;
+            token_ids = vec![next_token_id];
+        } else {
+            token_ids.push(next_token_id);
+        }
         if !benchmarking {
             let decoded_token = tokenizer.decode(&[next_token_id], false).unwrap();
             print!("{}", decoded_token);
@@ -209,11 +227,39 @@ fn run_with_backend<B: interpreter::Backend>(args: &Args, backend: B) -> Result<
     Ok(())
 }
 
+type KvCache<B> = (interpreter::Value<B>, interpreter::Value<B>);
+
+fn empty_kv_cache<B: interpreter::Backend>(
+    backend: &B,
+    config: &dyn LLMConfig,
+) -> Result<KvCache<B>> {
+    let k_shape = Shape(vec![
+        config.num_hidden_layers(),
+        1,
+        config.num_key_value_heads(),
+        0,
+        config.get_qk_head_dim(),
+    ]);
+    let v_shape = Shape(vec![
+        config.num_hidden_layers(),
+        1,
+        config.num_key_value_heads(),
+        0,
+        config.get_v_head_dim(),
+    ]);
+    let k = interpreter::tensor(backend, k_shape, Vec::<f32>::new())
+        .map_err(|err| anyhow::anyhow!("kv cache tensor error: {:?}", err))?;
+    let v = interpreter::tensor(backend, v_shape, Vec::<f32>::new())
+        .map_err(|err| anyhow::anyhow!("kv cache tensor error: {:?}", err))?;
+    Ok((k, v))
+}
+
 fn run_interpreter<B: interpreter::Backend>(
     typed_term: &TypedTerm,
     interpreter: &interpreter::Interpreter<B>,
     input_data: &[u32],
-) -> Result<u32> {
+    kv_cache: &KvCache<B>,
+) -> Result<(u32, KvCache<B>)> {
     let input_tensor = interpreter::tensor(
         &interpreter.backend,
         Shape(vec![1, input_data.len()]),
@@ -223,14 +269,22 @@ fn run_interpreter<B: interpreter::Backend>(
 
     // Run the model
     let mut results = interpreter
-        .run(typed_term.term.clone(), vec![input_tensor])
+        .run(
+            typed_term.term.clone(),
+            vec![input_tensor, kv_cache.0.clone(), kv_cache.1.clone()],
+        )
         .expect("Failed to run inference");
 
-    // Print info about the main output (should be the last one)
+    let out_v = results
+        .pop()
+        .ok_or_else(|| anyhow::anyhow!("No KV cache V output"))?;
+    let out_k = results
+        .pop()
+        .ok_or_else(|| anyhow::anyhow!("No KV cache K output"))?;
     if let Some(output) = results.pop() {
         match output {
             interpreter::Value::Tensor(arr) => match interpreter.backend.to_vec(arr) {
-                interpreter::TaggedVec::U32(v) => Ok(v[v.len() - 1]),
+                interpreter::TaggedVec::U32(v) => Ok((v[v.len() - 1], (out_k, out_v))),
                 _ => Err(anyhow::anyhow!("Unexpected output dtype")),
             },
             t => Err(anyhow::anyhow!("Output was not a tensor: {:?}", t)),
