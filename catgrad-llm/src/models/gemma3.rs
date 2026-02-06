@@ -147,6 +147,8 @@ pub struct Gemma3Model {
     pub root: String,
     pub config: GemmaTextConfig,
     pub max_sequence_length: usize,
+    // PaliGemma uses bidirectional attention on the image and prompt
+    pub use_causal_mask: bool,
 }
 
 impl LLMModel for Gemma3Model {}
@@ -223,6 +225,7 @@ impl Gemma3Model {
             root: root.to_string(),
             config,
             max_sequence_length,
+            use_causal_mask: true,
         }
     }
 
@@ -387,9 +390,13 @@ impl Gemma3Model {
         if let Some(softcap) = self.config.attn_logit_softcapping {
             attn = self.softcap(builder, softcap, attn);
         }
-        let mask = causal_mask(builder, s.clone());
-        let mask = broadcast(builder, mask, sh);
-        attn = attn + mask;
+
+        if self.use_causal_mask {
+            let mask = causal_mask(builder, s.clone());
+            let mask = broadcast(builder, mask, sh);
+
+            attn = attn + mask;
+        }
 
         let attn = softmax(builder, attn);
         let attn = matmul(builder, attn, v);
