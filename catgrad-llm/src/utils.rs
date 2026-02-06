@@ -203,12 +203,17 @@ pub fn render_chat_template(
     env.add_function("strftime_now", strftime_now);
     env.add_template("chat", chat_template).unwrap();
     let tmpl = env.get_template("chat").unwrap();
-    let mut content = vec![context!(type => "text", text => prompt)];
-    if has_image {
-        content.push(context!(type => "image"));
+    let messages = if has_image {
+        let content = vec![
+            context!(type => "text", text => prompt),
+            context!(type => "image"),
+        ];
+        vec![context!(role => "user",content => content)]
+    } else {
+        vec![context!(role => "user",content => prompt)]
     };
     tmpl.render(
-            context!(messages => vec![ context!(role => "user",content => content)], add_generation_prompt => true, enable_thinking => enable_thinking)
+            context!(messages => messages, add_generation_prompt => true, enable_thinking => enable_thinking)
             )
 }
 
