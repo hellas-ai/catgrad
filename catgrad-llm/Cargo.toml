@@ -18,7 +18,7 @@ tokenizers = { workspace = true }
 
 # TODO: remove these?
 hf-hub = { version = "0.4.3", default-features = false, features = ["ureq"] }
-minijinja = "2.11.0"
+minijinja = { version = "2.11.0", features = ["json"] }
 minijinja-contrib = { version = "2.11.0", features = ["pycompat"] }
 memmap2 = { workspace = true }
 safetensors = {workspace = true}
