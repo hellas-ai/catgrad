@@ -1,7 +1,7 @@
 use catgrad::prelude::Dtype;
 use catgrad_legacy::backend::cpu::ndarray::{NdArray, TaggedNdArray};
 use catgrad_legacy::core::Shape;
-use hf_hub::{Repo, RepoType, api::sync::Api};
+use hf_hub::{Repo, RepoType, api::sync::ApiBuilder};
 use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -119,7 +119,7 @@ pub fn get_model_files(
     model: &str,
     revision: &str,
 ) -> Result<(Vec<PathBuf>, PathBuf, PathBuf, PathBuf)> {
-    let api = Api::new()?;
+    let api = ApiBuilder::from_env().build()?;
     let repo = api.repo(Repo::with_revision(
         model.to_string(),
         RepoType::Model,
@@ -161,7 +161,7 @@ pub fn get_model_files(
 
 // Try getting the model's chat template from the repository
 pub fn get_model_chat_template(model: &str, revision: &str) -> Result<String> {
-    let api = Api::new()?;
+    let api = ApiBuilder::from_env().build()?;
     let repo = api.repo(Repo::with_revision(
         model.to_string(),
         RepoType::Model,
