@@ -96,6 +96,7 @@ pub(crate) fn core_declarations() -> HashMap<lang::Path, core::Operation> {
         (path!["tensor", "sin"], Operation::Tensor(Map(Sin))),
         (path!["tensor", "cos"], Operation::Tensor(Map(Cos))),
         (path!["tensor", "lt"], Operation::Tensor(Map(LT))),
+        (path!["tensor", "gt"], Operation::Tensor(Map(GT))),
         (path!["tensor", "eq"], Operation::Tensor(Map(EQ))),
         (path!["tensor", "matmul"], Operation::Tensor(MatMul)),
         (path!["tensor", "reshape"], Operation::Tensor(Reshape)),

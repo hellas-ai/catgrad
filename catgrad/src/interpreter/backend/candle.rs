@@ -179,6 +179,14 @@ impl Backend for CandleBackend {
         }
     }
 
+    fn gt(&self, lhs: TaggedTensorTuple<Self, 2>) -> TaggedTensor<Self> {
+        use TaggedTensorTuple::*;
+        match lhs {
+            F32([x, y]) => F32([Self::gt(x, y)]),
+            U32([x, y]) => U32([Self::gt(x, y)]),
+        }
+    }
+
     fn eq(&self, lhs: TaggedTensorTuple<Self, 2>) -> TaggedTensor<Self> {
         use TaggedTensorTuple::*;
         match lhs {
@@ -444,6 +452,15 @@ impl CandleBackend {
         }
 
         CandleTensor(x.0.lt(&y.0).unwrap().to_dtype(dtype).unwrap())
+    }
+
+    fn gt(x: CandleTensor, y: CandleTensor) -> CandleTensor {
+        let dtype = x.0.dtype();
+        if x.0.dims() != y.0.dims() {
+            panic!("Shape mismatch in operation");
+        }
+
+        CandleTensor(x.0.gt(&y.0).unwrap().to_dtype(dtype).unwrap())
     }
 
     fn eq(x: CandleTensor, y: CandleTensor) -> CandleTensor {
