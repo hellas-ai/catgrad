@@ -108,7 +108,7 @@ impl Cache {
             _ => rope_tables(
                 builder,
                 config.rope_theta(),
-                positions.to_nat(builder),
+                positions,
                 ((config.get_head_dim() as f32) * config.partial_rotary_factor()) as usize,
                 1.0,
             ),
@@ -304,7 +304,7 @@ pub fn avgpool2d(builder: &Builder, dim: usize, side: usize, k: usize, x: Var) -
 pub fn rope_tables(
     builder: &Builder,
     theta: f32,
-    seq_len: Var,
+    seq_len: impl IntoNatVar,
     head_dim: usize,
     factor: f32,
 ) -> (Var, Var) {
@@ -319,6 +319,7 @@ pub fn rope_tables(
     let freq = pow(builder, theta, f);
     let inv_freq = inverse(builder, freq);
 
+    let seq_len = seq_len.to_nat(builder);
     let sh = shape!(builder, seq_len, half_dim);
     let inv_freq = broadcast(builder, inv_freq, sh.clone());
 
