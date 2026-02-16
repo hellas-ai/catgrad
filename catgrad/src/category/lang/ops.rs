@@ -256,3 +256,58 @@ pub fn dtype(builder: &Builder, x: Var) -> Var {
     assert_eq!(x.label, Object::Tensor);
     var::fn_operation(builder, &[x], Object::Dtype, op!["tensor", "dtype"])
 }
+
+/// Make a nat from a u32
+pub fn nat(x: u32) -> Literal {
+    Literal::Nat(x)
+}
+
+////////////////////////////////////////////////////////////////////////////////
+// Types convertible to a Var representing a Nat
+
+pub trait IntoNatVar {
+    fn to_nat(&self, builder: &Builder) -> Var;
+}
+
+impl IntoNatVar for Var {
+    fn to_nat(&self, _builder: &Builder) -> Var {
+        self.clone()
+    }
+}
+
+impl IntoNatVar for u32 {
+    fn to_nat(&self, builder: &Builder) -> Var {
+        lit(builder, nat(*self))
+    }
+}
+
+impl IntoNatVar for i32 {
+    fn to_nat(&self, builder: &Builder) -> Var {
+        lit(builder, nat((*self).try_into().unwrap()))
+    }
+}
+
+impl IntoNatVar for usize {
+    fn to_nat(&self, builder: &Builder) -> Var {
+        lit(builder, nat((*self).try_into().unwrap()))
+    }
+}
+
+////////////////////////////////////////////////////////////////////////////////
+// Types convertible to a Var representing a Dtype
+
+pub trait IntoDtypeVar {
+    fn to_dtype(&self, builder: &Builder) -> Var;
+}
+
+impl IntoDtypeVar for crate::category::core::Dtype {
+    fn to_dtype(&self, builder: &Builder) -> Var {
+        dtype_constant(builder, crate::category::core::Dtype::F32)
+    }
+}
+
+impl IntoDtypeVar for Var {
+    fn to_dtype(&self, _builder: &Builder) -> Var {
+        self.clone()
+    }
+}
