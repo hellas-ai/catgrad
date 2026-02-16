@@ -45,6 +45,7 @@ pub trait Backend: Clone + Debug {
     fn div(&self, lhs: TaggedTensorTuple<Self, 2>) -> TaggedTensor<Self>;
     fn pow(&self, lhs: TaggedTensorTuple<Self, 2>) -> TaggedTensor<Self>;
     fn lt(&self, lhs: TaggedTensorTuple<Self, 2>) -> TaggedTensor<Self>;
+    fn gt(&self, lhs: TaggedTensorTuple<Self, 2>) -> TaggedTensor<Self>;
     fn eq(&self, lhs: TaggedTensorTuple<Self, 2>) -> TaggedTensor<Self>;
     fn sin(&self, x: TaggedTensor<Self>) -> TaggedTensor<Self>;
     fn cos(&self, x: TaggedTensor<Self>) -> TaggedTensor<Self>;

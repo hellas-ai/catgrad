@@ -179,6 +179,24 @@ impl Backend for NdArrayBackend {
         }
     }
 
+    fn gt(&self, lhs: TaggedTensorTuple<Self, 2>) -> TaggedTensor<Self> {
+        use TaggedTensorTuple::*;
+        match lhs {
+            F32([x, y]) => {
+                let x = x.unwrap_f32();
+                let y = y.unwrap_f32();
+                let res = ndarray::Zip::from(&x).and(&y).map_collect(|&x, &y| x > y);
+                from_f32(res.mapv(|x| x as u32 as f32))
+            }
+            U32([x, y]) => {
+                let x = x.unwrap_u32();
+                let y = y.unwrap_u32();
+                let res = ndarray::Zip::from(&x).and(&y).map_collect(|&x, &y| x > y);
+                from_u32(res.mapv(|x| x as u32))
+            }
+        }
+    }
+
     fn eq(&self, lhs: TaggedTensorTuple<Self, 2>) -> TaggedTensor<Self> {
         use TaggedTensorTuple::*;
         match lhs {
