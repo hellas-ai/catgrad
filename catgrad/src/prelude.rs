@@ -1,8 +1,10 @@
 //! Default imports
 // Constructing model graphs
 pub use crate::category::core::Shape;
-pub use crate::category::lang::{Builder, Dtype, Term, Type, TypedTerm, Var};
-pub use crate::stdlib::{FnModule, Module, nn, ops, ops::IntoNatVar, stdlib, to_load_ops};
+pub use crate::category::lang::{
+    Builder, Dtype, Term, Type, TypedTerm, Var, ops::IntoDtypeVar, ops::IntoNatVar,
+};
+pub use crate::stdlib::{FnModule, Module, nn, ops, stdlib, to_load_ops};
 
 // Interpreting and compiling
 pub use crate::interpreter;
