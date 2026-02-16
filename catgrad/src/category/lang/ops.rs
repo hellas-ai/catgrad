@@ -158,44 +158,60 @@ pub fn reshape(builder: &Builder, t: Var, x: Var) -> Var {
     var::fn_operation(builder, &[t, x], Object::Tensor, op!["tensor", "reshape"])
 }
 
-pub fn transpose(builder: &Builder, dim0: Var, dim1: Var, x: Var) -> Var {
+pub fn transpose(builder: &Builder, dim0: impl IntoNatVar, dim1: impl IntoNatVar, x: Var) -> Var {
     var::fn_operation(
         builder,
-        &[x, dim0, dim1],
+        &[x, dim0.to_nat(builder), dim1.to_nat(builder)],
         Object::Tensor,
         op!["tensor", "transpose"],
     )
 }
 
-pub fn index(builder: &Builder, dim: Var, idx: Var, x: Var) -> Var {
+pub fn index(builder: &Builder, dim: impl IntoNatVar, idx: Var, x: Var) -> Var {
     var::fn_operation(
         builder,
-        &[x, dim, idx],
+        &[x, dim.to_nat(builder), idx],
         Object::Tensor,
         op!["tensor", "index"],
     )
 }
 
-pub fn slice(builder: &Builder, dim: Var, start: Var, len: Var, x: Var) -> Var {
+pub fn slice(
+    builder: &Builder,
+    dim: impl IntoNatVar,
+    start: impl IntoNatVar,
+    len: impl IntoNatVar,
+    x: Var,
+) -> Var {
     var::fn_operation(
         builder,
-        &[x, dim, start, len],
+        &[
+            x,
+            dim.to_nat(builder),
+            start.to_nat(builder),
+            len.to_nat(builder),
+        ],
         Object::Tensor,
         op!["tensor", "slice"],
     )
 }
 
-pub fn concat(builder: &Builder, dim: Var, x: Var, y: Var) -> Var {
+pub fn concat(builder: &Builder, dim: impl IntoNatVar, x: Var, y: Var) -> Var {
     var::fn_operation(
         builder,
-        &[x, y, dim],
+        &[x, y, dim.to_nat(builder)],
         Object::Tensor,
         op!["tensor", "concat"],
     )
 }
 
-pub fn arange(builder: &Builder, end: Var) -> Var {
-    var::fn_operation(builder, &[end], Object::Tensor, op!["tensor", "arange"])
+pub fn arange(builder: &Builder, end: impl IntoNatVar) -> Var {
+    var::fn_operation(
+        builder,
+        &[end.to_nat(builder)],
+        Object::Tensor,
+        op!["tensor", "arange"],
+    )
 }
 
 pub fn max(builder: &Builder, x: Var) -> Var {
@@ -210,13 +226,12 @@ pub fn argmax(builder: &Builder, x: Var) -> Var {
     var::fn_operation(builder, &[x], Object::Tensor, op!["tensor", "argmax"])
 }
 
-pub fn topk(builder: &Builder, k: Var, x: Var) -> (Var, Var) {
-    assert_eq!(k.label, Object::Nat);
+pub fn topk(builder: &Builder, k: impl IntoNatVar, x: Var) -> (Var, Var) {
     assert_eq!(x.label, Object::Tensor);
 
     let outputs = var::operation(
         builder,
-        &[x, k],
+        &[x, k.to_nat(builder)],
         vec![Object::Tensor, Object::Tensor],
         op!["tensor", "topk"],
     );
@@ -246,10 +261,14 @@ pub fn matmul(builder: &Builder, f: Var, g: Var) -> Var {
     var::fn_operation(builder, &[f, g], Object::Tensor, op!["tensor", "matmul"])
 }
 
-pub fn cast(builder: &Builder, x: Var, dtype: Var) -> Var {
+pub fn cast(builder: &Builder, x: Var, dtype: impl IntoDtypeVar) -> Var {
     assert_eq!(x.label, Object::Tensor);
-    assert_eq!(dtype.label, Object::Dtype);
-    var::fn_operation(builder, &[x, dtype], Object::Tensor, op!["tensor", "cast"])
+    var::fn_operation(
+        builder,
+        &[x, dtype.to_dtype(builder)],
+        Object::Tensor,
+        op!["tensor", "cast"],
+    )
 }
 
 pub fn dtype(builder: &Builder, x: Var) -> Var {
