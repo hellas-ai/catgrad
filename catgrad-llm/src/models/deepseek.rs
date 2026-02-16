@@ -1,3 +1,4 @@
+#![allow(clippy::too_many_arguments)]
 use crate::config::Config;
 use crate::helpers::*;
 use catgrad::category::lang::eq;
@@ -171,6 +172,7 @@ impl DeepSeekModel {
         &self,
         builder: &Builder,
         layer_id: usize,
+        attention_mask: Var,
         cache: &mut Cache,
         pos: Var,
         p: Path,
@@ -310,8 +312,7 @@ impl DeepSeekModel {
         let denom = constant(builder, f32::sqrt(qk_head_dim as f32), &sh);
         let mut attn = attn / denom;
 
-        let mask = causal_mask(builder, s.clone());
-        let mask = broadcast(builder, mask, sh);
+        let mask = broadcast(builder, attention_mask, sh);
         attn = attn + mask;
 
         let attn = softmax(builder, attn);
@@ -334,6 +335,7 @@ impl DeepSeekModel {
         &self,
         builder: &Builder,
         layer_id: usize,
+        attention_mask: Var,
         cache: &mut Cache,
         pos: Var,
         p: Path,
@@ -349,6 +351,7 @@ impl DeepSeekModel {
         let x = self.attention(
             builder,
             layer_id,
+            attention_mask,
             cache,
             pos,
             p.extend(["self_attn"]).unwrap(),
@@ -394,11 +397,14 @@ impl Module<3, 3> for DeepSeekModel {
             root.extend(vec!["model", "embed_tokens"]).unwrap(),
             x,
         );
+        let [_b, s, _] = unpack::<3>(builder, shape(builder, x.clone()));
+        let attention_mask = causal_mask(builder, s);
 
         for i in 0..self.config.num_hidden_layers {
             x = self.layer(
                 builder,
                 i,
+                attention_mask.clone(),
                 &mut cache,
                 cache_len.clone(),
                 root.extend(["model", "layers", &i.to_string()]).unwrap(),

@@ -1,3 +1,4 @@
+#![allow(clippy::too_many_arguments)]
 use crate::config::Config;
 use crate::helpers::*;
 use catgrad::prelude::ops::*;
@@ -67,6 +68,7 @@ impl GPT2Model {
         &self,
         builder: &Builder,
         layer_id: usize,
+        attention_mask: Var,
         cache: &mut Cache,
         p: Path,
         x: Var,
@@ -101,12 +103,8 @@ impl GPT2Model {
         let denom = constant(builder, f32::sqrt(head_dim as f32), &sh);
         let mut attn = attn / denom;
 
-        // TODO: check for seqlen > 1
-        // if s > 1 {
-        let mask = causal_mask(builder, s.clone());
-        let mask = broadcast(builder, mask, sh);
+        let mask = broadcast(builder, attention_mask, sh);
         attn = attn + mask;
-        // }
 
         let attn = softmax(builder, attn);
         let attn = matmul(builder, attn, v);
@@ -118,7 +116,15 @@ impl GPT2Model {
         self.gpt_linear(builder, dim, dim, p.extend(["c_proj"]).unwrap(), attn)
     }
 
-    fn layer(&self, builder: &Builder, layer_id: usize, cache: &mut Cache, p: Path, x: Var) -> Var {
+    fn layer(
+        &self,
+        builder: &Builder,
+        layer_id: usize,
+        attention_mask: Var,
+        cache: &mut Cache,
+        p: Path,
+        x: Var,
+    ) -> Var {
         // Params
         let ln_1 = p.extend(["ln_1"]).unwrap();
         let attn = p.extend(["attn"]).unwrap();
@@ -128,7 +134,7 @@ impl GPT2Model {
         // layers
         let res = x.clone();
         let x = layernorm(builder, self.config.layer_norm_epsilon, ln_1, x);
-        let x = self.attention(builder, layer_id, cache, attn, x);
+        let x = self.attention(builder, layer_id, attention_mask, cache, attn, x);
         let x = res + x;
 
         let res = x.clone();
@@ -149,11 +155,14 @@ impl Module<3, 3> for GPT2Model {
 
         let mut cache = Cache::init(builder, &self.config, self.max_sequence_length, in_k, in_v);
         let mut x = self.embeddings(builder, root.clone(), x);
+        let [_b, s, _] = unpack::<3>(builder, shape(builder, x.clone()));
+        let attention_mask = causal_mask(builder, s);
 
         for i in 0..self.config.num_hidden_layers {
             x = self.layer(
                 builder,
                 i,
+                attention_mask.clone(),
                 &mut cache,
                 root.extend(["h", &i.to_string()]).unwrap(),
                 x,
