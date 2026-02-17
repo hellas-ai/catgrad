@@ -27,3 +27,15 @@ pub fn inverse(builder: &Builder, x: Var) -> Var {
     let one = constant(builder, 1.0, &shape);
     one / x
 }
+
+pub fn lte(builder: &Builder, x: Var, y: Var) -> Var {
+    let sh = shape(builder, y.clone());
+    let one = constant(builder, 1, &sh);
+    lt(builder, x, y + one)
+}
+
+pub fn gte(builder: &Builder, x: Var, y: Var) -> Var {
+    let sh = shape(builder, y.clone());
+    let one = constant(builder, 1, &sh);
+    gt(builder, x, y - one)
+}
