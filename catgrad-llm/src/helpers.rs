@@ -596,12 +596,11 @@ pub fn causal_mask(builder: &Builder, size: Var) -> Var {
     let shr = pack::<2>(builder, [size.clone(), one]);
     let j = arange(builder, size);
     let j = reshape(builder, shr, j);
-    let j = broadcast(builder, j, sh);
+    let j = broadcast(builder, j, sh.clone());
 
     let mask = lt(builder, j, i);
 
     let mask = cast(builder, mask, Dtype::F32);
-    let sh = shape(builder, mask.clone());
     let ninf = constant(builder, f32::MIN, &sh);
 
     mask * ninf
