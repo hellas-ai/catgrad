@@ -85,6 +85,37 @@ struct VLMModel {
     language_model: Box<Gemma3Model>,
 }
 impl VLMModel {
+    pub fn bidirectional_mask(
+        &self,
+        builder: &Builder,
+        size: Var,
+        img_start: Var,
+        img_size: Var,
+    ) -> Var {
+        let row = arange(builder, size.clone());
+        let sh = shape(builder, row.clone());
+
+        let img_end = img_start.clone() + img_size.to_nat(builder);
+
+        let img_start = nat_to_u32(builder, img_start);
+        let img_start = broadcast(builder, img_start, sh.clone());
+
+        let img_end = nat_to_u32(builder, img_end);
+        let img_end = broadcast(builder, img_end, sh);
+
+        let img_mask_1 = gte(builder, row.clone(), img_start);
+        let img_mask_2 = lt(builder, row, img_end);
+        let row = img_mask_1 * img_mask_2;
+
+        let sh = pack::<2>(builder, [size.clone(), size]);
+        let row = broadcast(builder, row, sh.clone());
+        let col = transpose(builder, 0, 1, row.clone());
+        let mask = row * col;
+        let mask = cast(builder, mask, Dtype::F32);
+        let one = constant(builder, 1.0, &sh);
+        one - mask
+    }
+
     // Forward pass with image embeddings and text tokens as input
     #[allow(clippy::too_many_arguments)]
     pub fn forward_image_and_texts(
@@ -99,11 +130,34 @@ impl VLMModel {
     ) -> [Var; 3] {
         let text1 = embeddings(builder, p.extend(vec!["embed_tokens"]).unwrap(), text1);
         let text2 = embeddings(builder, p.extend(vec!["embed_tokens"]).unwrap(), text2);
+        let [_b, img_start, _] = unpack::<3>(builder, shape(builder, text1.clone()));
         let embeddings = concat(builder, 1, text1, image);
         let embeddings = concat(builder, 1, embeddings, text2);
-        let [x, out_k, out_v] = self
-            .language_model
-            .forward_embeddings(builder, p, embeddings, in_k, in_v);
+
+        let [_b, s, _] = unpack::<3>(builder, shape(builder, embeddings.clone()));
+
+        let is_paligemma = self.language_model.config.model_type == "gemma2";
+
+        let attention_mask = if is_paligemma {
+            let sh = shape!(builder, s.clone(), s);
+            constant(builder, 0.0, &sh)
+        } else {
+            let attention_mask = causal_mask(builder, s.clone());
+
+            // hardcoded 256 tokens per image
+            let image_mask = self.bidirectional_mask(builder, s, img_start, 256.to_nat(builder));
+
+            attention_mask * image_mask
+        };
+
+        let [x, out_k, out_v] = self.language_model.forward_embeddings(
+            builder,
+            p,
+            attention_mask,
+            embeddings,
+            in_k,
+            in_v,
+        );
         [x, out_k, out_v]
     }
 }
@@ -365,7 +419,6 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
             root: "language_model.model".to_string(),
             config: config.text_config.clone(),
             max_sequence_length: 1000, //TODO
-            use_causal_mask: !is_paligemma,
         }),
     };
 

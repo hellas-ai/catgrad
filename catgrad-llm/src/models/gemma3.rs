@@ -148,8 +148,6 @@ pub struct Gemma3Model {
     pub root: String,
     pub config: GemmaTextConfig,
     pub max_sequence_length: usize,
-    // PaliGemma uses bidirectional attention on the image and prompt
-    pub use_causal_mask: bool,
 }
 
 impl LLMModel for Gemma3Model {}
@@ -226,7 +224,6 @@ impl Gemma3Model {
             root: root.to_string(),
             config,
             max_sequence_length,
-            use_causal_mask: true,
         }
     }
 
@@ -393,10 +390,8 @@ impl Gemma3Model {
             attn = self.softcap(builder, softcap, attn);
         }
 
-        if self.use_causal_mask {
-            let mask = broadcast(builder, attention_mask, sh);
-            attn = attn + mask;
-        }
+        let mask = broadcast(builder, attention_mask, sh);
+        attn = attn + mask;
 
         let attn = softmax(builder, attn);
         let attn = matmul(builder, attn, v);
@@ -467,7 +462,11 @@ impl Gemma3Model {
     // Forward pass with text tokens as input
     pub fn forward(&self, builder: &Builder, p: Path, x: Var, in_k: Var, in_v: Var) -> [Var; 3] {
         let x = embeddings(builder, p.extend(vec!["embed_tokens"]).unwrap(), x);
-        self.forward_embeddings(builder, p, x, in_k, in_v)
+
+        let [_b, s, _] = unpack::<3>(builder, shape(builder, x.clone()));
+        let attention_mask = causal_mask(builder, s);
+
+        self.forward_embeddings(builder, p, attention_mask, x, in_k, in_v)
     }
 
     // Forward pass with embeddings available.
@@ -475,6 +474,7 @@ impl Gemma3Model {
         &self,
         builder: &Builder,
         p: Path,
+        attention_mask: Var,
         x: Var,
         in_k: Var,
         in_v: Var,
@@ -492,9 +492,6 @@ impl Gemma3Model {
         let normalizer = constant(builder, f32::sqrt(self.config.hidden_size as f32), &sh);
 
         let mut x = x * normalizer;
-
-        let [_b, s, _] = unpack::<3>(builder, shape(builder, x.clone()));
-        let attention_mask = causal_mask(builder, s);
 
         for i in 0..self.config.num_hidden_layers {
             x = self.layer(
