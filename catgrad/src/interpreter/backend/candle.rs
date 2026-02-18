@@ -80,6 +80,13 @@ impl Backend for CandleBackend {
         }
     }
 
+    fn format_tensor(&self, tensor: &TaggedTensor<Self>) -> String {
+        match tensor {
+            TaggedTensor::F32([x]) => format!("{}", &x.0),
+            TaggedTensor::U32([x]) => format!("{}", &x.0),
+        }
+    }
+
     fn zeros(&self, shape: Shape, target_dtype: Dtype) -> TaggedTensor<Self> {
         let dims: &[usize] = &shape.0;
         match target_dtype {

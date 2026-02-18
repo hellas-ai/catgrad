@@ -80,6 +80,13 @@ pub trait Backend: Clone + Debug {
     fn arange(&self, end: usize) -> TaggedTensor<Self>;
 
     fn to_vec(&self, vec: TaggedTensor<Self>) -> TaggedVec;
+
+    fn format_tensor(&self, tensor: &TaggedTensor<Self>) -> String {
+        match tensor {
+            TaggedTensor::F32([x]) => format!("{x:?}"),
+            TaggedTensor::U32([x]) => format!("{x:?}"),
+        }
+    }
 }
 
 pub trait BackendTensorOps: Send + Sync + Clone + Debug {

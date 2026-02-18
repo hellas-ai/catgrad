@@ -63,6 +63,9 @@ fn op_to_core(
             lang::Literal::Nat(n) => core::Operation::Nat(core::NatOp::Constant(n as usize)),
             lang::Literal::Dtype(d) => core::Operation::DtypeConstant(d),
         }),
+        lang::Operation::Probe(label) => {
+            Def::Arr(core::Operation::Tensor(core::TensorOp::Probe(label)))
+        }
     }
 }
 
@@ -109,6 +112,10 @@ pub(crate) fn core_declarations() -> HashMap<lang::Path, core::Operation> {
         (path!["tensor", "max"], Operation::Tensor(Max)),
         (path!["tensor", "argmax"], Operation::Tensor(Argmax)),
         (path!["tensor", "topk"], Operation::Tensor(TopK)),
+        (
+            path!["tensor", "probe"],
+            Operation::Tensor(Probe(String::new())),
+        ),
         (path!["tensor", "arange"], Operation::Tensor(Arange)),
         (path!["tensor", "concat"], Operation::Tensor(Concat)),
         (path!["tensor", "nat_to_u32"], Operation::Tensor(NatToU32)),

@@ -226,6 +226,16 @@ pub fn argmax(builder: &Builder, x: Var) -> Var {
     var::fn_operation(builder, &[x], Object::Tensor, op!["tensor", "argmax"])
 }
 
+pub fn probe(builder: &Builder, label: impl Into<String>, x: &Var) {
+    assert_eq!(x.label, Object::Tensor);
+    let _ = var::operation(
+        builder,
+        std::slice::from_ref(x),
+        vec![],
+        Operation::Probe(label.into()),
+    );
+}
+
 pub fn topk(builder: &Builder, k: impl IntoNatVar, x: Var) -> (Var, Var) {
     assert_eq!(x.label, Object::Tensor);
 

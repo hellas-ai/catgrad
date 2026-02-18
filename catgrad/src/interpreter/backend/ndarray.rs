@@ -50,6 +50,14 @@ impl Backend for NdArrayBackend {
         }
     }
 
+    fn format_tensor(&self, tensor: &TaggedTensor<Self>) -> String {
+        match tensor {
+            TaggedTensor::F32([TaggedArrayD::F32(arr)]) => format!("{arr:?}"),
+            TaggedTensor::U32([TaggedArrayD::U32(arr)]) => format!("{arr:?}"),
+            _ => unreachable!("dtype/tag mismatch"),
+        }
+    }
+
     fn zeros(&self, shape: Shape, target_dtype: Dtype) -> TaggedTensor<Self> {
         let dims: Vec<usize> = shape.0;
         match target_dtype {

@@ -30,6 +30,9 @@ pub enum Operation {
 
     /// Literals (floats, ints, dtypes, nats, etc.) are elements (maps with unit domain)
     Literal(Literal),
+
+    /// Debug probe with a user label.
+    Probe(String),
 }
 
 pub type Term = OpenHypergraph<Object, Operation>;
@@ -68,6 +71,7 @@ impl fmt::Display for Operation {
             Operation::Declaration(path) => write!(f, "{path}"),
             Operation::Definition(path) => write!(f, "{path}"),
             Operation::Literal(literal) => write!(f, "{literal}"),
+            Operation::Probe(label) => write!(f, "probe({label})"),
         }
     }
 }

@@ -100,6 +100,8 @@ fn to_statements(ssa: &SSA<Type, lang::Operation>) -> Vec<grammar::Statement> {
             vec![grammar::Assignment { result, expr }.into()]
         }
         lang::Operation::Literal(lit) => literal_to_statements(ssa.edge_id, lit, result),
+        // Do not emit probes
+        lang::Operation::Probe(_label) => vec![],
     });
 
     statements
