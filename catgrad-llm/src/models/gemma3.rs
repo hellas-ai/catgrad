@@ -227,6 +227,16 @@ impl Gemma3Model {
         }
     }
 
+    fn is_gemma3(&self) -> bool {
+        self.config.model_type == "gemma3_text"
+    }
+
+    fn normalize(&self, builder: &Builder, x: Var) -> Var {
+        let sh = shape(builder, x.clone());
+        let normalizer = constant(builder, f32::sqrt(self.config.hidden_size as f32), &sh);
+        x * normalizer
+    }
+
     fn softcap(&self, builder: &Builder, softcap: f32, x: Var) -> Var {
         let sh = shape(builder, x.clone());
         let s = constant(builder, softcap, &sh);
@@ -275,7 +285,6 @@ impl Gemma3Model {
         let rep = num_heads / num_kv_heads;
         let head_dim = self.config.head_dim;
 
-        let is_gemma3 = self.config.model_type == "gemma3_text";
         let [b, s, _] = unpack::<3>(builder, shape(builder, x.clone()));
 
         let q = linear_no_bias(
@@ -314,7 +323,7 @@ impl Gemma3Model {
         let v = transpose(builder, 1, 2, v);
 
         // Norm
-        if is_gemma3 {
+        if self.is_gemma3() {
             let sh = shape!(
                 builder,
                 b.clone() * s.clone() * num_heads.to_nat(builder),
@@ -351,7 +360,7 @@ impl Gemma3Model {
 
         // Every 6th layer of Gemma3 uses global attention, otherwise local attention, with different rope frequencies
         let is_local_attention =
-            is_gemma3 && !(layer_id + 1).is_multiple_of(self.config.sliding_window_pattern);
+            self.is_gemma3() && !(layer_id + 1).is_multiple_of(self.config.sliding_window_pattern);
 
         let theta = if is_local_attention {
             self.config.rope_local_base_freq
@@ -459,9 +468,20 @@ impl Gemma3Model {
         x + res
     }
 
+    pub fn scaled_embeddings(&self, builder: &Builder, p: Path, x: Var) -> Var {
+        let x = embeddings(builder, p, x);
+
+        // Gemma3 uses scaled embeddings for text only, Gemma2 scales all inputs later
+        if self.is_gemma3() {
+            self.normalize(builder, x)
+        } else {
+            x
+        }
+    }
+
     // Forward pass with text tokens as input
     pub fn forward(&self, builder: &Builder, p: Path, x: Var, in_k: Var, in_v: Var) -> [Var; 3] {
-        let x = embeddings(builder, p.extend(vec!["embed_tokens"]).unwrap(), x);
+        let x = self.scaled_embeddings(builder, p.extend(vec!["embed_tokens"]).unwrap(), x);
 
         let [_b, s, _] = unpack::<3>(builder, shape(builder, x.clone()));
         let attention_mask = causal_mask(builder, s);
@@ -488,10 +508,11 @@ impl Gemma3Model {
         );
         let [_, _, _, cache_len, _] = unpack::<5>(builder, shape(builder, in_k));
 
-        let sh = shape(builder, x.clone());
-        let normalizer = constant(builder, f32::sqrt(self.config.hidden_size as f32), &sh);
-
-        let mut x = x * normalizer;
+        let mut x = if !self.is_gemma3() {
+            self.normalize(builder, x)
+        } else {
+            x
+        };
 
         for i in 0..self.config.num_hidden_layers {
             x = self.layer(

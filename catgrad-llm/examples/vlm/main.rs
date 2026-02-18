@@ -128,8 +128,17 @@ impl VLMModel {
         in_k: Var,
         in_v: Var,
     ) -> [Var; 3] {
-        let text1 = embeddings(builder, p.extend(vec!["embed_tokens"]).unwrap(), text1);
-        let text2 = embeddings(builder, p.extend(vec!["embed_tokens"]).unwrap(), text2);
+        let text1 = self.language_model.scaled_embeddings(
+            builder,
+            p.extend(vec!["embed_tokens"]).unwrap(),
+            text1,
+        );
+        let text2 = self.language_model.scaled_embeddings(
+            builder,
+            p.extend(vec!["embed_tokens"]).unwrap(),
+            text2,
+        );
+
         let [_b, img_start, _] = unpack::<3>(builder, shape(builder, text1.clone()));
         let embeddings = concat(builder, 1, text1, image);
         let embeddings = concat(builder, 1, embeddings, text2);
