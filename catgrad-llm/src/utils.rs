@@ -496,10 +496,11 @@ pub fn load_model<B: interpreter::Backend>(
         .map_err(|err| LLMError::TokenizerError(format!("tokenizer load error {:?}", err)))?;
 
     let start_load = std::time::Instant::now();
-    let elapsed_load = start_load.elapsed();
 
     let (mut parameter_values, mut parameter_types, total_params) =
         load_model_weights(model_paths, backend)?;
+
+    let elapsed_load = start_load.elapsed();
 
     log::info!(
         "Model weights loaded for {} in {:.2} seconds",
