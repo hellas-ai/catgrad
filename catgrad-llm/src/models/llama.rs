@@ -1,5 +1,5 @@
 #![allow(clippy::too_many_arguments)]
-use crate::config::Config;
+use crate::config::{Config, LLMConfig};
 use crate::helpers::*;
 use catgrad::prelude::ops::*;
 use catgrad::prelude::*;
@@ -11,9 +11,26 @@ pub struct LlamaModel {
     pub max_sequence_length: usize,
 }
 
-impl LLMModel for LlamaModel {}
+impl LLMModel for LlamaModel {
+    fn config(&self) -> &dyn LLMConfig {
+        &self.config
+    }
+}
 
 impl LlamaModel {
+    pub fn new(
+        root: &str,
+        config_json: &serde_json::Value,
+        max_sequence_length: usize,
+    ) -> crate::Result<Self> {
+        let config: Config = serde_json::from_value(config_json.clone())?;
+        Ok(Self {
+            root: root.to_string(),
+            config,
+            max_sequence_length,
+        })
+    }
+
     fn mlp(&self, builder: &Builder, p: Path, x: Var) -> Var {
         let gate = linear_no_bias(
             builder,

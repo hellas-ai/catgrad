@@ -107,7 +107,7 @@ fn run_with_backend<B: interpreter::Backend>(args: &Args, backend: B) -> Result<
     let mut token_ids = encoding.get_ids().to_vec();
 
     let max_sequence_length = max_seq_len + token_ids.len();
-    let (model, config) = get_model(&config_json, max_sequence_length)?;
+    let model = get_model(&config_json, max_sequence_length)?;
 
     let typed_term = if let Some(load_path) = &args.load {
         let file = std::fs::File::open(load_path)?;
@@ -145,7 +145,8 @@ fn run_with_backend<B: interpreter::Backend>(args: &Args, backend: B) -> Result<
     let mut start_gen = std::time::Instant::now();
     let mut elapsed_pp = std::time::Duration::ZERO;
     let interpreter = interpreter::Interpreter::new(backend, env, parameter_values);
-    let empty_cache = empty_kv_cache(&interpreter.backend, config.as_ref())?;
+    let empty_cache = empty_kv_cache(&interpreter.backend, model.config())?;
+    let eos_token_ids = model.config().get_eos_token_ids();
     let mut kv_cache = empty_cache.clone();
 
     // Run inference loop
@@ -162,7 +163,7 @@ fn run_with_backend<B: interpreter::Backend>(args: &Args, backend: B) -> Result<
             start_gen = std::time::Instant::now();
         }
         generated_tokens += 1;
-        if config.get_eos_token_ids().contains(&(next_token_id as i32)) && !benchmarking {
+        if eos_token_ids.contains(&(next_token_id as i32)) && !benchmarking {
             break;
         }
         if args.kv_cache {

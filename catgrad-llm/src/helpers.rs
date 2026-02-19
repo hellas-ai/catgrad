@@ -620,4 +620,6 @@ pub fn embeddings(builder: &Builder, p: Path, x: Var) -> Var {
     unsqueeze::<2, 3>(builder, 0, te)
 }
 
-pub trait LLMModel: Module<3, 3> {}
+pub trait LLMModel: Module<3, 3> {
+    fn config(&self) -> &dyn LLMConfig;
+}

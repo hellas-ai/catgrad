@@ -246,69 +246,55 @@ pub fn parse_config(config_json: &serde_json::Value) -> Result<Box<dyn LLMConfig
 pub fn get_model(
     config_json: &serde_json::Value,
     max_sequence_length: usize,
-) -> Result<(Box<dyn LLMModel>, Box<dyn LLMConfig>)> {
+) -> Result<Box<dyn LLMModel>> {
     let arch = config_json["architectures"][0]
         .as_str()
         .ok_or(LLMError::InvalidModelConfig(
             "Missing architectures field".to_string(),
         ))?;
 
-    let config: Config = serde_json::from_value(config_json.clone())?;
-
     let model: Box<dyn LLMModel> = match arch {
-        "Gemma2ForCausalLM" | "Gemma3ForCausalLM" => {
-            let config: GemmaTextConfig = serde_json::from_value(config_json.clone())?;
-            let model = Box::new(gemma3::Gemma3Model::new(
-                "model",
-                config.clone(),
-                max_sequence_length,
-            ));
-            return Ok((model, Box::new(config)));
+        "Gemma2ForCausalLM" | "Gemma3ForCausalLM" => Box::new(gemma3::Gemma3Model::new(
+            "model",
+            config_json,
+            max_sequence_length,
+        )?),
+        "Gemma3ForConditionalGeneration" => Box::new(Gemma3Model::new(
+            "language_model.model",
+            config_json,
+            max_sequence_length,
+        )?),
+        "MistralForCausalLM" | "LlamaForCausalLM" => Box::new(llama::LlamaModel::new(
+            "",
+            config_json,
+            max_sequence_length,
+        )?),
+        "Phi3ForCausalLM" | "Phi4MMForCausalLM" => {
+            Box::new(phi3::Phi3Model::new(config_json, max_sequence_length)?)
         }
-        "Gemma3ForConditionalGeneration" => {
-            let GemmaConfig::VLM { text_config, .. } = serde_json::from_value(config_json.clone())?
-            else {
-                unreachable!()
-            };
-            let model = Box::new(Gemma3Model::new(
-                "language_model.model",
-                text_config.clone(),
-                max_sequence_length,
-            ));
-            return Ok((model, Box::new(text_config)));
+        "Olmo2ForCausalLM" | "Olmo3ForCausalLM" => {
+            Box::new(olmo::OlmoModel::new(config_json, max_sequence_length)?)
         }
-        "MistralForCausalLM" | "LlamaForCausalLM" => Box::new(llama::LlamaModel {
-            root: "".to_string(),
-            config: config.clone(),
+        "Qwen3ForCausalLM" | "Qwen3MoeForCausalLM" => {
+            Box::new(qwen3::Qwen3Model::new(config_json, max_sequence_length)?)
+        }
+        "GraniteForCausalLM" | "GraniteMoeForCausalLM" => Box::new(granite::GraniteModel::new(
+            config_json,
             max_sequence_length,
-        }),
-        "Phi3ForCausalLM" | "Phi4MMForCausalLM" => Box::new(phi3::Phi3Model {
-            config: config.clone(),
+        )?),
+        "DeepseekV3ForCausalLM" => Box::new(deepseek::DeepSeekModel::new(
+            config_json,
             max_sequence_length,
-        }),
-        "Olmo2ForCausalLM" | "Olmo3ForCausalLM" => Box::new(olmo::OlmoModel {
-            config: config.clone(),
-            max_sequence_length,
-        }),
-        "Qwen3ForCausalLM" | "Qwen3MoeForCausalLM" => Box::new(qwen3::Qwen3Model {
-            config: config.clone(),
-            max_sequence_length,
-        }),
-        "GraniteForCausalLM" | "GraniteMoeForCausalLM" => Box::new(granite::GraniteModel {
-            config: config.clone(),
-            max_sequence_length,
-        }),
-        "DeepseekV3ForCausalLM" => Box::new(deepseek::DeepSeekModel {
-            config: config.clone(),
-            max_sequence_length,
-        }),
-        "GPT2LMHeadModel" => Box::new(gpt2::GPT2Model {
-            config: config.clone(),
-            max_sequence_length,
-        }),
-        _ => panic!("Unsupported model architecture: {}", arch),
+        )?),
+        "GPT2LMHeadModel" => Box::new(gpt2::GPT2Model::new(config_json, max_sequence_length)?),
+        _ => {
+            return Err(LLMError::InvalidModelConfig(format!(
+                "Unsupported model architecture: {}",
+                arch
+            )));
+        }
     };
-    Ok((model, Box::new(config)))
+    Ok(model)
 }
 
 use catgrad::interpreter;

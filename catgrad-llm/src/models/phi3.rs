@@ -1,5 +1,5 @@
 #![allow(clippy::too_many_arguments)]
-use crate::config::Config;
+use crate::config::{Config, LLMConfig};
 use crate::helpers::*;
 use catgrad::prelude::ops::*;
 use catgrad::prelude::*;
@@ -10,9 +10,21 @@ pub struct Phi3Model {
     pub max_sequence_length: usize,
 }
 
-impl LLMModel for Phi3Model {}
+impl LLMModel for Phi3Model {
+    fn config(&self) -> &dyn LLMConfig {
+        &self.config
+    }
+}
 
 impl Phi3Model {
+    pub fn new(config_json: &serde_json::Value, max_sequence_length: usize) -> crate::Result<Self> {
+        let config: Config = serde_json::from_value(config_json.clone())?;
+        Ok(Self {
+            config,
+            max_sequence_length,
+        })
+    }
+
     fn get_proj(&self, p: &Path, name: &str) -> Path {
         if self.config.model_type == "phi4mm" {
             p.extend([name, "base_layer"]).unwrap()

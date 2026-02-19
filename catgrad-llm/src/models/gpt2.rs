@@ -1,5 +1,5 @@
 #![allow(clippy::too_many_arguments)]
-use crate::config::Config;
+use crate::config::{Config, LLMConfig};
 use crate::helpers::*;
 use catgrad::prelude::ops::*;
 use catgrad::prelude::*;
@@ -10,9 +10,21 @@ pub struct GPT2Model {
     pub max_sequence_length: usize,
 }
 
-impl LLMModel for GPT2Model {}
+impl LLMModel for GPT2Model {
+    fn config(&self) -> &dyn LLMConfig {
+        &self.config
+    }
+}
 
 impl GPT2Model {
+    pub fn new(config_json: &serde_json::Value, max_sequence_length: usize) -> crate::Result<Self> {
+        let config: Config = serde_json::from_value(config_json.clone())?;
+        Ok(Self {
+            config,
+            max_sequence_length,
+        })
+    }
+
     pub fn embeddings(&self, builder: &Builder, p: Path, x: Var) -> Var {
         let wte = param(builder, &p.extend(["wte", "weight"]).unwrap());
 
