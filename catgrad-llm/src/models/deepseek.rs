@@ -1,5 +1,5 @@
 #![allow(clippy::too_many_arguments)]
-use crate::config::Config;
+use crate::config::{Config, LLMConfig};
 use crate::helpers::*;
 use catgrad::category::lang::eq;
 use catgrad::prelude::ops::*;
@@ -11,9 +11,27 @@ pub struct DeepSeekModel {
     pub max_sequence_length: usize,
 }
 
-impl LLMModel for DeepSeekModel {}
+impl LLMModel for DeepSeekModel {
+    fn config(&self) -> &dyn LLMConfig {
+        &self.config
+    }
+
+    fn weight_post_process(&self) -> WeightPostProcess {
+        WeightPostProcess::ConcatMoeExperts {
+            num_local_experts: self.config.num_local_experts,
+        }
+    }
+}
 
 impl DeepSeekModel {
+    pub fn new(config_json: &serde_json::Value, max_sequence_length: usize) -> crate::Result<Self> {
+        let config: Config = serde_json::from_value(config_json.clone())?;
+        Ok(Self {
+            config,
+            max_sequence_length,
+        })
+    }
+
     fn mlp(&self, builder: &Builder, p: Path, x: Var) -> Var {
         let gate = linear_no_bias(
             builder,

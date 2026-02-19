@@ -117,9 +117,6 @@ impl LLMConfig for GemmaTextConfig {
     fn num_key_value_heads(&self) -> usize {
         self.num_key_value_heads
     }
-    fn num_local_experts(&self) -> usize {
-        0
-    }
     fn rope_theta(&self) -> f32 {
         self.rope_theta
     }
@@ -150,7 +147,11 @@ pub struct Gemma3Model {
     pub max_sequence_length: usize,
 }
 
-impl LLMModel for Gemma3Model {}
+impl LLMModel for Gemma3Model {
+    fn config(&self) -> &dyn LLMConfig {
+        &self.config
+    }
+}
 
 // Gemma uses a non-standard RMSNorm implementation.
 // Generic because of unpack needing the last dimension and it is being called
@@ -219,12 +220,20 @@ pub fn multi_modal_projector(builder: &Builder, p: Path, x: Var) -> Var {
 }
 
 impl Gemma3Model {
-    pub fn new(root: &str, config: GemmaTextConfig, max_sequence_length: usize) -> Self {
-        Gemma3Model {
+    pub fn new(
+        root: &str,
+        config_json: &serde_json::Value,
+        max_sequence_length: usize,
+    ) -> crate::Result<Self> {
+        let config = match serde_json::from_value(config_json.clone())? {
+            GemmaConfig::Text(config) => config,
+            GemmaConfig::VLM { text_config, .. } => text_config,
+        };
+        Ok(Gemma3Model {
             root: root.to_string(),
             config,
             max_sequence_length,
-        }
+        })
     }
 
     fn is_gemma3(&self) -> bool {

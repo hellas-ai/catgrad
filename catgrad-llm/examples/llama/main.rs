@@ -7,7 +7,10 @@ use std::io::Write;
 use std::path::PathBuf;
 
 use catgrad_llm::config::LLMConfig;
-use catgrad_llm::utils::{get_model, get_model_chat_template, load_model, render_chat_template};
+use catgrad_llm::utils::{
+    get_model, get_model_chat_template, load_model, post_process_model_weights,
+    render_chat_template,
+};
 
 #[derive(Parser, Debug)]
 struct Args {
@@ -74,7 +77,7 @@ fn main() -> Result<()> {
 }
 
 fn run_with_backend<B: interpreter::Backend>(args: &Args, backend: B) -> Result<()> {
-    let (parameter_values, parameter_types, config_json, tokenizer, total_params) =
+    let (mut parameter_values, mut parameter_types, config_json, tokenizer, total_params) =
         load_model(&args.model_name, &args.revision, &backend)?;
 
     let chat_template =
@@ -107,7 +110,13 @@ fn run_with_backend<B: interpreter::Backend>(args: &Args, backend: B) -> Result<
     let mut token_ids = encoding.get_ids().to_vec();
 
     let max_sequence_length = max_seq_len + token_ids.len();
-    let (model, config) = get_model(&config_json, max_sequence_length)?;
+    let model = get_model(&config_json, max_sequence_length)?;
+    post_process_model_weights(
+        model.as_ref(),
+        &backend,
+        &mut parameter_values,
+        &mut parameter_types,
+    )?;
 
     let typed_term = if let Some(load_path) = &args.load {
         let file = std::fs::File::open(load_path)?;
@@ -145,7 +154,8 @@ fn run_with_backend<B: interpreter::Backend>(args: &Args, backend: B) -> Result<
     let mut start_gen = std::time::Instant::now();
     let mut elapsed_pp = std::time::Duration::ZERO;
     let interpreter = interpreter::Interpreter::new(backend, env, parameter_values);
-    let empty_cache = empty_kv_cache(&interpreter.backend, config.as_ref())?;
+    let empty_cache = empty_kv_cache(&interpreter.backend, model.config())?;
+    let eos_token_ids = model.config().get_eos_token_ids();
     let mut kv_cache = empty_cache.clone();
 
     // Run inference loop
@@ -162,7 +172,7 @@ fn run_with_backend<B: interpreter::Backend>(args: &Args, backend: B) -> Result<
             start_gen = std::time::Instant::now();
         }
         generated_tokens += 1;
-        if config.get_eos_token_ids().contains(&(next_token_id as i32)) && !benchmarking {
+        if eos_token_ids.contains(&(next_token_id as i32)) && !benchmarking {
             break;
         }
         if args.kv_cache {

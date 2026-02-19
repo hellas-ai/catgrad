@@ -42,7 +42,6 @@ pub enum RopeScaling {
 pub trait LLMConfig {
     fn num_hidden_layers(&self) -> usize;
     fn num_key_value_heads(&self) -> usize;
-    fn num_local_experts(&self) -> usize;
     fn rope_theta(&self) -> f32;
     fn rope_scaling(&self) -> Option<RopeScaling>;
     fn partial_rotary_factor(&self) -> f32;
@@ -101,11 +100,8 @@ pub struct Config {
     pub partial_rotary_factor: f32,
     pub local_rope_theta: f32,
     pub global_rope_theta: f32,
-    #[serde(alias = "_sliding_window_pattern")]
-    pub sliding_window_pattern: usize,
     pub global_attn_every_n_layers: usize,
     pub rope_scaling: Option<RopeScaling>,
-    pub rope_local_base_freq: f32,
     #[serde(alias = "n_positions")]
     pub max_position_embeddings: usize,
     pub no_rope_layer_interval: usize,
@@ -135,10 +131,6 @@ impl LLMConfig for Config {
         } else {
             self.num_key_value_heads
         }
-    }
-
-    fn num_local_experts(&self) -> usize {
-        self.num_local_experts
     }
     fn rope_theta(&self) -> f32 {
         self.rope_theta

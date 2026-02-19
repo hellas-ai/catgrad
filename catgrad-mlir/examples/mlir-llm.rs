@@ -40,7 +40,8 @@ pub fn main() -> Result<()> {
     let mut token_ids = encoding.get_ids().to_vec();
 
     let max_sequence_length = args.max_seq_len + token_ids.len();
-    let (model, config) = get_model(&config_json, max_sequence_length)?;
+    let model = get_model(&config_json, max_sequence_length)?;
+    let eos_token_ids = model.config().get_eos_token_ids();
 
     let typed_term = model.term().expect("Failed to create typed term");
 
@@ -71,7 +72,7 @@ pub fn main() -> Result<()> {
             let (ov, _) = output.to_vec_f32();
             let next_token_id = ov.last().unwrap();
             let next_token_id = next_token_id.to_bits();
-            if config.get_eos_token_ids().contains(&(next_token_id as i32)) {
+            if eos_token_ids.contains(&(next_token_id as i32)) {
                 break;
             }
             token_ids.push(next_token_id);
