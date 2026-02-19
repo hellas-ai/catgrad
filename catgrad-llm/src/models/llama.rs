@@ -1,13 +1,66 @@
 #![allow(clippy::too_many_arguments)]
-use crate::config::{Config, LLMConfig};
+use crate::config::{EosTokenId, LLMConfig, RopeScaling};
 use crate::helpers::*;
 use catgrad::prelude::ops::*;
 use catgrad::prelude::*;
 use nn::*;
+use serde::Deserialize;
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct LlamaConfig {
+    pub hidden_size: usize,
+    pub intermediate_size: usize,
+    pub num_hidden_layers: usize,
+    pub num_attention_heads: usize,
+    pub num_key_value_heads: usize,
+    pub rope_theta: f32,
+    #[serde(default = "default_partial_rotary_factor")]
+    pub partial_rotary_factor: f32,
+    pub rope_scaling: Option<RopeScaling>,
+    pub rms_norm_eps: f32,
+    pub tie_word_embeddings: bool,
+    pub eos_token_id: Option<EosTokenId>,
+    pub vocab_size: usize,
+}
+
+fn default_partial_rotary_factor() -> f32 {
+    1.0
+}
+
+impl LLMConfig for LlamaConfig {
+    fn num_hidden_layers(&self) -> usize {
+        self.num_hidden_layers
+    }
+
+    fn num_key_value_heads(&self) -> usize {
+        self.num_key_value_heads
+    }
+
+    fn rope_theta(&self) -> f32 {
+        self.rope_theta
+    }
+
+    fn rope_scaling(&self) -> Option<RopeScaling> {
+        self.rope_scaling.clone()
+    }
+
+    fn partial_rotary_factor(&self) -> f32 {
+        self.partial_rotary_factor
+    }
+
+    fn get_head_dim(&self) -> usize {
+        self.hidden_size / self.num_attention_heads
+    }
+
+    fn eos_token_id(&self) -> Option<EosTokenId> {
+        self.eos_token_id.clone()
+    }
+}
 
 pub struct LlamaModel {
     pub root: String,
-    pub config: Config,
+    pub config: LlamaConfig,
     pub max_sequence_length: usize,
 }
 
@@ -23,7 +76,7 @@ impl LlamaModel {
         config_json: &serde_json::Value,
         max_sequence_length: usize,
     ) -> crate::Result<Self> {
-        let config: Config = serde_json::from_value(config_json.clone())?;
+        let config: LlamaConfig = serde_json::from_value(config_json.clone())?;
         Ok(Self {
             root: root.to_string(),
             config,
