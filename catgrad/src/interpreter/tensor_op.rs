@@ -32,6 +32,7 @@ pub(crate) fn tensor_op<B: Backend>(
         TensorOp::Max => tensor_max(backend, args, ssa),
         TensorOp::Argmax => tensor_argmax(backend, args, ssa),
         TensorOp::TopK => tensor_topk(backend, args, ssa),
+        TensorOp::Probe(label) => tensor_probe(backend, args, ssa, label),
         TensorOp::Broadcast => tensor_broadcast(backend, args, ssa),
         TensorOp::Reshape => tensor_reshape(backend, args, ssa),
         TensorOp::Transpose => tensor_transpose(backend, args, ssa),
@@ -107,6 +108,24 @@ fn tensor_topk<B: Backend>(backend: &B, args: Vec<Value<B>>, ssa: &CoreSSA) -> R
     let (x, k) = (to_tensor(ssa, x)?, to_nat(ssa, k)?);
     let (values, indices) = backend.topk(x, k);
     Ok(vec![Value::Tensor(values), Value::Tensor(indices)])
+}
+
+// Debugging aid.
+fn tensor_probe<B: Backend>(
+    backend: &B,
+    args: Vec<Value<B>>,
+    ssa: &CoreSSA,
+    label: &str,
+) -> ResultValues<B> {
+    let probe_enabled = std::env::var("CATGRAD_PROBE").is_ok();
+    if probe_enabled {
+        let [x] = get_exact_arity(ssa, args)?;
+        let x = to_tensor(ssa, x)?;
+        // For now pretty print the tensor
+        let pretty = backend.format_tensor(&x);
+        println!("[probe:{label}] {pretty}");
+    }
+    Ok(vec![])
 }
 
 fn tensor_broadcast<B: Backend>(

@@ -62,6 +62,7 @@ pub fn preprocess(
         lang::Operation::Declaration(path) => path,
         lang::Operation::Definition(_path) => panic!("impossible definition found in params!"),
         lang::Operation::Literal(_literal) => panic!("impossible literal found in params!"),
+        lang::Operation::Probe(_label) => panic!("impossible probe found in params!"),
     });
 
     // Return all param paths in order of use

@@ -17,6 +17,7 @@ pub(crate) fn tensor_op(ssa: &CoreSSA, args: Vec<Value>, op: &TensorOp) -> Resul
         TensorOp::Sum | TensorOp::Max => tensor_reduce(ssa, args),
         TensorOp::Argmax => tensor_argmax(ssa, args),
         TensorOp::TopK => tensor_topk(ssa, args),
+        TensorOp::Probe(_) => tensor_probe(ssa, args),
         TensorOp::Broadcast => tensor_broadcast(ssa, args),
         TensorOp::Reshape => tensor_reshape(ssa, args),
         TensorOp::Transpose => tensor_transpose(ssa, args),
@@ -191,6 +192,12 @@ fn tensor_topk(ssa: &CoreSSA, args: Vec<Value>) -> ResultValues {
         }
         _ => Err(InterpreterError::TypeError(ssa.edge_id)),
     }
+}
+
+fn tensor_probe(ssa: &CoreSSA, args: Vec<Value>) -> ResultValues {
+    let [tensor] = get_exact_arity(ssa, args)?;
+    let _ = to_tensor(ssa, tensor)?;
+    Ok(vec![])
 }
 
 // TODO: return normalized, broadcasted result (y) instead,

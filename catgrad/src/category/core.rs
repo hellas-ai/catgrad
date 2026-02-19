@@ -184,6 +184,10 @@ pub enum TensorOp {
     /// `TopK : Tensor × Nat → Tensor × Tensor`
     TopK,
 
+    /// Print tensor contents with a debug label.
+    /// `Probe : Tensor → ()`
+    Probe(String),
+
     // broadcast a Tensor to a given shape
     Broadcast,
 
