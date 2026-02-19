@@ -8,20 +8,20 @@ use serde::Deserialize;
 
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
-pub struct LlamaConfig {
-    pub hidden_size: usize,
-    pub intermediate_size: usize,
-    pub num_hidden_layers: usize,
-    pub num_attention_heads: usize,
-    pub num_key_value_heads: usize,
-    pub rope_theta: f32,
+struct LlamaConfig {
+    hidden_size: usize,
+    intermediate_size: usize,
+    num_hidden_layers: usize,
+    num_attention_heads: usize,
+    num_key_value_heads: usize,
+    rope_theta: f32,
     #[serde(default = "default_partial_rotary_factor")]
-    pub partial_rotary_factor: f32,
-    pub rope_scaling: Option<RopeScaling>,
-    pub rms_norm_eps: f32,
-    pub tie_word_embeddings: bool,
-    pub eos_token_id: Option<EosTokenId>,
-    pub vocab_size: usize,
+    partial_rotary_factor: f32,
+    rope_scaling: Option<RopeScaling>,
+    rms_norm_eps: f32,
+    tie_word_embeddings: bool,
+    eos_token_id: Option<EosTokenId>,
+    vocab_size: usize,
 }
 
 fn default_partial_rotary_factor() -> f32 {
@@ -60,7 +60,7 @@ impl LLMConfig for LlamaConfig {
 
 pub struct LlamaModel {
     pub root: String,
-    pub config: LlamaConfig,
+    config: LlamaConfig,
     pub max_sequence_length: usize,
 }
 

@@ -8,27 +8,26 @@ use serde::Deserialize;
 
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
-pub struct GraniteConfig {
-    pub hidden_size: usize,
-    pub intermediate_size: usize,
-    pub num_hidden_layers: usize,
-    pub num_attention_heads: usize,
-    pub num_key_value_heads: usize,
-    pub num_experts_per_tok: usize,
+struct GraniteConfig {
+    hidden_size: usize,
+    intermediate_size: usize,
+    num_hidden_layers: usize,
+    num_attention_heads: usize,
+    num_key_value_heads: usize,
+    num_experts_per_tok: usize,
     #[serde(alias = "num_experts", alias = "n_routed_experts")]
-    pub num_local_experts: usize,
-    pub attention_multiplier: f32,
-    pub embedding_multiplier: f32,
-    pub residual_multiplier: f32,
-    pub rope_theta: f32,
+    num_local_experts: usize,
+    attention_multiplier: f32,
+    embedding_multiplier: f32,
+    residual_multiplier: f32,
+    rope_theta: f32,
     #[serde(default = "default_partial_rotary_factor")]
-    pub partial_rotary_factor: f32,
-    pub rope_scaling: Option<RopeScaling>,
-    pub rms_norm_eps: f32,
-    pub eos_token_id: Option<EosTokenId>,
-    pub vocab_size: usize,
-    pub model_type: String,
-    pub architectures: Vec<String>,
+    partial_rotary_factor: f32,
+    rope_scaling: Option<RopeScaling>,
+    rms_norm_eps: f32,
+    eos_token_id: Option<EosTokenId>,
+    vocab_size: usize,
+    model_type: String,
 }
 
 fn default_partial_rotary_factor() -> f32 {
@@ -66,7 +65,7 @@ impl LLMConfig for GraniteConfig {
 }
 
 pub struct GraniteModel {
-    pub config: GraniteConfig,
+    config: GraniteConfig,
     pub max_sequence_length: usize,
 }
 

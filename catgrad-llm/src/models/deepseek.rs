@@ -9,33 +9,33 @@ use serde::Deserialize;
 
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
-pub struct DeepSeekConfig {
-    pub hidden_size: usize,
-    pub intermediate_size: usize,
-    pub num_hidden_layers: usize,
-    pub num_attention_heads: usize,
-    pub num_key_value_heads: usize,
-    pub num_experts_per_tok: usize,
+struct DeepSeekConfig {
+    hidden_size: usize,
+    intermediate_size: usize,
+    num_hidden_layers: usize,
+    num_attention_heads: usize,
+    num_key_value_heads: usize,
+    num_experts_per_tok: usize,
     #[serde(alias = "num_experts", alias = "n_routed_experts")]
-    pub num_local_experts: usize,
-    pub first_k_dense_replace: usize,
-    pub q_lora_rank: usize,
-    pub kv_lora_rank: usize,
-    pub qk_nope_head_dim: usize,
-    pub qk_rope_head_dim: usize,
-    pub routed_scaling_factor: f32,
-    pub n_group: usize,
-    pub topk_group: usize,
-    pub v_head_dim: usize,
-    pub norm_topk_prob: bool,
-    pub rope_theta: f32,
+    num_local_experts: usize,
+    first_k_dense_replace: usize,
+    q_lora_rank: usize,
+    kv_lora_rank: usize,
+    qk_nope_head_dim: usize,
+    qk_rope_head_dim: usize,
+    routed_scaling_factor: f32,
+    n_group: usize,
+    topk_group: usize,
+    v_head_dim: usize,
+    norm_topk_prob: bool,
+    rope_theta: f32,
     #[serde(default = "default_partial_rotary_factor")]
-    pub partial_rotary_factor: f32,
-    pub rope_scaling: Option<RopeScaling>,
-    pub rms_norm_eps: f32,
-    pub tie_word_embeddings: bool,
-    pub eos_token_id: Option<EosTokenId>,
-    pub vocab_size: usize,
+    partial_rotary_factor: f32,
+    rope_scaling: Option<RopeScaling>,
+    rms_norm_eps: f32,
+    tie_word_embeddings: bool,
+    eos_token_id: Option<EosTokenId>,
+    vocab_size: usize,
 }
 
 fn default_partial_rotary_factor() -> f32 {
@@ -98,7 +98,7 @@ impl LLMConfig for DeepSeekConfig {
 }
 
 pub struct DeepSeekModel {
-    pub config: DeepSeekConfig,
+    config: DeepSeekConfig,
     pub max_sequence_length: usize,
 }
 

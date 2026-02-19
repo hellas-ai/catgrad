@@ -8,21 +8,21 @@ use serde::Deserialize;
 
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
-pub struct Phi3Config {
-    pub model_type: String,
-    pub hidden_size: usize,
-    pub intermediate_size: usize,
-    pub num_hidden_layers: usize,
-    pub num_attention_heads: usize,
-    pub num_key_value_heads: usize,
-    pub rms_norm_eps: f32,
-    pub tie_word_embeddings: bool,
-    pub vocab_size: usize,
-    pub rope_theta: f32,
+struct Phi3Config {
+    model_type: String,
+    hidden_size: usize,
+    intermediate_size: usize,
+    num_hidden_layers: usize,
+    num_attention_heads: usize,
+    num_key_value_heads: usize,
+    rms_norm_eps: f32,
+    tie_word_embeddings: bool,
+    vocab_size: usize,
+    rope_theta: f32,
     #[serde(default = "default_partial_rotary_factor")]
-    pub partial_rotary_factor: f32,
-    pub rope_scaling: Option<RopeScaling>,
-    pub eos_token_id: Option<EosTokenId>,
+    partial_rotary_factor: f32,
+    rope_scaling: Option<RopeScaling>,
+    eos_token_id: Option<EosTokenId>,
 }
 
 fn default_partial_rotary_factor() -> f32 {
@@ -64,7 +64,7 @@ impl LLMConfig for Phi3Config {
 }
 
 pub struct Phi3Model {
-    pub config: Phi3Config,
+    config: Phi3Config,
     pub max_sequence_length: usize,
 }
 

@@ -8,26 +8,26 @@ use serde::Deserialize;
 
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
-pub struct Qwen3Config {
-    pub hidden_size: usize,
-    pub intermediate_size: usize,
-    pub num_hidden_layers: usize,
-    pub num_attention_heads: usize,
-    pub num_key_value_heads: usize,
-    pub head_dim: usize,
-    pub decoder_sparse_step: usize,
-    pub num_experts_per_tok: usize,
+struct Qwen3Config {
+    hidden_size: usize,
+    intermediate_size: usize,
+    num_hidden_layers: usize,
+    num_attention_heads: usize,
+    num_key_value_heads: usize,
+    head_dim: usize,
+    decoder_sparse_step: usize,
+    num_experts_per_tok: usize,
     #[serde(alias = "num_experts", alias = "n_routed_experts")]
-    pub num_local_experts: usize,
-    pub norm_topk_prob: bool,
-    pub rope_theta: f32,
+    num_local_experts: usize,
+    norm_topk_prob: bool,
+    rope_theta: f32,
     #[serde(default = "default_partial_rotary_factor")]
-    pub partial_rotary_factor: f32,
-    pub rope_scaling: Option<RopeScaling>,
-    pub rms_norm_eps: f32,
-    pub tie_word_embeddings: bool,
-    pub eos_token_id: Option<EosTokenId>,
-    pub vocab_size: usize,
+    partial_rotary_factor: f32,
+    rope_scaling: Option<RopeScaling>,
+    rms_norm_eps: f32,
+    tie_word_embeddings: bool,
+    eos_token_id: Option<EosTokenId>,
+    vocab_size: usize,
 }
 
 fn default_partial_rotary_factor() -> f32 {
@@ -73,7 +73,7 @@ impl LLMConfig for Qwen3Config {
 }
 
 pub struct Qwen3Model {
-    pub config: Qwen3Config,
+    config: Qwen3Config,
     pub max_sequence_length: usize,
 }
 
