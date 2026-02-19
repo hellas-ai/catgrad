@@ -15,6 +15,12 @@ impl LLMModel for DeepSeekModel {
     fn config(&self) -> &dyn LLMConfig {
         &self.config
     }
+
+    fn weight_post_process(&self) -> WeightPostProcess {
+        WeightPostProcess::ConcatMoeExperts {
+            num_local_experts: self.config.num_local_experts,
+        }
+    }
 }
 
 impl DeepSeekModel {

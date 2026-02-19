@@ -7,10 +7,9 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use tokenizers::tokenizer::Tokenizer;
 
-use crate::config::{Config, LLMConfig};
-use crate::helpers::LLMModel;
-use crate::models::gemma3::{Gemma3Model, GemmaConfig, GemmaTextConfig};
-use crate::models::*;
+use crate::config::LLMConfig;
+use crate::helpers::{LLMModel, WeightPostProcess};
+use crate::models;
 use crate::{LLMError, Result};
 
 pub fn read_safetensors_file(
@@ -217,32 +216,6 @@ pub fn render_chat_template(
             )
 }
 
-pub fn parse_config(config_json: &serde_json::Value) -> Result<Box<dyn LLMConfig>> {
-    let arch = config_json["architectures"][0]
-        .as_str()
-        .ok_or(LLMError::InvalidModelConfig(
-            "Missing architectures field".to_string(),
-        ))?;
-
-    match arch {
-        "Gemma2ForCausalLM" | "Gemma3ForCausalLM" => {
-            let config: GemmaTextConfig = serde_json::from_value(config_json.clone())?;
-            Ok(Box::new(config))
-        }
-        "Gemma3ForConditionalGeneration" => {
-            let config: GemmaConfig = serde_json::from_value(config_json.clone())?;
-            match config {
-                GemmaConfig::Text(config) => Ok(Box::new(config)),
-                GemmaConfig::VLM { text_config, .. } => Ok(Box::new(text_config)),
-            }
-        }
-        _ => {
-            let config: Config = serde_json::from_value(config_json.clone())?;
-            Ok(Box::new(config))
-        }
-    }
-}
-
 pub fn get_model(
     config_json: &serde_json::Value,
     max_sequence_length: usize,
@@ -253,47 +226,51 @@ pub fn get_model(
             "Missing architectures field".to_string(),
         ))?;
 
-    let model: Box<dyn LLMModel> = match arch {
-        "Gemma2ForCausalLM" | "Gemma3ForCausalLM" => Box::new(gemma3::Gemma3Model::new(
-            "model",
-            config_json,
-            max_sequence_length,
-        )?),
-        "Gemma3ForConditionalGeneration" => Box::new(Gemma3Model::new(
-            "language_model.model",
-            config_json,
-            max_sequence_length,
-        )?),
-        "MistralForCausalLM" | "LlamaForCausalLM" => Box::new(llama::LlamaModel::new(
-            "",
-            config_json,
-            max_sequence_length,
-        )?),
-        "Phi3ForCausalLM" | "Phi4MMForCausalLM" => {
-            Box::new(phi3::Phi3Model::new(config_json, max_sequence_length)?)
-        }
-        "Olmo2ForCausalLM" | "Olmo3ForCausalLM" => {
-            Box::new(olmo::OlmoModel::new(config_json, max_sequence_length)?)
-        }
-        "Qwen3ForCausalLM" | "Qwen3MoeForCausalLM" => {
-            Box::new(qwen3::Qwen3Model::new(config_json, max_sequence_length)?)
-        }
-        "GraniteForCausalLM" | "GraniteMoeForCausalLM" => Box::new(granite::GraniteModel::new(
-            config_json,
-            max_sequence_length,
-        )?),
-        "DeepseekV3ForCausalLM" => Box::new(deepseek::DeepSeekModel::new(
-            config_json,
-            max_sequence_length,
-        )?),
-        "GPT2LMHeadModel" => Box::new(gpt2::GPT2Model::new(config_json, max_sequence_length)?),
-        _ => {
-            return Err(LLMError::InvalidModelConfig(format!(
-                "Unsupported model architecture: {}",
-                arch
-            )));
-        }
-    };
+    let model: Box<dyn LLMModel> =
+        match arch {
+            "Gemma2ForCausalLM" | "Gemma3ForCausalLM" => Box::new(
+                models::gemma3::Gemma3Model::new("model", config_json, max_sequence_length)?,
+            ),
+            "Gemma3ForConditionalGeneration" => Box::new(models::gemma3::Gemma3Model::new(
+                "language_model.model",
+                config_json,
+                max_sequence_length,
+            )?),
+            "MistralForCausalLM" | "LlamaForCausalLM" => Box::new(models::llama::LlamaModel::new(
+                "",
+                config_json,
+                max_sequence_length,
+            )?),
+            "Phi3ForCausalLM" | "Phi4MMForCausalLM" => Box::new(models::phi3::Phi3Model::new(
+                config_json,
+                max_sequence_length,
+            )?),
+            "Olmo2ForCausalLM" | "Olmo3ForCausalLM" => Box::new(models::olmo::OlmoModel::new(
+                config_json,
+                max_sequence_length,
+            )?),
+            "Qwen3ForCausalLM" | "Qwen3MoeForCausalLM" => Box::new(models::qwen3::Qwen3Model::new(
+                config_json,
+                max_sequence_length,
+            )?),
+            "GraniteForCausalLM" | "GraniteMoeForCausalLM" => Box::new(
+                models::granite::GraniteModel::new(config_json, max_sequence_length)?,
+            ),
+            "DeepseekV3ForCausalLM" => Box::new(models::deepseek::DeepSeekModel::new(
+                config_json,
+                max_sequence_length,
+            )?),
+            "GPT2LMHeadModel" => Box::new(models::gpt2::GPT2Model::new(
+                config_json,
+                max_sequence_length,
+            )?),
+            _ => {
+                return Err(LLMError::InvalidModelConfig(format!(
+                    "Unsupported model architecture: {}",
+                    arch
+                )));
+            }
+        };
     Ok(model)
 }
 
@@ -303,8 +280,9 @@ use catgrad::typecheck;
 
 // Concatenates MoE expert weights from separate tensors into single tensors per layer
 // to avoid the need for dynamic parameter names
-fn concat_moe_experts<B: interpreter::Backend>(
+pub(crate) fn concat_moe_experts<B: interpreter::Backend>(
     config: &dyn LLMConfig,
+    num_local_experts: usize,
     backend: &B,
     parameter_values: &mut interpreter::Parameters<B>,
     parameter_types: &mut typecheck::Parameters,
@@ -319,7 +297,7 @@ fn concat_moe_experts<B: interpreter::Backend>(
             let mut expert_tensors = Vec::new();
             let mut expert_keys = Vec::new();
 
-            for expert_idx in 0..config.num_local_experts() {
+            for expert_idx in 0..num_local_experts {
                 let key_str = format!(
                     "model.layers.{}.mlp.experts.{}.{}.weight",
                     layer_idx, expert_idx, proj_name
@@ -337,10 +315,10 @@ fn concat_moe_experts<B: interpreter::Backend>(
                 continue;
             }
 
-            if expert_tensors.len() != config.num_local_experts() {
+            if expert_tensors.len() != num_local_experts {
                 return Err(LLMError::InvalidModelConfig(format!(
                     "Expected {} experts for layer {} {}, found {}",
-                    config.num_local_experts(),
+                    num_local_experts,
                     layer_idx,
                     proj_name,
                     expert_tensors.len()
@@ -350,7 +328,7 @@ fn concat_moe_experts<B: interpreter::Backend>(
             let original_shape = expert_tensors[0].shape();
             let original_dims = original_shape.0.clone();
 
-            let mut new_shape_dims = vec![config.num_local_experts()];
+            let mut new_shape_dims = vec![num_local_experts];
             new_shape_dims.extend(original_dims.clone());
 
             let mut reshaped_tensors = Vec::new();
@@ -397,16 +375,37 @@ fn concat_moe_experts<B: interpreter::Backend>(
 }
 
 pub fn post_process_weights<B: interpreter::Backend>(
+    post_process: WeightPostProcess,
     config: &dyn LLMConfig,
     backend: &B,
     parameter_values: &mut interpreter::Parameters<B>,
     parameter_types: &mut typecheck::Parameters,
 ) -> Result<()> {
-    if config.num_local_experts() == 0 {
-        return Ok(());
+    match post_process {
+        WeightPostProcess::None => Ok(()),
+        WeightPostProcess::ConcatMoeExperts { num_local_experts } => concat_moe_experts(
+            config,
+            num_local_experts,
+            backend,
+            parameter_values,
+            parameter_types,
+        ),
     }
+}
 
-    concat_moe_experts(config, backend, parameter_values, parameter_types)
+pub fn post_process_model_weights<B: interpreter::Backend>(
+    model: &dyn LLMModel,
+    backend: &B,
+    parameter_values: &mut interpreter::Parameters<B>,
+    parameter_types: &mut typecheck::Parameters,
+) -> Result<()> {
+    post_process_weights(
+        model.weight_post_process(),
+        model.config(),
+        backend,
+        parameter_values,
+        parameter_types,
+    )
 }
 
 pub fn load_model_weights<B: interpreter::Backend>(
@@ -483,7 +482,7 @@ pub fn load_model<B: interpreter::Backend>(
 
     let start_load = std::time::Instant::now();
 
-    let (mut parameter_values, mut parameter_types, total_params) =
+    let (parameter_values, parameter_types, total_params) =
         load_model_weights(model_paths, backend)?;
 
     let elapsed_load = start_load.elapsed();
@@ -493,15 +492,6 @@ pub fn load_model<B: interpreter::Backend>(
         model_name,
         elapsed_load.as_secs_f64()
     );
-
-    let config = parse_config(&config_json)?;
-
-    post_process_weights(
-        config.as_ref(),
-        backend,
-        &mut parameter_values,
-        &mut parameter_types,
-    )?;
 
     Ok((
         parameter_values,

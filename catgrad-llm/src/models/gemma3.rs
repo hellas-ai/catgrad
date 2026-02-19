@@ -117,9 +117,6 @@ impl LLMConfig for GemmaTextConfig {
     fn num_key_value_heads(&self) -> usize {
         self.num_key_value_heads
     }
-    fn num_local_experts(&self) -> usize {
-        0
-    }
     fn rope_theta(&self) -> f32 {
         self.rope_theta
     }

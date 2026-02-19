@@ -42,7 +42,6 @@ pub enum RopeScaling {
 pub trait LLMConfig {
     fn num_hidden_layers(&self) -> usize;
     fn num_key_value_heads(&self) -> usize;
-    fn num_local_experts(&self) -> usize;
     fn rope_theta(&self) -> f32;
     fn rope_scaling(&self) -> Option<RopeScaling>;
     fn partial_rotary_factor(&self) -> f32;
@@ -135,10 +134,6 @@ impl LLMConfig for Config {
         } else {
             self.num_key_value_heads
         }
-    }
-
-    fn num_local_experts(&self) -> usize {
-        self.num_local_experts
     }
     fn rope_theta(&self) -> f32 {
         self.rope_theta

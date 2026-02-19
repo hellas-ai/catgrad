@@ -620,6 +620,16 @@ pub fn embeddings(builder: &Builder, p: Path, x: Var) -> Var {
     unsqueeze::<2, 3>(builder, 0, te)
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WeightPostProcess {
+    None,
+    ConcatMoeExperts { num_local_experts: usize },
+}
+
 pub trait LLMModel: Module<3, 3> {
     fn config(&self) -> &dyn LLMConfig;
+
+    fn weight_post_process(&self) -> WeightPostProcess {
+        WeightPostProcess::None
+    }
 }
