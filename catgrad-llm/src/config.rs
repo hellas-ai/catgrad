@@ -80,8 +80,6 @@ pub struct Config {
     pub num_attention_heads: usize,
     pub num_key_value_heads: usize,
     pub attention_bias: bool,
-    pub head_dim: usize,
-    pub decoder_sparse_step: usize,
     pub num_experts_per_tok: usize,
     #[serde(alias = "num_experts", alias = "n_routed_experts")]
     pub num_local_experts: usize,
@@ -116,7 +114,6 @@ pub struct Config {
     pub use_qk_norm: bool,
     pub eos_token_id: Option<EosTokenId>,
     pub vocab_size: usize,
-    pub model_type: String,
     pub architectures: Vec<String>,
     pub layer_types: Vec<String>,
 }
@@ -150,10 +147,8 @@ impl LLMConfig for Config {
     fn get_head_dim(&self) -> usize {
         if self.qk_rope_head_dim != 0 {
             self.qk_rope_head_dim
-        } else if self.head_dim == 0 {
-            self.hidden_size / self.num_attention_heads
         } else {
-            self.head_dim
+            self.hidden_size / self.num_attention_heads
         }
     }
 
