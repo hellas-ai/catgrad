@@ -1,12 +1,79 @@
 #![allow(clippy::too_many_arguments)]
-use crate::config::{Config, LLMConfig};
+use crate::config::{EosTokenId, LLMConfig, RopeScaling};
 use crate::helpers::*;
 use catgrad::prelude::ops::*;
 use catgrad::prelude::*;
 use nn::*;
+use serde::Deserialize;
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+struct Qwen3Config {
+    hidden_size: usize,
+    intermediate_size: usize,
+    num_hidden_layers: usize,
+    num_attention_heads: usize,
+    num_key_value_heads: usize,
+    head_dim: usize,
+    decoder_sparse_step: usize,
+    num_experts_per_tok: usize,
+    #[serde(alias = "num_experts", alias = "n_routed_experts")]
+    num_local_experts: usize,
+    norm_topk_prob: bool,
+    rope_theta: f32,
+    #[serde(default = "default_partial_rotary_factor")]
+    partial_rotary_factor: f32,
+    rope_scaling: Option<RopeScaling>,
+    rms_norm_eps: f32,
+    tie_word_embeddings: bool,
+    eos_token_id: Option<EosTokenId>,
+    vocab_size: usize,
+}
+
+fn default_partial_rotary_factor() -> f32 {
+    1.0
+}
+
+impl LLMConfig for Qwen3Config {
+    fn num_hidden_layers(&self) -> usize {
+        self.num_hidden_layers
+    }
+
+    fn num_key_value_heads(&self) -> usize {
+        if self.num_key_value_heads == 0 {
+            self.num_attention_heads
+        } else {
+            self.num_key_value_heads
+        }
+    }
+
+    fn rope_theta(&self) -> f32 {
+        self.rope_theta
+    }
+
+    fn rope_scaling(&self) -> Option<RopeScaling> {
+        self.rope_scaling.clone()
+    }
+
+    fn partial_rotary_factor(&self) -> f32 {
+        self.partial_rotary_factor
+    }
+
+    fn get_head_dim(&self) -> usize {
+        if self.head_dim == 0 {
+            self.hidden_size / self.num_attention_heads
+        } else {
+            self.head_dim
+        }
+    }
+
+    fn eos_token_id(&self) -> Option<EosTokenId> {
+        self.eos_token_id.clone()
+    }
+}
 
 pub struct Qwen3Model {
-    pub config: Config,
+    config: Qwen3Config,
     pub max_sequence_length: usize,
 }
 
@@ -18,7 +85,7 @@ impl LLMModel for Qwen3Model {
 
 impl Qwen3Model {
     pub fn new(config_json: &serde_json::Value, max_sequence_length: usize) -> crate::Result<Self> {
-        let config: Config = serde_json::from_value(config_json.clone())?;
+        let config: Qwen3Config = serde_json::from_value(config_json.clone())?;
         Ok(Self {
             config,
             max_sequence_length,

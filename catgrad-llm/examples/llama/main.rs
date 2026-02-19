@@ -79,7 +79,7 @@ fn main() -> Result<()> {
 
 fn get_model_name(args: &Args) -> String {
     let models = HashMap::from([
-        ("gpt", "openai-community/gpt2"),
+        ("gpt2", "openai-community/gpt2"),
         ("gptoss", "unsloth/gpt-oss-20b-BF16"),
         ("smollm2", "HuggingFaceTB/SmolLM2-135M-Instruct"),
         ("smollm3", "HuggingFaceTB/SmolLM3-3B"),
@@ -87,7 +87,6 @@ fn get_model_name(args: &Args) -> String {
         ("mistral", "mistralai/Ministral-8B-Instruct-2410"),
         ("gemma", "google/gemma-3-1b-it"),
         ("qwen3", "Qwen/Qwen3-0.6B"),
-        ("qwen2", "Qwen/Qwen2.5-0.5B"),
         ("lfm", "LiquidAI/LFM2-350M"),
         ("qwenmoe", "Qwen/Qwen3-30B-A3B-Instruct-2507"),
         ("deepseek", "tiny-random/deepseek-v3.1"),

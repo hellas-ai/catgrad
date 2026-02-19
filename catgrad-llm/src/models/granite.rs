@@ -1,12 +1,71 @@
 #![allow(clippy::too_many_arguments)]
-use crate::config::{Config, LLMConfig};
+use crate::config::{EosTokenId, LLMConfig, RopeScaling};
 use crate::helpers::*;
 use catgrad::prelude::ops::*;
 use catgrad::prelude::*;
 use nn::*;
+use serde::Deserialize;
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+struct GraniteConfig {
+    hidden_size: usize,
+    intermediate_size: usize,
+    num_hidden_layers: usize,
+    num_attention_heads: usize,
+    num_key_value_heads: usize,
+    num_experts_per_tok: usize,
+    #[serde(alias = "num_experts", alias = "n_routed_experts")]
+    num_local_experts: usize,
+    attention_multiplier: f32,
+    embedding_multiplier: f32,
+    residual_multiplier: f32,
+    rope_theta: f32,
+    #[serde(default = "default_partial_rotary_factor")]
+    partial_rotary_factor: f32,
+    rope_scaling: Option<RopeScaling>,
+    rms_norm_eps: f32,
+    eos_token_id: Option<EosTokenId>,
+    vocab_size: usize,
+    model_type: String,
+}
+
+fn default_partial_rotary_factor() -> f32 {
+    1.0
+}
+
+impl LLMConfig for GraniteConfig {
+    fn num_hidden_layers(&self) -> usize {
+        self.num_hidden_layers
+    }
+
+    fn num_key_value_heads(&self) -> usize {
+        self.num_key_value_heads
+    }
+
+    fn rope_theta(&self) -> f32 {
+        self.rope_theta
+    }
+
+    fn rope_scaling(&self) -> Option<RopeScaling> {
+        self.rope_scaling.clone()
+    }
+
+    fn partial_rotary_factor(&self) -> f32 {
+        self.partial_rotary_factor
+    }
+
+    fn get_head_dim(&self) -> usize {
+        self.hidden_size / self.num_attention_heads
+    }
+
+    fn eos_token_id(&self) -> Option<EosTokenId> {
+        self.eos_token_id.clone()
+    }
+}
 
 pub struct GraniteModel {
-    pub config: Config,
+    config: GraniteConfig,
     pub max_sequence_length: usize,
 }
 
@@ -18,7 +77,7 @@ impl LLMModel for GraniteModel {
 
 impl GraniteModel {
     pub fn new(config_json: &serde_json::Value, max_sequence_length: usize) -> crate::Result<Self> {
-        let config: Config = serde_json::from_value(config_json.clone())?;
+        let config: GraniteConfig = serde_json::from_value(config_json.clone())?;
         Ok(Self {
             config,
             max_sequence_length,
@@ -46,6 +105,29 @@ impl GraniteModel {
             self.config.intermediate_size,
             self.config.hidden_size,
             p.extend(["down_proj"]).unwrap(),
+            x,
+        )
+    }
+
+    fn shared_mlp(&self, builder: &Builder, p: Path, x: Var) -> Var {
+        let gate_up = linear_no_bias(
+            builder,
+            self.config.hidden_size,
+            2 * self.config.intermediate_size,
+            p.extend(["input_linear"]).unwrap(),
+            x,
+        );
+
+        let gate_up = chunk(builder, 2, 2, self.config.intermediate_size, gate_up);
+        let gate = gate_up[0].clone();
+        let up = gate_up[1].clone();
+        let x = silu(builder, gate) * up;
+
+        linear_no_bias(
+            builder,
+            self.config.intermediate_size,
+            self.config.hidden_size,
+            p.extend(["output_linear"]).unwrap(),
             x,
         )
     }
@@ -225,7 +307,11 @@ impl GraniteModel {
             x,
         );
         let x = if self.config.num_experts_per_tok == 0 {
-            self.mlp(builder, p.extend(["mlp"]).unwrap(), x)
+            if self.config.model_type == "granitemoehybrid" {
+                self.shared_mlp(builder, p.extend(["shared_mlp"]).unwrap(), x)
+            } else {
+                self.mlp(builder, p.extend(["mlp"]).unwrap(), x)
+            }
         } else {
             self.moe(builder, p.extend(["block_sparse_moe"]).unwrap(), x)
         };

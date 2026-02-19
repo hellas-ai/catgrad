@@ -1,12 +1,70 @@
 #![allow(clippy::too_many_arguments)]
-use crate::config::{Config, LLMConfig};
+use crate::config::{EosTokenId, LLMConfig, RopeScaling};
 use crate::helpers::*;
 use catgrad::prelude::ops::*;
 use catgrad::prelude::*;
 use nn::*;
+use serde::Deserialize;
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+struct Phi3Config {
+    model_type: String,
+    hidden_size: usize,
+    intermediate_size: usize,
+    num_hidden_layers: usize,
+    num_attention_heads: usize,
+    num_key_value_heads: usize,
+    rms_norm_eps: f32,
+    tie_word_embeddings: bool,
+    vocab_size: usize,
+    rope_theta: f32,
+    #[serde(default = "default_partial_rotary_factor")]
+    partial_rotary_factor: f32,
+    rope_scaling: Option<RopeScaling>,
+    eos_token_id: Option<EosTokenId>,
+}
+
+fn default_partial_rotary_factor() -> f32 {
+    1.0
+}
+
+impl LLMConfig for Phi3Config {
+    fn num_hidden_layers(&self) -> usize {
+        self.num_hidden_layers
+    }
+
+    fn num_key_value_heads(&self) -> usize {
+        if self.num_key_value_heads == 0 {
+            self.num_attention_heads
+        } else {
+            self.num_key_value_heads
+        }
+    }
+
+    fn rope_theta(&self) -> f32 {
+        self.rope_theta
+    }
+
+    fn rope_scaling(&self) -> Option<RopeScaling> {
+        self.rope_scaling.clone()
+    }
+
+    fn partial_rotary_factor(&self) -> f32 {
+        self.partial_rotary_factor
+    }
+
+    fn get_head_dim(&self) -> usize {
+        self.hidden_size / self.num_attention_heads
+    }
+
+    fn eos_token_id(&self) -> Option<EosTokenId> {
+        self.eos_token_id.clone()
+    }
+}
 
 pub struct Phi3Model {
-    pub config: Config,
+    config: Phi3Config,
     pub max_sequence_length: usize,
 }
 
@@ -18,7 +76,7 @@ impl LLMModel for Phi3Model {
 
 impl Phi3Model {
     pub fn new(config_json: &serde_json::Value, max_sequence_length: usize) -> crate::Result<Self> {
-        let config: Config = serde_json::from_value(config_json.clone())?;
+        let config: Phi3Config = serde_json::from_value(config_json.clone())?;
         Ok(Self {
             config,
             max_sequence_length,

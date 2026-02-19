@@ -1,13 +1,104 @@
 #![allow(clippy::too_many_arguments)]
-use crate::config::{Config, LLMConfig};
+use crate::config::{EosTokenId, LLMConfig, RopeScaling};
 use crate::helpers::*;
 use catgrad::category::lang::eq;
 use catgrad::prelude::ops::*;
 use catgrad::prelude::*;
 use nn::*;
+use serde::Deserialize;
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+struct DeepSeekConfig {
+    hidden_size: usize,
+    intermediate_size: usize,
+    num_hidden_layers: usize,
+    num_attention_heads: usize,
+    num_key_value_heads: usize,
+    num_experts_per_tok: usize,
+    #[serde(alias = "num_experts", alias = "n_routed_experts")]
+    num_local_experts: usize,
+    first_k_dense_replace: usize,
+    q_lora_rank: usize,
+    kv_lora_rank: usize,
+    qk_nope_head_dim: usize,
+    qk_rope_head_dim: usize,
+    routed_scaling_factor: f32,
+    n_group: usize,
+    topk_group: usize,
+    v_head_dim: usize,
+    norm_topk_prob: bool,
+    rope_theta: f32,
+    #[serde(default = "default_partial_rotary_factor")]
+    partial_rotary_factor: f32,
+    rope_scaling: Option<RopeScaling>,
+    rms_norm_eps: f32,
+    tie_word_embeddings: bool,
+    eos_token_id: Option<EosTokenId>,
+    vocab_size: usize,
+}
+
+fn default_partial_rotary_factor() -> f32 {
+    1.0
+}
+
+impl LLMConfig for DeepSeekConfig {
+    fn num_hidden_layers(&self) -> usize {
+        self.num_hidden_layers
+    }
+
+    fn num_key_value_heads(&self) -> usize {
+        if self.num_key_value_heads == 0 {
+            self.num_attention_heads
+        } else {
+            self.num_key_value_heads
+        }
+    }
+
+    fn rope_theta(&self) -> f32 {
+        self.rope_theta
+    }
+
+    fn rope_scaling(&self) -> Option<RopeScaling> {
+        self.rope_scaling.clone()
+    }
+
+    fn partial_rotary_factor(&self) -> f32 {
+        self.partial_rotary_factor
+    }
+
+    fn get_head_dim(&self) -> usize {
+        if self.qk_rope_head_dim == 0 {
+            self.hidden_size / self.num_attention_heads
+        } else {
+            self.qk_rope_head_dim
+        }
+    }
+
+    fn get_qk_head_dim(&self) -> usize {
+        let qk_head_dim = self.qk_nope_head_dim + self.qk_rope_head_dim;
+        if qk_head_dim == 0 {
+            self.get_head_dim()
+        } else {
+            qk_head_dim
+        }
+    }
+
+    fn get_v_head_dim(&self) -> usize {
+        if self.v_head_dim == 0 {
+            self.get_head_dim()
+        } else {
+            self.v_head_dim
+        }
+    }
+
+    fn eos_token_id(&self) -> Option<EosTokenId> {
+        self.eos_token_id.clone()
+    }
+}
 
 pub struct DeepSeekModel {
-    pub config: Config,
+    config: DeepSeekConfig,
     pub max_sequence_length: usize,
 }
 
@@ -25,7 +116,7 @@ impl LLMModel for DeepSeekModel {
 
 impl DeepSeekModel {
     pub fn new(config_json: &serde_json::Value, max_sequence_length: usize) -> crate::Result<Self> {
-        let config: Config = serde_json::from_value(config_json.clone())?;
+        let config: DeepSeekConfig = serde_json::from_value(config_json.clone())?;
         Ok(Self {
             config,
             max_sequence_length,

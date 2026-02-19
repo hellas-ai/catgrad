@@ -226,51 +226,52 @@ pub fn get_model(
             "Missing architectures field".to_string(),
         ))?;
 
-    let model: Box<dyn LLMModel> =
-        match arch {
-            "Gemma2ForCausalLM" | "Gemma3ForCausalLM" => Box::new(
-                models::gemma3::Gemma3Model::new("model", config_json, max_sequence_length)?,
-            ),
-            "Gemma3ForConditionalGeneration" => Box::new(models::gemma3::Gemma3Model::new(
-                "language_model.model",
-                config_json,
-                max_sequence_length,
-            )?),
-            "MistralForCausalLM" | "LlamaForCausalLM" => Box::new(models::llama::LlamaModel::new(
-                "",
-                config_json,
-                max_sequence_length,
-            )?),
-            "Phi3ForCausalLM" | "Phi4MMForCausalLM" => Box::new(models::phi3::Phi3Model::new(
-                config_json,
-                max_sequence_length,
-            )?),
-            "Olmo2ForCausalLM" | "Olmo3ForCausalLM" => Box::new(models::olmo::OlmoModel::new(
-                config_json,
-                max_sequence_length,
-            )?),
-            "Qwen3ForCausalLM" | "Qwen3MoeForCausalLM" => Box::new(models::qwen3::Qwen3Model::new(
-                config_json,
-                max_sequence_length,
-            )?),
-            "GraniteForCausalLM" | "GraniteMoeForCausalLM" => Box::new(
-                models::granite::GraniteModel::new(config_json, max_sequence_length)?,
-            ),
-            "DeepseekV3ForCausalLM" => Box::new(models::deepseek::DeepSeekModel::new(
-                config_json,
-                max_sequence_length,
-            )?),
-            "GPT2LMHeadModel" => Box::new(models::gpt2::GPT2Model::new(
-                config_json,
-                max_sequence_length,
-            )?),
-            _ => {
-                return Err(LLMError::InvalidModelConfig(format!(
-                    "Unsupported model architecture: {}",
-                    arch
-                )));
-            }
-        };
+    let model: Box<dyn LLMModel> = match arch {
+        "Gemma2ForCausalLM" | "Gemma3ForCausalLM" => Box::new(models::gemma3::Gemma3Model::new(
+            "model",
+            config_json,
+            max_sequence_length,
+        )?),
+        "Gemma3ForConditionalGeneration" => Box::new(models::gemma3::Gemma3Model::new(
+            "language_model.model",
+            config_json,
+            max_sequence_length,
+        )?),
+        "MistralForCausalLM" | "LlamaForCausalLM" => Box::new(models::llama::LlamaModel::new(
+            "",
+            config_json,
+            max_sequence_length,
+        )?),
+        "Phi3ForCausalLM" | "Phi4MMForCausalLM" => Box::new(models::phi3::Phi3Model::new(
+            config_json,
+            max_sequence_length,
+        )?),
+        "Olmo2ForCausalLM" | "Olmo3ForCausalLM" => Box::new(models::olmo::OlmoModel::new(
+            config_json,
+            max_sequence_length,
+        )?),
+        "Qwen3ForCausalLM" | "Qwen3MoeForCausalLM" => Box::new(models::qwen3::Qwen3Model::new(
+            config_json,
+            max_sequence_length,
+        )?),
+        "GraniteForCausalLM" | "GraniteMoeForCausalLM" | "GraniteMoeHybridForCausalLM" => Box::new(
+            models::granite::GraniteModel::new(config_json, max_sequence_length)?,
+        ),
+        "DeepseekV3ForCausalLM" => Box::new(models::deepseek::DeepSeekModel::new(
+            config_json,
+            max_sequence_length,
+        )?),
+        "GPT2LMHeadModel" => Box::new(models::gpt2::GPT2Model::new(
+            config_json,
+            max_sequence_length,
+        )?),
+        _ => {
+            return Err(LLMError::InvalidModelConfig(format!(
+                "Unsupported model architecture: {}",
+                arch
+            )));
+        }
+    };
     Ok(model)
 }
 
