@@ -84,17 +84,6 @@ pub struct Config {
     #[serde(alias = "num_experts", alias = "n_routed_experts")]
     pub num_local_experts: usize,
     pub moe_intermediate_size: usize,
-    pub first_k_dense_replace: usize,
-    pub q_lora_rank: usize,
-    pub kv_lora_rank: usize,
-    pub qk_head_dim: usize,
-    pub qk_nope_head_dim: usize,
-    pub qk_rope_head_dim: usize,
-    pub routed_scaling_factor: f32,
-    pub n_group: usize,
-    pub topk_group: usize,
-    pub n_shared_experts: usize,
-    pub v_head_dim: usize,
     pub norm_topk_prob: bool,
     pub attention_multiplier: f32,
     pub embedding_multiplier: f32,
@@ -143,31 +132,8 @@ impl LLMConfig for Config {
         self.partial_rotary_factor
     }
 
-    // Sometimes the head_dim fields is missing
     fn get_head_dim(&self) -> usize {
-        if self.qk_rope_head_dim != 0 {
-            self.qk_rope_head_dim
-        } else {
-            self.hidden_size / self.num_attention_heads
-        }
-    }
-
-    // DeepSeek Multihead Latent Attention uses different head dimensions for queries, keys and values
-    fn get_qk_head_dim(&self) -> usize {
-        let qk_head_dim = self.qk_nope_head_dim + self.qk_rope_head_dim;
-        if qk_head_dim != 0 {
-            qk_head_dim
-        } else {
-            self.get_head_dim()
-        }
-    }
-
-    fn get_v_head_dim(&self) -> usize {
-        if self.v_head_dim != 0 {
-            self.v_head_dim
-        } else {
-            self.get_head_dim()
-        }
+        self.hidden_size / self.num_attention_heads
     }
 
     fn eos_token_id(&self) -> Option<EosTokenId> {
