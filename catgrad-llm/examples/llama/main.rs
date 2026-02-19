@@ -3,6 +3,7 @@ use catgrad::interpreter::backend::candle::CandleBackend;
 use catgrad::interpreter::backend::ndarray::NdArrayBackend;
 use catgrad::prelude::*;
 use clap::{Parser, ValueEnum};
+use std::collections::HashMap;
 use std::io::Write;
 use std::path::PathBuf;
 
@@ -76,12 +77,43 @@ fn main() -> Result<()> {
     }
 }
 
-fn run_with_backend<B: interpreter::Backend>(args: &Args, backend: B) -> Result<()> {
-    let (mut parameter_values, mut parameter_types, config_json, tokenizer, total_params) =
-        load_model(&args.model_name, &args.revision, &backend)?;
+fn get_model_name(args: &Args) -> String {
+    let models = HashMap::from([
+        ("gpt", "openai-community/gpt2"),
+        ("gptoss", "unsloth/gpt-oss-20b-BF16"),
+        ("smollm2", "HuggingFaceTB/SmolLM2-135M-Instruct"),
+        ("smollm3", "HuggingFaceTB/SmolLM3-3B"),
+        ("llama", "meta-llama/Llama-3.2-1B-Instruct"),
+        ("mistral", "mistralai/Ministral-8B-Instruct-2410"),
+        ("gemma", "google/gemma-3-1b-it"),
+        ("qwen3", "Qwen/Qwen3-0.6B"),
+        ("qwen2", "Qwen/Qwen2.5-0.5B"),
+        ("lfm", "LiquidAI/LFM2-350M"),
+        ("qwenmoe", "Qwen/Qwen3-30B-A3B-Instruct-2507"),
+        ("deepseek", "tiny-random/deepseek-v3.1"),
+        ("granitemoe", "ibm-granite/granite-3.1-1b-a400m-instruct"),
+        ("granite", "ibm-granite/granite-3.3-2b-instruct"),
+        ("granite4", "ibm-granite/granite-4.0-micro"),
+        ("olmo2", "allenai/OLMo-2-0425-1B-Instruct"),
+        ("olmo3", "allenai/Olmo-3-7B-Instruct"),
+        ("phi", "microsoft/Phi-4-mini-instruct"),
+        ("modernbert", "jhu-clsp/ettin-decoder-17m"),
+    ]);
 
-    let chat_template =
-        get_model_chat_template(&args.model_name, &args.revision).unwrap_or_default();
+    let model_name = models
+        .get(args.model_name.as_str())
+        .copied()
+        .unwrap_or(&args.model_name);
+
+    model_name.to_string()
+}
+
+fn run_with_backend<B: interpreter::Backend>(args: &Args, backend: B) -> Result<()> {
+    let model_name = get_model_name(args);
+    let (mut parameter_values, mut parameter_types, config_json, tokenizer, total_params) =
+        load_model(&model_name, &args.revision, &backend)?;
+
+    let chat_template = get_model_chat_template(&model_name, &args.revision).unwrap_or_default();
 
     let benchmarking = args.bench.is_some();
     let mut pp = 0;
@@ -94,7 +126,7 @@ fn run_with_backend<B: interpreter::Backend>(args: &Args, backend: B) -> Result<
         max_seq_len = tg;
         println!(
             "Benchmarking {} with prefill size {} and sequence length {}",
-            args.model_name, pp, tg
+            &model_name, pp, tg
         );
         "The".repeat(pp)
     } else if chat_template.is_empty() || args.raw {
@@ -208,7 +240,7 @@ fn run_with_backend<B: interpreter::Backend>(args: &Args, backend: B) -> Result<
         let tps_pp = pp as f64 / elapsed_pp.as_secs_f64();
         println!(
             "| {:<40} | {:>6.2} GiB | {:>8.2} M | {:<10} | {:>15} | {:>20.2} |",
-            args.model_name,
+            &model_name,
             size_gib,
             params_m,
             b_str,
@@ -219,7 +251,7 @@ fn run_with_backend<B: interpreter::Backend>(args: &Args, backend: B) -> Result<
         let tps_tg = tg as f64 / elapsed_gen.as_secs_f64();
         println!(
             "| {:<40} | {:>6.2} GiB | {:>8.2} M | {:<10} | {:>15} | {:>20.2} |",
-            args.model_name,
+            &model_name,
             size_gib,
             params_m,
             b_str,

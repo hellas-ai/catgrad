@@ -1,5 +1,5 @@
 #![allow(clippy::too_many_arguments)]
-use crate::config::{EosTokenId, LLMConfig, RopeScaling};
+use crate::config::{EosTokenId, LLMConfig};
 use crate::helpers::*;
 use catgrad::prelude::ops::*;
 use catgrad::prelude::*;
@@ -114,15 +114,15 @@ impl LLMConfig for GemmaTextConfig {
     fn num_hidden_layers(&self) -> usize {
         self.num_hidden_layers
     }
+
     fn num_key_value_heads(&self) -> usize {
         self.num_key_value_heads
     }
+
     fn rope_theta(&self) -> f32 {
         self.rope_theta
     }
-    fn rope_scaling(&self) -> Option<RopeScaling> {
-        None
-    }
+
     fn partial_rotary_factor(&self) -> f32 {
         self.partial_rotary_factor
     }
@@ -130,12 +130,7 @@ impl LLMConfig for GemmaTextConfig {
     fn get_head_dim(&self) -> usize {
         self.head_dim
     }
-    fn get_qk_head_dim(&self) -> usize {
-        self.head_dim
-    }
-    fn get_v_head_dim(&self) -> usize {
-        self.head_dim
-    }
+
     fn eos_token_id(&self) -> Option<EosTokenId> {
         self.eos_token_id.clone()
     }

@@ -1,12 +1,45 @@
 #![allow(clippy::too_many_arguments)]
-use crate::config::{Config, LLMConfig};
+use crate::config::{EosTokenId, LLMConfig};
 use crate::helpers::*;
 use catgrad::prelude::ops::*;
 use catgrad::prelude::*;
+use serde::Deserialize;
 
 use nn::*;
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct GPT2Config {
+    #[serde(alias = "n_embd")]
+    pub hidden_size: usize,
+    #[serde(alias = "n_layer")]
+    pub num_hidden_layers: usize,
+    #[serde(alias = "n_head")]
+    pub num_attention_heads: usize,
+    pub layer_norm_epsilon: f32,
+    pub vocab_size: usize,
+    pub eos_token_id: Option<EosTokenId>,
+}
+
+impl LLMConfig for GPT2Config {
+    fn num_hidden_layers(&self) -> usize {
+        self.num_hidden_layers
+    }
+
+    fn num_key_value_heads(&self) -> usize {
+        self.num_attention_heads
+    }
+
+    fn get_head_dim(&self) -> usize {
+        self.hidden_size / self.num_attention_heads
+    }
+
+    fn eos_token_id(&self) -> Option<EosTokenId> {
+        self.eos_token_id.clone()
+    }
+}
+
 pub struct GPT2Model {
-    pub config: Config,
+    pub config: GPT2Config,
     pub max_sequence_length: usize,
 }
 
@@ -18,7 +51,7 @@ impl LLMModel for GPT2Model {
 
 impl GPT2Model {
     pub fn new(config_json: &serde_json::Value, max_sequence_length: usize) -> crate::Result<Self> {
-        let config: Config = serde_json::from_value(config_json.clone())?;
+        let config: GPT2Config = serde_json::from_value(config_json.clone())?;
         Ok(Self {
             config,
             max_sequence_length,
