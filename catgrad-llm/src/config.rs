@@ -100,11 +100,8 @@ pub struct Config {
     pub partial_rotary_factor: f32,
     pub local_rope_theta: f32,
     pub global_rope_theta: f32,
-    #[serde(alias = "_sliding_window_pattern")]
-    pub sliding_window_pattern: usize,
     pub global_attn_every_n_layers: usize,
     pub rope_scaling: Option<RopeScaling>,
-    pub rope_local_base_freq: f32,
     #[serde(alias = "n_positions")]
     pub max_position_embeddings: usize,
     pub no_rope_layer_interval: usize,
