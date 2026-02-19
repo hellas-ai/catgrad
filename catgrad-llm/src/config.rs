@@ -42,13 +42,23 @@ pub enum RopeScaling {
 pub trait LLMConfig {
     fn num_hidden_layers(&self) -> usize;
     fn num_key_value_heads(&self) -> usize;
-    fn rope_theta(&self) -> f32;
-    fn rope_scaling(&self) -> Option<RopeScaling>;
-    fn partial_rotary_factor(&self) -> f32;
+    fn rope_theta(&self) -> f32 {
+        10000.0
+    }
+    fn rope_scaling(&self) -> Option<RopeScaling> {
+        None
+    }
+    fn partial_rotary_factor(&self) -> f32 {
+        1.0
+    }
 
     fn get_head_dim(&self) -> usize;
-    fn get_qk_head_dim(&self) -> usize;
-    fn get_v_head_dim(&self) -> usize;
+    fn get_qk_head_dim(&self) -> usize {
+        self.get_head_dim()
+    }
+    fn get_v_head_dim(&self) -> usize {
+        self.get_head_dim()
+    }
     fn eos_token_id(&self) -> Option<EosTokenId>;
     fn get_eos_token_ids(&self) -> Vec<i32> {
         match self.eos_token_id() {
@@ -64,12 +74,9 @@ pub trait LLMConfig {
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
 pub struct Config {
-    #[serde(alias = "n_embd")]
     pub hidden_size: usize,
     pub intermediate_size: usize,
-    #[serde(alias = "n_layer")]
     pub num_hidden_layers: usize,
-    #[serde(alias = "n_head")]
     pub num_attention_heads: usize,
     pub num_key_value_heads: usize,
     pub attention_bias: bool,
@@ -102,10 +109,7 @@ pub struct Config {
     pub global_rope_theta: f32,
     pub global_attn_every_n_layers: usize,
     pub rope_scaling: Option<RopeScaling>,
-    #[serde(alias = "n_positions")]
-    pub max_position_embeddings: usize,
     pub no_rope_layer_interval: usize,
-    pub layer_norm_epsilon: f32,
     pub layer_norm_eps: f32,
     pub rms_norm_eps: f32,
     pub tie_word_embeddings: bool,
