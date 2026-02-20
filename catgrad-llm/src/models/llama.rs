@@ -15,6 +15,7 @@ struct LlamaConfig {
     num_attention_heads: usize,
     num_key_value_heads: usize,
     rope_theta: f32,
+    no_rope_layer_interval: usize,
     #[serde(default = "default_partial_rotary_factor")]
     partial_rotary_factor: f32,
     rope_scaling: Option<RopeScaling>,
@@ -139,33 +140,43 @@ impl LlamaModel {
 
         let v = linear_no_bias(builder, dim, dim / rep, p.extend(["v_proj"]).unwrap(), x);
 
+        let sh = shape!(builder, b, s, num_heads, head_dim);
+        let q = reshape(builder, sh, q);
+
         let sh = shape!(builder, b, s, num_kv_heads, head_dim);
         let k = reshape(builder, sh.clone(), k);
         let v = reshape(builder, sh, v);
-
-        let sh = shape!(builder, b, s, num_heads, head_dim);
-        let q = reshape(builder, sh, q);
 
         let q = transpose(builder, 1, 2, q);
         let k = transpose(builder, 1, 2, k);
         let v = transpose(builder, 1, 2, v);
 
-        let q = apply_rope_embedding(
-            builder,
-            pos.clone(),
-            head_dim,
-            cache.cos.clone(),
-            cache.sin.clone(),
-            q,
-        );
-        let k = apply_rope_embedding(
-            builder,
-            pos,
-            head_dim,
-            cache.cos.clone(),
-            cache.sin.clone(),
-            k,
-        );
+        // SmolLM3 uses this field to specify layers where no RoPE is applied
+        let use_rope = self.config.no_rope_layer_interval == 0
+            || !(layer_id + 1).is_multiple_of(self.config.no_rope_layer_interval);
+
+        let (q, k) = if use_rope {
+            (
+                apply_rope_embedding(
+                    builder,
+                    pos.clone(),
+                    head_dim,
+                    cache.cos.clone(),
+                    cache.sin.clone(),
+                    q,
+                ),
+                apply_rope_embedding(
+                    builder,
+                    pos,
+                    head_dim,
+                    cache.cos.clone(),
+                    cache.sin.clone(),
+                    k,
+                ),
+            )
+        } else {
+            (q, k)
+        };
 
         let (k, v) = cache.update_kv_cache(builder, layer_id, k, v);
 
