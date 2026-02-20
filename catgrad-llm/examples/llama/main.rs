@@ -109,8 +109,17 @@ fn get_model_name(args: &Args) -> String {
 
 fn run_with_backend<B: interpreter::Backend>(args: &Args, backend: B) -> Result<()> {
     let model_name = get_model_name(args);
+
+    let start_load = std::time::Instant::now();
     let (mut parameter_values, mut parameter_types, config_json, tokenizer, total_params) =
         load_model(&model_name, &args.revision, &backend)?;
+    let elapsed_load = start_load.elapsed();
+
+    println!(
+        "Model weights loaded for {} in {:.2} seconds",
+        model_name,
+        elapsed_load.as_secs_f64()
+    );
 
     let chat_template = get_model_chat_template(&model_name, &args.revision).unwrap_or_default();
 
