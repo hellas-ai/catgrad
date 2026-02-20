@@ -13,7 +13,8 @@ use std::rc::Rc;
 use tokenizers::tokenizer::{Result, Tokenizer};
 
 use catgrad_llm::utils::{
-    get_model_chat_template, get_model_files, read_safetensors_multiple, render_chat_template,
+    get_model_chat_template, get_model_files, print_bench_table, read_safetensors_multiple,
+    render_chat_template,
 };
 
 use catgrad_llm::legacy::models::utils::{Cache, Config, ModelBuilder, get_model};
@@ -216,6 +217,17 @@ impl ModelRunner {
     }
 }
 
+fn model_size(tensors: &HashMap<String, TaggedNdArray>) -> (usize, usize) {
+    tensors
+        .values()
+        .fold((0usize, 0usize), |(params, bytes), tensor| {
+            let n = tensor.len();
+            let size = if tensor.dtype() == Dtype::F16 { 2 } else { 4 };
+            let tensor_bytes = n * size;
+            (params + n, bytes + tensor_bytes)
+        })
+}
+
 #[derive(Parser, Debug)]
 struct Args {
     /// Model name on Huggingface Hub
@@ -357,6 +369,7 @@ pub fn main() -> Result<()> {
         "Model weights loaded for {model_name} in {:.2} seconds",
         elapsed_load.as_secs_f64()
     );
+    let (total_params, total_bytes) = model_size(model_runner.tensors.as_ref());
 
     let input = NdArray::new(token_ids, Shape(vec![batches, tokens]));
     log::info!("Input tokens {:?}", &input);
@@ -397,23 +410,26 @@ pub fn main() -> Result<()> {
     }
 
     let elapsed_gen = start_gen.elapsed();
-    println!(
-        "\n{} tokens generated in {} seconds. ({:.2} tps)",
-        generated_tokens,
-        (elapsed_pp + elapsed_gen).as_secs(),
-        generated_tokens as f64 / (elapsed_pp + elapsed_gen).as_secs_f64(),
-    );
-
     if benchmarking {
-        println!(
-            "PP {pp} in {} ms {:.2} tps",
-            elapsed_pp.as_millis(),
-            pp as f64 / elapsed_pp.as_secs_f64()
+        let size_gib = total_bytes as f64 / (1024.0 * 1024.0 * 1024.0);
+        let params_m = total_params as f64 / 1_000_000.0;
+        let b_str = "CPU";
+        print_bench_table(
+            model_name,
+            size_gib,
+            params_m,
+            b_str,
+            pp,
+            elapsed_pp,
+            tg,
+            elapsed_gen,
         );
+    } else {
         println!(
-            "TG {tg} in {} ms {:.2} tps",
-            elapsed_gen.as_millis(),
-            tg as f64 / elapsed_gen.as_secs_f64()
+            "\n{} tokens generated in {} seconds. ({:.2} tps)",
+            generated_tokens,
+            (elapsed_pp + elapsed_gen).as_secs(),
+            generated_tokens as f64 / (elapsed_pp + elapsed_gen).as_secs_f64(),
         );
     }
 

@@ -9,7 +9,7 @@ use std::path::PathBuf;
 
 use catgrad_llm::config::LLMConfig;
 use catgrad_llm::utils::{
-    get_model, get_model_chat_template, load_model, post_process_model_weights,
+    get_model, get_model_chat_template, load_model, post_process_model_weights, print_bench_table,
     render_chat_template,
 };
 
@@ -109,8 +109,17 @@ fn get_model_name(args: &Args) -> String {
 
 fn run_with_backend<B: interpreter::Backend>(args: &Args, backend: B) -> Result<()> {
     let model_name = get_model_name(args);
+
+    let start_load = std::time::Instant::now();
     let (mut parameter_values, mut parameter_types, config_json, tokenizer, total_params) =
         load_model(&model_name, &args.revision, &backend)?;
+    let elapsed_load = start_load.elapsed();
+
+    println!(
+        "Model weights loaded for {} in {:.2} seconds",
+        model_name,
+        elapsed_load.as_secs_f64()
+    );
 
     let chat_template = get_model_chat_template(&model_name, &args.revision).unwrap_or_default();
 
@@ -228,34 +237,15 @@ fn run_with_backend<B: interpreter::Backend>(args: &Args, backend: B) -> Result<
             BackendChoice::Ndarray => "Ndarray",
             BackendChoice::Candle => "Candle",
         };
-
-        println!(
-            "| model                                    | size       | params     | backend    |            test |                  t/s |"
-        );
-        println!(
-            "| ---------------------------------------- | ---------- | ---------- | ---------- | --------------- | -------------------- |"
-        );
-
-        let tps_pp = pp as f64 / elapsed_pp.as_secs_f64();
-        println!(
-            "| {:<40} | {:>6.2} GiB | {:>8.2} M | {:<10} | {:>15} | {:>20.2} |",
+        print_bench_table(
             &model_name,
             size_gib,
             params_m,
             b_str,
-            format!("pp{}", pp),
-            tps_pp
-        );
-
-        let tps_tg = tg as f64 / elapsed_gen.as_secs_f64();
-        println!(
-            "| {:<40} | {:>6.2} GiB | {:>8.2} M | {:<10} | {:>15} | {:>20.2} |",
-            &model_name,
-            size_gib,
-            params_m,
-            b_str,
-            format!("tg{}", tg),
-            tps_tg
+            pp,
+            elapsed_pp,
+            tg,
+            elapsed_gen,
         );
     } else {
         println!(
