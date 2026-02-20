@@ -9,7 +9,7 @@ use std::path::PathBuf;
 
 use catgrad_llm::config::LLMConfig;
 use catgrad_llm::utils::{
-    get_model, get_model_chat_template, load_model, post_process_model_weights,
+    get_model, get_model_chat_template, load_model, post_process_model_weights, print_bench_table,
     render_chat_template,
 };
 
@@ -237,34 +237,15 @@ fn run_with_backend<B: interpreter::Backend>(args: &Args, backend: B) -> Result<
             BackendChoice::Ndarray => "Ndarray",
             BackendChoice::Candle => "Candle",
         };
-
-        println!(
-            "| model                                    | size       | params     | backend    |            test |                  t/s |"
-        );
-        println!(
-            "| ---------------------------------------- | ---------- | ---------- | ---------- | --------------- | -------------------- |"
-        );
-
-        let tps_pp = pp as f64 / elapsed_pp.as_secs_f64();
-        println!(
-            "| {:<40} | {:>6.2} GiB | {:>8.2} M | {:<10} | {:>15} | {:>20.2} |",
+        print_bench_table(
             &model_name,
             size_gib,
             params_m,
             b_str,
-            format!("pp{}", pp),
-            tps_pp
-        );
-
-        let tps_tg = tg as f64 / elapsed_gen.as_secs_f64();
-        println!(
-            "| {:<40} | {:>6.2} GiB | {:>8.2} M | {:<10} | {:>15} | {:>20.2} |",
-            &model_name,
-            size_gib,
-            params_m,
-            b_str,
-            format!("tg{}", tg),
-            tps_tg
+            pp,
+            elapsed_pp,
+            tg,
+            elapsed_gen,
         );
     } else {
         println!(

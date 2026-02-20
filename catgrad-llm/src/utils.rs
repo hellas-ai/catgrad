@@ -528,3 +528,44 @@ pub fn load_and_preprocess_image(
         vec![1, num_channels, aligned_image_size, aligned_image_size],
     )
 }
+
+#[allow(clippy::too_many_arguments)]
+pub fn print_bench_table(
+    model_name: &str,
+    size_gib: f64,
+    params_m: f64,
+    backend: &str,
+    pp: usize,
+    elapsed_pp: std::time::Duration,
+    tg: usize,
+    elapsed_tg: std::time::Duration,
+) {
+    println!(
+        "| model                                    | size       | params     | backend    |            test |                  t/s |"
+    );
+    println!(
+        "| ---------------------------------------- | ---------- | ---------- | ---------- | --------------- | -------------------- |"
+    );
+
+    let tps_pp = pp as f64 / elapsed_pp.as_secs_f64();
+    println!(
+        "| {:<40} | {:>6.2} GiB | {:>8.2} M | {:<10} | {:>15} | {:>20.2} |",
+        model_name,
+        size_gib,
+        params_m,
+        backend,
+        format!("pp{}", pp),
+        tps_pp
+    );
+
+    let tps_tg = tg as f64 / elapsed_tg.as_secs_f64();
+    println!(
+        "| {:<40} | {:>6.2} GiB | {:>8.2} M | {:<10} | {:>15} | {:>20.2} |",
+        model_name,
+        size_gib,
+        params_m,
+        backend,
+        format!("tg{}", tg),
+        tps_tg
+    );
+}
