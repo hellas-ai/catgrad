@@ -1,6 +1,10 @@
 import torch
 import argparse
-from transformers import AutoModelForCausalLM, AutoTokenizer
+from transformers import (
+    AutoModelForCausalLM,
+    AutoModelForImageTextToText,
+    AutoTokenizer,
+)
 
 from transformers import logging
 
@@ -23,9 +27,14 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     tokenizer = AutoTokenizer.from_pretrained(args.model, revision=args.revision)
-    model = AutoModelForCausalLM.from_pretrained(
-        args.model, revision=args.revision, dtype=args.dtype
-    )
+    try:
+        model = AutoModelForCausalLM.from_pretrained(
+            args.model, revision=args.revision, dtype=args.dtype
+        )
+    except:
+        model = AutoModelForImageTextToText.from_pretrained(
+            args.model, revision=args.revision, dtype=args.dtype
+        )
 
     print(f"Loaded model {args.model}, dtype:{model.dtype}")
     prompt = args.prompt
