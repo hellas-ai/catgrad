@@ -15,7 +15,7 @@ pub fn gptoss_swiglu(builder: &Builder, alpha: f32, limit: f32, gate_up: Var) ->
     }
     let w = x.label.shape.0[2];
     let idx_gate = range_indices(builder, 0, w, 2);
-    let idx_up = range_indices(builder, 1, w, 2);
+    let idx_up = range_indices(builder, 1, w + 1, 2);
 
     let gate = index(builder, 2, x.clone(), idx_gate);
     let up = index(builder, 2, x, idx_up);

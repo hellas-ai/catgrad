@@ -1,6 +1,7 @@
 pub mod deepseek;
 pub mod gemma3;
 pub mod gpt2;
+pub mod gpt_oss;
 pub mod granite;
 pub mod llama;
 pub mod olmo;
