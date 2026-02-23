@@ -139,13 +139,13 @@ impl OlmoModel {
             x,
         );
 
-        let q = rmsnorm(
+        let q = rmsnorm::<3>(
             builder,
             self.config.rms_norm_eps,
             p.extend(["q_norm"]).unwrap(),
             q,
         );
-        let k = rmsnorm(
+        let k = rmsnorm::<3>(
             builder,
             self.config.rms_norm_eps,
             p.extend(["k_norm"]).unwrap(),
@@ -224,7 +224,7 @@ impl OlmoModel {
             p.extend(["self_attn"]).unwrap(),
             x,
         );
-        let x = rmsnorm(
+        let x = rmsnorm::<3>(
             builder,
             self.config.rms_norm_eps,
             p.extend(["post_attention_layernorm"]).unwrap(),
@@ -236,7 +236,7 @@ impl OlmoModel {
 
         let x = self.mlp(builder, p.extend(["mlp"]).unwrap(), x);
 
-        let x = rmsnorm(
+        let x = rmsnorm::<3>(
             builder,
             self.config.rms_norm_eps,
             p.extend(["post_feedforward_layernorm"]).unwrap(),
@@ -283,7 +283,7 @@ impl Module<3, 3> for OlmoModel {
             );
         }
 
-        x = rmsnorm(
+        x = rmsnorm::<3>(
             builder,
             self.config.rms_norm_eps,
             root.extend(["model", "norm"]).unwrap(),
