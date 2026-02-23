@@ -279,7 +279,7 @@ impl GraniteModel {
         x: Var,
     ) -> Var {
         let res = x.clone();
-        let x = rmsnorm(
+        let x = rmsnorm::<3>(
             builder,
             self.config.rms_norm_eps,
             p.extend(["input_layernorm"]).unwrap(),
@@ -300,7 +300,7 @@ impl GraniteModel {
 
         let x = res + x * mul.clone();
         let res = x.clone();
-        let x = rmsnorm(
+        let x = rmsnorm::<3>(
             builder,
             self.config.rms_norm_eps,
             p.extend(["post_attention_layernorm"]).unwrap(),
@@ -360,7 +360,7 @@ impl Module<3, 3> for GraniteModel {
             );
         }
 
-        x = rmsnorm(
+        x = rmsnorm::<3>(
             builder,
             self.config.rms_norm_eps,
             root.extend(["model", "norm"]).unwrap(),

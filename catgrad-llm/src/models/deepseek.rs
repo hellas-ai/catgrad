@@ -302,7 +302,7 @@ impl DeepSeekModel {
             p.extend(["q_a_proj"]).unwrap(),
             x.clone(),
         );
-        let q = rmsnorm(
+        let q = rmsnorm::<3>(
             builder,
             self.config.rms_norm_eps,
             p.extend(["q_a_layernorm"]).unwrap(),
@@ -348,7 +348,7 @@ impl DeepSeekModel {
         let k_pass = kp_split[0].clone();
         let k_rot = kp_split[1].clone();
 
-        let k_pass = rmsnorm(
+        let k_pass = rmsnorm::<3>(
             builder,
             self.config.rms_norm_eps,
             p.extend(["kv_a_layernorm"]).unwrap(),
@@ -451,7 +451,7 @@ impl DeepSeekModel {
         x: Var,
     ) -> Var {
         let res = x.clone();
-        let x = rmsnorm(
+        let x = rmsnorm::<3>(
             builder,
             self.config.rms_norm_eps,
             p.extend(["input_layernorm"]).unwrap(),
@@ -469,7 +469,7 @@ impl DeepSeekModel {
 
         let x = res + x;
         let res = x.clone();
-        let x = rmsnorm(
+        let x = rmsnorm::<3>(
             builder,
             self.config.rms_norm_eps,
             p.extend(["post_attention_layernorm"]).unwrap(),
@@ -521,7 +521,7 @@ impl Module<3, 3> for DeepSeekModel {
             );
         }
 
-        x = rmsnorm(
+        x = rmsnorm::<3>(
             builder,
             self.config.rms_norm_eps,
             root.extend(["model", "norm"]).unwrap(),
