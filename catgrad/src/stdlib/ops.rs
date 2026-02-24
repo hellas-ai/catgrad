@@ -20,7 +20,7 @@ pub fn lit<T: Into<Literal>>(builder: &Builder, x: T) -> Var {
 
 pub fn constant<T: Into<Literal>>(builder: &Builder, x: T, s: &Var) -> Var {
     let x = lit(builder, x);
-    ops::broadcast(builder, x, s.clone())
+    ops::broadcast(builder, s.clone(), x)
 }
 
 pub fn inverse(builder: &Builder, x: Var) -> Var {

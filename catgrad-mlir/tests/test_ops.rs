@@ -758,7 +758,7 @@ fn test_tensor_broadcast() {
             ],
             [tensor_type(&output_shape, Dtype::F32)],
             |builder, [input_tensor, target_shape]| {
-                vec![ops::broadcast(builder, input_tensor, target_shape)]
+                vec![ops::broadcast(builder, target_shape, input_tensor)]
             },
         )
         .unwrap(),
@@ -777,7 +777,7 @@ fn test_tensor_broadcast_executes() {
         ],
         [tensor_type(&output_shape, Dtype::F32)],
         |builder, [input_tensor, target_shape]| {
-            vec![ops::broadcast(builder, input_tensor, target_shape)]
+            vec![ops::broadcast(builder, target_shape, input_tensor)]
         },
     )
     .unwrap();
@@ -824,7 +824,7 @@ fn test_tensor_broadcast_dynamic() {
             ],
             [output_type],
             |builder, [input_tensor, target_shape]| {
-                vec![ops::broadcast(builder, input_tensor, target_shape)]
+                vec![ops::broadcast(builder, target_shape, input_tensor)]
             },
         )
         .unwrap(),
@@ -847,7 +847,7 @@ fn test_tensor_broadcast_dynamic_executes() {
         ],
         [output_type],
         |builder, [input_tensor, target_shape]| {
-            vec![ops::broadcast(builder, input_tensor, target_shape)]
+            vec![ops::broadcast(builder, target_shape, input_tensor)]
         },
     )
     .unwrap();

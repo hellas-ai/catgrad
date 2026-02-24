@@ -155,7 +155,7 @@ impl Qwen3Model {
 
         if self.config.norm_topk_prob {
             let sv = sum(builder, values.clone());
-            let sv = broadcast(builder, sv, sh);
+            let sv = broadcast(builder, sh, sv);
             values = values / sv;
         }
 
@@ -181,7 +181,7 @@ impl Qwen3Model {
             let x = matmul(builder, x, down);
 
             let v = unsqueeze::<2, 3>(builder, 2, val);
-            let v = broadcast(builder, v, shape(builder, x.clone()));
+            let v = broadcast(builder, shape(builder, x.clone()), v);
             sumk = sumk + x * v;
         }
 
@@ -301,7 +301,7 @@ impl Qwen3Model {
         let denom = constant(builder, f32::sqrt(head_dim as f32), &sh);
         let mut attn = attn / denom;
 
-        let mask = broadcast(builder, attention_mask, sh);
+        let mask = broadcast(builder, sh, attention_mask);
         attn = attn + mask;
 
         let attn = softmax(builder, attn);

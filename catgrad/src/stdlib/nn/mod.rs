@@ -162,11 +162,11 @@ pub fn gelu(builder: &Builder, x: Var) -> Var {
 pub fn softmax(builder: &Builder, x: Var) -> Var {
     let x_shape = shape(builder, x.clone());
     let m = max(builder, x.clone());
-    let bmax = broadcast(builder, m, x_shape.clone());
+    let bmax = broadcast(builder, x_shape.clone(), m);
     let x = x - bmax;
     let ex = exp(builder, x);
     let s = sum(builder, ex.clone());
-    let bsum = broadcast(builder, s, x_shape);
+    let bsum = broadcast(builder, x_shape, s);
     ex / bsum
 }
 
@@ -192,12 +192,12 @@ pub fn linear_b_param(
 
     let w_t = reshape(builder, sh, w_t);
     let sh = pack::<3>(builder, [batch_size, in_dim, out_dim]);
-    let w_t = broadcast(builder, w_t, sh);
+    let w_t = broadcast(builder, sh, w_t);
 
     let m = matmul(builder, x, w_t);
     if let Some(b) = bias {
         let sh = shape(builder, m.clone());
-        let bb = broadcast(builder, b, sh);
+        let bb = broadcast(builder, sh, b);
         return m + bb;
     }
     m

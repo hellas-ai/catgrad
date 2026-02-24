@@ -199,7 +199,7 @@ impl Phi3Model {
         let denom = constant(builder, f32::sqrt(head_dim as f32), &sh);
         let mut attn = attn / denom;
 
-        let mask = broadcast(builder, attention_mask, sh);
+        let mask = broadcast(builder, sh, attention_mask);
         attn = attn + mask;
 
         let attn = softmax(builder, attn);

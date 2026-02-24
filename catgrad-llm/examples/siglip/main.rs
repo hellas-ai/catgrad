@@ -219,13 +219,13 @@ impl SiglipVisionBackbone {
         let weight = transpose(builder, 0, 1, weight);
 
         let sh = shape!(builder, 1, dim, hidden_size);
-        let weight = broadcast(builder, weight, sh);
+        let weight = broadcast(builder, sh, weight);
 
         let emb = matmul(builder, x, weight);
 
         let bias = param(builder, &p.extend(["patch_embedding", "bias"]).unwrap());
         let sh = shape(builder, emb.clone());
-        let bias = broadcast(builder, bias, sh.clone());
+        let bias = broadcast(builder, sh.clone(), bias);
         let emb = emb + bias;
 
         let pe = param(
@@ -233,7 +233,7 @@ impl SiglipVisionBackbone {
             &p.extend(["position_embedding", "weight"]).unwrap(),
         );
 
-        let pe = broadcast(builder, pe, sh);
+        let pe = broadcast(builder, sh, pe);
 
         emb + pe
     }
@@ -370,7 +370,7 @@ impl SiglipModel {
         );
         let pe = index(builder, 0, pos, pe_weights);
 
-        let pe = broadcast(builder, pe, sh);
+        let pe = broadcast(builder, sh, pe);
 
         we + pe
     }
@@ -409,7 +409,7 @@ impl SiglipModel {
         let l2_norm = sum(builder, sqr);
         let l2_norm = sqrt(builder, l2_norm);
         let sh_x = shape(builder, x.clone());
-        let l2_norm = broadcast(builder, l2_norm, sh_x);
+        let l2_norm = broadcast(builder, sh_x, l2_norm);
         x / l2_norm
     }
 }
@@ -459,8 +459,8 @@ impl Module<2, 2> for SiglipModel {
         let logit_scale = exp(builder, logit_scale);
 
         let sh_logits = shape(builder, logits_per_text.clone());
-        let logit_scale = broadcast(builder, logit_scale, sh_logits.clone());
-        let logit_bias = broadcast(builder, logit_bias, sh_logits);
+        let logit_scale = broadcast(builder, sh_logits.clone(), logit_scale);
+        let logit_bias = broadcast(builder, sh_logits, logit_bias);
 
         let logits_per_text = logits_per_text * logit_scale + logit_bias;
         let logits_per_image = transpose(builder, 0, 1, logits_per_text.clone());

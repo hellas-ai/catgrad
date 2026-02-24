@@ -214,16 +214,16 @@ pub fn layernorm_raw(builder: &Builder, eps: f32, x: Var) -> Var {
     let constn = nat_to_u32(builder, n);
     let constn = cast(builder, constn, dtype(builder, x.clone()));
     let sh = shape(builder, s.clone());
-    let constn = broadcast(builder, constn, sh);
+    let constn = broadcast(builder, sh, constn);
 
     let mean = s / constn.clone();
-    let nom = x - broadcast(builder, mean, x_shape.clone());
+    let nom = x - broadcast(builder, x_shape.clone(), mean);
 
     let var = sum(builder, nom.clone() * nom.clone()) / constn;
     let sh = shape(builder, var.clone());
     let epsilon = constant(builder, eps, &sh);
     let stddev = sqrt(builder, var + epsilon);
-    let denom = broadcast(builder, stddev, x_shape);
+    let denom = broadcast(builder, x_shape, stddev);
 
     nom / denom
 }
@@ -232,11 +232,11 @@ pub fn layernorm(builder: &Builder, eps: f32, p: Path, x: Var) -> Var {
     let gamma = param(builder, &p.extend(["weight"]).unwrap());
     let lr = layernorm_raw(builder, eps, x);
     let lr_shape = shape(builder, lr.clone());
-    let gamma = broadcast(builder, gamma, lr_shape.clone());
+    let gamma = broadcast(builder, lr_shape.clone(), gamma);
     let lr = lr * gamma;
 
     let beta = param(builder, &p.extend(["bias"]).unwrap());
-    let beta = broadcast(builder, beta, lr_shape);
+    let beta = broadcast(builder, lr_shape, beta);
     lr + beta
 }
 
@@ -249,13 +249,13 @@ pub fn rmsnorm_raw<const N: usize>(builder: &Builder, eps: f32, x: Var) -> Var {
     let constn = nat_to_u32(builder, n);
     let constn = cast(builder, constn, dtype(builder, x.clone()));
     let sh = shape(builder, s.clone());
-    let constn = broadcast(builder, constn, sh);
+    let constn = broadcast(builder, sh, constn);
 
     let mean = s / constn;
 
     let epsilon = constant(builder, eps, &shape(builder, mean.clone()));
     let rms = sqrt(builder, mean + epsilon);
-    let denom = broadcast(builder, rms, x_shape);
+    let denom = broadcast(builder, x_shape, rms);
     x / denom
 }
 
@@ -264,7 +264,7 @@ pub fn rmsnorm<const N: usize>(builder: &Builder, eps: f32, p: Path, x: Var) -> 
     let gamma = param(builder, &p.extend(["weight"]).unwrap());
     let lr = rmsnorm_raw::<N>(builder, eps, x);
     let lr_shape = shape(builder, lr.clone());
-    let gamma = broadcast(builder, gamma, lr_shape);
+    let gamma = broadcast(builder, lr_shape, gamma);
     lr * gamma
 }
 
@@ -277,7 +277,7 @@ pub fn repeat_kv(builder: &Builder, rep: usize, x: Var) -> Var {
     let x = reshape(builder, sh, x);
     let sh = shape!(builder, b, num_kv_heads, rep, s, head_dim);
 
-    let x = broadcast(builder, x, sh);
+    let x = broadcast(builder, sh, x);
 
     let rnkv = num_kv_heads * rep.to_nat(builder);
     let sh = shape!(builder, b, rnkv, s, head_dim);
@@ -322,7 +322,7 @@ pub fn rope_tables(
 
     let seq_len = seq_len.to_nat(builder);
     let sh = shape!(builder, seq_len, half_dim);
-    let inv_freq = broadcast(builder, inv_freq, sh.clone());
+    let inv_freq = broadcast(builder, sh.clone(), inv_freq);
 
     let factor = constant(builder, factor, &sh);
     let inv_freq = inv_freq / factor;
@@ -332,7 +332,7 @@ pub fn rope_tables(
     let sh = shape!(builder, seq_len, 1);
     let pos = reshape(builder, sh, pos);
     let sh = shape(builder, inv_freq.clone());
-    let pos = broadcast(builder, pos, sh);
+    let pos = broadcast(builder, sh, pos);
     let pos = pos * inv_freq;
     let cos = cos(builder, pos.clone());
     let sin = sin(builder, pos);
@@ -406,14 +406,14 @@ pub fn rope_tables_llama3(
 
     let seq_len = seq_len.to_nat(builder);
     let sh = shape!(builder, seq_len, half_dim);
-    let inv_freq = broadcast(builder, inv_freq, sh);
+    let inv_freq = broadcast(builder, sh, inv_freq);
 
     let pos = arange(builder, seq_len.clone());
     let pos = cast(builder, pos, Dtype::F32);
     let sh = shape!(builder, seq_len, 1);
     let pos = reshape(builder, sh, pos);
     let sh = shape(builder, inv_freq.clone());
-    let pos = broadcast(builder, pos, sh);
+    let pos = broadcast(builder, sh, pos);
     let pos = pos * inv_freq;
     let cos = cos(builder, pos.clone());
     let sin = sin(builder, pos);
@@ -518,7 +518,7 @@ pub fn rope_tables_yarn(
 
     let seq_len = seq_len.to_nat(builder);
     let sh = shape!(builder, seq_len, half_dim);
-    let inv_freq = broadcast(builder, inv_freq, sh);
+    let inv_freq = broadcast(builder, sh, inv_freq);
 
     let scale = rope_yarn_get_mscale(rope_scaling.factor);
     let sh = shape!(builder, 1);
@@ -529,9 +529,9 @@ pub fn rope_tables_yarn(
     let sh = shape!(builder, seq_len, 1);
     let pos = reshape(builder, sh, pos);
     let sh = shape(builder, inv_freq.clone());
-    let pos = broadcast(builder, pos, sh.clone());
+    let pos = broadcast(builder, sh.clone(), pos);
     let pos = pos * inv_freq;
-    let scale = broadcast(builder, scale, sh);
+    let scale = broadcast(builder, sh, scale);
     let cos = cos(builder, pos.clone());
     let cos = cos * scale.clone();
     let sin = sin(builder, pos);
@@ -563,8 +563,8 @@ pub fn apply_rope_embedding(
     let pos = pos.to_nat(builder);
     let cos = slice(builder, 0, pos.clone(), seq_len.clone(), cos);
     let sin = slice(builder, 0, pos, seq_len, sin);
-    let cos = broadcast(builder, cos, sh.clone());
-    let sin = broadcast(builder, sin, sh);
+    let cos = broadcast(builder, sh.clone(), cos);
+    let sin = broadcast(builder, sh, sin);
 
     let rotated_x = rotate_half(builder, head_dim, x.clone());
 
@@ -591,13 +591,13 @@ pub fn rope(
 pub fn causal_mask(builder: &Builder, size: Var) -> Var {
     let i = arange(builder, size.clone());
     let sh = pack::<2>(builder, [size.clone(), size.clone()]);
-    let i = broadcast(builder, i, sh.clone());
+    let i = broadcast(builder, sh.clone(), i);
 
     let one = 1.to_nat(builder);
     let shr = pack::<2>(builder, [size.clone(), one]);
     let j = arange(builder, size);
     let j = reshape(builder, shr, j);
-    let j = broadcast(builder, j, sh.clone());
+    let j = broadcast(builder, sh.clone(), j);
 
     let mask = lt(builder, j, i);
 

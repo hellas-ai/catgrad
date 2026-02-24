@@ -76,7 +76,7 @@ impl GPT2Model {
         let r = slice(builder, 0, pos, s, r);
         let pe = index(builder, 0, r, wpe);
         let pe = unsqueeze::<2, 3>(builder, 0, pe);
-        let pe = broadcast(builder, pe, sh);
+        let pe = broadcast(builder, sh, pe);
         te + pe
     }
 
@@ -97,7 +97,7 @@ impl GPT2Model {
         let w_t = unsqueeze::<2, 3>(builder, 0, w_t);
         let m = matmul(builder, x, w_t);
         let sh = shape(builder, m.clone());
-        let bb = broadcast(builder, b, sh);
+        let bb = broadcast(builder, sh, b);
         m + bb
     }
 
@@ -147,7 +147,7 @@ impl GPT2Model {
         let denom = constant(builder, f32::sqrt(head_dim as f32), &sh);
         let mut attn = attn / denom;
 
-        let mask = broadcast(builder, attention_mask, sh);
+        let mask = broadcast(builder, sh, attention_mask);
         attn = attn + mask;
 
         let attn = softmax(builder, attn);

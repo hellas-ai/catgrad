@@ -179,7 +179,7 @@ impl GraniteModel {
             let x = matmul(builder, x, out);
 
             let v = unsqueeze::<2, 3>(builder, 2, val);
-            let v = broadcast(builder, v, shape(builder, x.clone()));
+            let v = broadcast(builder, shape(builder, x.clone()), v);
             sumk = sumk + x * v;
         }
 
@@ -255,7 +255,7 @@ impl GraniteModel {
         let mul = constant(builder, self.config.attention_multiplier, &sh);
         let mut attn = attn * mul;
 
-        let mask = broadcast(builder, attention_mask, sh);
+        let mask = broadcast(builder, sh, attention_mask);
         attn = attn + mask;
 
         let attn = softmax(builder, attn);
