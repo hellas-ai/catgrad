@@ -58,26 +58,25 @@ impl GPT2Model {
         })
     }
 
-    pub fn embeddings(&self, builder: &Builder, p: Path, x: Var) -> Var {
+    pub fn embeddings(&self, builder: &Builder, p: Path, pos: Var, x: Var) -> Var {
         let wte = param(builder, &p.extend(["wte", "weight"]).unwrap());
 
         //flatten the input tensor as that is how index expects it
         let [b, s] = unpack::<2>(builder, shape(builder, x.clone()));
-        let sh = shape!(builder, b * s);
+        let sh = shape!(builder, b.clone() * s.clone());
         let x = reshape(builder, sh, x);
         let te = index(builder, 0, x, wte);
 
-        // add back batch size dim
-        let sh = shape(builder, te.clone());
-        let [seq_len, hidden_dim] = unpack::<2>(builder, sh);
-        let sh = shape!(builder, 1, seq_len, hidden_dim);
-
+        // add back batch dimension
+        let sh = shape!(builder, b, s, self.config.hidden_size);
         let te = reshape(builder, sh.clone(), te);
 
         let wpe = param(builder, &p.extend(["wpe", "weight"]).unwrap());
-        let r = arange(builder, seq_len);
+        let r = arange(builder, pos.clone() + s.clone());
+        let r = slice(builder, 0, pos, s, r);
         let pe = index(builder, 0, r, wpe);
-        let pe = reshape(builder, sh, pe);
+        let pe = unsqueeze::<2, 3>(builder, 0, pe);
+        let pe = broadcast(builder, pe, sh);
         te + pe
     }
 
@@ -198,8 +197,9 @@ impl Module<3, 3> for GPT2Model {
     fn def(&self, builder: &Builder, [x, in_k, in_v]: [Var; 3]) -> [Var; 3] {
         let root = self.path();
 
+        let [_, _, _, cache_len, _] = unpack::<5>(builder, shape(builder, in_k.clone()));
         let mut cache = Cache::init(builder, &self.config, self.max_sequence_length, in_k, in_v);
-        let mut x = self.embeddings(builder, root.clone(), x);
+        let mut x = self.embeddings(builder, root.clone(), cache_len, x);
         let [_b, s, _] = unpack::<3>(builder, shape(builder, x.clone()));
         let attention_mask = causal_mask(builder, s);
 
