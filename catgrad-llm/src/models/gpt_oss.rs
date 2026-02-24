@@ -64,23 +64,6 @@ impl LLMModel for GPTOssModel {
     }
 }
 
-fn gptoss_clamp(builder: &Builder, x: Var, min_val: f32, max_val: f32) -> Var {
-    let sh = shape(builder, x.clone());
-    let x_dtype = dtype(builder, x.clone());
-
-    let min_t = cast(builder, constant(builder, min_val, &sh), x_dtype.clone());
-    let max_t = cast(builder, constant(builder, max_val, &sh), x_dtype.clone());
-    let one = cast(builder, constant(builder, 1.0, &sh), x_dtype.clone());
-
-    let mask_min = lt(builder, x.clone(), min_t.clone());
-    let mask_min = cast(builder, mask_min, x_dtype.clone());
-    let x = mask_min.clone() * min_t + (one.clone() - mask_min) * x;
-
-    let mask_max = lt(builder, max_t.clone(), x.clone());
-    let mask_max = cast(builder, mask_max, x_dtype);
-    mask_max.clone() * max_t + (one - mask_max) * x
-}
-
 // Build linear layer from weight and bias params without W transpose.
 fn gptoss_linear(builder: &Builder, weight: Var, bias: Var, x: Var) -> Var {
     let m = matmul(builder, x, weight);
@@ -111,8 +94,8 @@ impl GPTOssModel {
 
         let gate = index(builder, 2, idx_gate, x.clone());
         let up = index(builder, 2, idx_up, x);
-        let gate = gptoss_clamp(builder, gate, f32::MIN, self.config.swiglu_limit);
-        let up = gptoss_clamp(
+        let gate = clamp(builder, gate, f32::MIN, self.config.swiglu_limit);
+        let up = clamp(
             builder,
             up,
             -self.config.swiglu_limit,

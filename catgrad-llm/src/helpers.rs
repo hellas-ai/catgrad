@@ -424,7 +424,7 @@ pub fn rope_tables_llama3(
     (cos, sin)
 }
 
-fn clamp(builder: &Builder, x: Var, min_val: f32, max_val: f32) -> Var {
+pub fn clamp(builder: &Builder, x: Var, min_val: f32, max_val: f32) -> Var {
     let sh = shape(builder, x.clone());
     let min_t = constant(builder, min_val, &sh);
     let max_t = constant(builder, max_val, &sh);
