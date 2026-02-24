@@ -160,13 +160,13 @@ fn rmsnorm_raw_gemma<const N: usize>(builder: &Builder, eps: f32, x: Var) -> Var
     let constn = nat_to_u32(builder, n);
     let constn = cast(builder, constn, dtype(builder, x.clone()));
     let sh = shape(builder, s.clone());
-    let constn = broadcast(builder, constn, sh);
+    let constn = broadcast(builder, sh, constn);
 
     let mean = s / constn;
 
     let epsilon = constant(builder, eps, &shape(builder, mean.clone()));
     let rms = sqrt(builder, mean + epsilon);
-    let denom = broadcast(builder, rms, x_shape);
+    let denom = broadcast(builder, x_shape, rms);
     x / denom
 }
 
@@ -174,7 +174,7 @@ pub fn rmsnorm_gemma<const N: usize>(builder: &Builder, eps: f32, p: Path, x: Va
     let gamma = param(builder, &p.extend(["weight"]).unwrap());
     let lr = rmsnorm_raw_gemma::<N>(builder, eps, x);
     let lr_shape = shape(builder, lr.clone());
-    let gamma = broadcast(builder, gamma, lr_shape);
+    let gamma = broadcast(builder, lr_shape, gamma);
     let sh = shape(builder, gamma.clone());
     let one = constant(builder, 1.0, &sh);
     lr * (one + gamma)
@@ -403,7 +403,7 @@ impl Gemma3Model {
             attn = self.softcap(builder, softcap, attn);
         }
 
-        let mask = broadcast(builder, attention_mask, sh);
+        let mask = broadcast(builder, sh, attention_mask);
         attn = attn + mask;
 
         let attn = softmax(builder, attn);

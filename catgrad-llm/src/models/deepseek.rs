@@ -162,7 +162,7 @@ impl DeepSeekModel {
 
         let bias = param(builder, &p.extend(["e_score_correction_bias"]).unwrap());
         let routed_sh = shape(builder, routed.clone());
-        let bias = broadcast(builder, bias, routed_sh.clone());
+        let bias = broadcast(builder, routed_sh.clone(), bias);
         let scores_for_choice = routed + bias;
 
         let n_groups = self.config.n_group;
@@ -184,16 +184,16 @@ impl DeepSeekModel {
         //
         let cols = arange(builder, n_groups);
         let sh = shape!(builder, seq_len, experts_per_group, n_groups);
-        let cols = broadcast(builder, cols, sh.clone());
+        let cols = broadcast(builder, sh.clone(), cols);
 
-        let group_idx = broadcast(builder, group_idx, sh);
+        let group_idx = broadcast(builder, sh, group_idx);
 
         let matches = eq(builder, cols, group_idx);
         let matches = transpose(builder, 1, 2, matches);
         let mask = sum(builder, matches);
 
         let sh = shape!(builder, seq_len, n_groups, experts_per_group);
-        let mask = broadcast(builder, mask, sh);
+        let mask = broadcast(builder, sh, mask);
         let mask = reshape(builder, routed_sh, mask);
         let mask = cast(builder, mask, Dtype::F32);
         let scores_for_choice = mask * scores_for_choice;
@@ -211,7 +211,7 @@ impl DeepSeekModel {
             let sv_sh = shape(builder, sv.clone());
             let eps = constant(builder, 1e-20, &sv_sh);
             let sv = sv + eps;
-            let sv = broadcast(builder, sv, sh);
+            let sv = broadcast(builder, sh, sv);
             values = values / sv;
             let scale_sh = shape(builder, values.clone());
             let scale = constant(builder, self.config.routed_scaling_factor, &scale_sh);
@@ -266,7 +266,7 @@ impl DeepSeekModel {
             let x = matmul(builder, x, down);
 
             let v = unsqueeze::<2, 3>(builder, 2, val);
-            let v = broadcast(builder, v, shape(builder, x.clone()));
+            let v = broadcast(builder, shape(builder, x.clone()), v);
             sumk = sumk + x * v;
         }
 
@@ -405,7 +405,7 @@ impl DeepSeekModel {
 
         // Broadcast k_rot to match k_pass shape
         let sh = shape!(builder, b, num_heads, s, self.config.qk_rope_head_dim);
-        let k_rot = broadcast(builder, k_rot, sh);
+        let k_rot = broadcast(builder, sh, k_rot);
 
         let q = concat(builder, 3, q_pass, q_rot);
         let k = concat(builder, 3, k_pass, k_rot);
@@ -421,7 +421,7 @@ impl DeepSeekModel {
         let denom = constant(builder, f32::sqrt(qk_head_dim as f32), &sh);
         let mut attn = attn / denom;
 
-        let mask = broadcast(builder, attention_mask, sh);
+        let mask = broadcast(builder, sh, attention_mask);
         attn = attn + mask;
 
         let attn = softmax(builder, attn);

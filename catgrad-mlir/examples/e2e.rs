@@ -116,7 +116,7 @@ impl Module<1, 1> for ConcreteSigmoidPlusConst {
 
         // Get the scalar parameter and broadcast it to match input shape
         let offset = ops::param(builder, &self.path().extend(["offset"]).unwrap());
-        let offset_broadcasted = ops::broadcast(builder, offset, sh);
+        let offset_broadcasted = ops::broadcast(builder, sh, offset);
 
         // Add the broadcasted constant to sigmoid
         [sigmoid + offset_broadcasted]

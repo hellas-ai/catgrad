@@ -151,13 +151,13 @@ impl SiglipVisionBackbone {
         let weight = transpose(builder, 0, 1, weight);
 
         let sh = shape!(builder, 1, dim, hidden_size);
-        let weight = broadcast(builder, weight, sh);
+        let weight = broadcast(builder, sh, weight);
 
         let emb = matmul(builder, x, weight);
 
         let bias = param(builder, &p.extend(["patch_embedding", "bias"]).unwrap());
         let sh = shape(builder, emb.clone());
-        let bias = broadcast(builder, bias, sh.clone());
+        let bias = broadcast(builder, sh.clone(), bias);
         let emb = emb + bias;
 
         let pe = param(
@@ -165,7 +165,7 @@ impl SiglipVisionBackbone {
             &p.extend(["position_embedding", "weight"]).unwrap(),
         );
 
-        let pe = broadcast(builder, pe, sh);
+        let pe = broadcast(builder, sh, pe);
 
         emb + pe
     }

@@ -98,17 +98,17 @@ impl VLMModel {
         let img_end = img_start.clone() + img_size.to_nat(builder);
 
         let img_start = nat_to_u32(builder, img_start);
-        let img_start = broadcast(builder, img_start, sh.clone());
+        let img_start = broadcast(builder, sh.clone(), img_start);
 
         let img_end = nat_to_u32(builder, img_end);
-        let img_end = broadcast(builder, img_end, sh);
+        let img_end = broadcast(builder, sh, img_end);
 
         let img_mask_1 = gte(builder, row.clone(), img_start);
         let img_mask_2 = lt(builder, row, img_end);
         let row = img_mask_1 * img_mask_2;
 
         let sh = pack::<2>(builder, [size.clone(), size]);
-        let row = broadcast(builder, row, sh.clone());
+        let row = broadcast(builder, sh.clone(), row);
         let col = transpose(builder, 0, 1, row.clone());
         let mask = row * col;
         let mask = cast(builder, mask, Dtype::F32);

@@ -85,7 +85,7 @@ fn gptoss_clamp(builder: &Builder, x: Var, min_val: f32, max_val: f32) -> Var {
 fn gptoss_linear(builder: &Builder, weight: Var, bias: Var, x: Var) -> Var {
     let m = matmul(builder, x, weight);
     let bias = unsqueeze::<2, 3>(builder, 1, bias);
-    let bias = broadcast(builder, bias, shape(builder, m.clone()));
+    let bias = broadcast(builder, shape(builder, m.clone()), bias);
     m + bias
 }
 
@@ -169,7 +169,7 @@ impl GPTOssModel {
             let x = gptoss_linear(builder, down_w, down_b, glu);
 
             let val = unsqueeze::<2, 3>(builder, 2, val);
-            let val = broadcast(builder, val, shape(builder, x.clone()));
+            let val = broadcast(builder, shape(builder, x.clone()), val);
             sumk = sumk + x * val;
         }
 
@@ -251,12 +251,12 @@ impl GPTOssModel {
         let denom = constant(builder, f32::sqrt(head_dim as f32), &sh);
         let mut attn = attn / denom;
 
-        let mask = broadcast(builder, attention_mask, sh);
+        let mask = broadcast(builder, sh, attention_mask);
         attn = attn + mask;
 
         let sinks = param(builder, &p.extend(["sinks"]).unwrap());
         let sinks = reshape(builder, shape!(builder, 1, num_heads, 1, 1), sinks);
-        let sinks = broadcast(builder, sinks, shape!(builder, b, num_heads, s, 1));
+        let sinks = broadcast(builder, shape!(builder, b, num_heads, s, 1), sinks);
         let attn = concat(builder, 3, attn, sinks);
 
         let attn = softmax(builder, attn);
