@@ -4,7 +4,7 @@ use catgrad::prelude::*;
 use catgrad::stdlib::nn::*;
 
 /// Type signature for LLM Modules
-pub fn llm_type(config: &dyn LLMConfig) -> ([Type; 3], [Type; 3]) {
+pub fn llm_type(config: &dyn LLMConfig) -> ([Type; 4], [Type; 4]) {
     use catgrad::typecheck::*;
     let batch_size = NatExpr::Var(0);
     let seq_len = NatExpr::Var(1);
@@ -65,14 +65,22 @@ pub fn llm_type(config: &dyn LLMConfig) -> ([Type; 3], [Type; 3]) {
         dtype: DtypeExpr::Constant(Dtype::F32),
         shape: ShapeExpr::Shape(vec![
             num_layers,
-            batch_size,
+            batch_size.clone(),
             num_kv_heads,
             out_cache_len,
             NatExpr::Constant(config.get_v_head_dim()),
         ]),
     }));
 
-    ([t_x, t_k, t_v], [t_y, t_k_out, t_v_out])
+    let t_unused = Type::Tensor(TypeExpr::NdArrayType(NdArrayType {
+        dtype: DtypeExpr::Constant(Dtype::F32),
+        shape: ShapeExpr::Shape(vec![batch_size.clone(), batch_size]),
+    }));
+
+    (
+        [t_x, t_k, t_v, t_unused.clone()],
+        [t_y, t_k_out, t_v_out, t_unused],
+    )
 }
 
 pub struct Cache {
@@ -80,6 +88,7 @@ pub struct Cache {
     pub sin: Var,
     pub in_kv_cache: Vec<(Var, Var)>,
     pub out_kv_cache: Vec<(Var, Var)>,
+    // pub conv_state: Vec<Var>,
 }
 
 impl Cache {
@@ -632,7 +641,7 @@ pub enum WeightPostProcess {
     ConcatMoeExperts { num_local_experts: usize },
 }
 
-pub trait LLMModel: Module<3, 3> {
+pub trait LLMModel: Module<4, 4> {
     fn config(&self) -> &dyn LLMConfig;
 
     fn weight_post_process(&self) -> WeightPostProcess {

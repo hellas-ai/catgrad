@@ -365,12 +365,12 @@ impl Lfm2Model {
     }
 }
 
-impl Module<3, 3> for Lfm2Model {
+impl Module<4, 4> for Lfm2Model {
     fn path(&self) -> Path {
         path(vec!["lfm2"]).expect("invalid model path")
     }
 
-    fn def(&self, builder: &Builder, [x, in_k, in_v]: [Var; 3]) -> [Var; 3] {
+    fn def(&self, builder: &Builder, [x, in_k, in_v, conv_state]: [Var; 4]) -> [Var; 4] {
         let root = self.path();
 
         let mut cache = Cache::init(
@@ -419,10 +419,28 @@ impl Module<3, 3> for Lfm2Model {
 
         x = argmax(builder, x);
         let (out_k, out_v) = cache.get_kv_cache(builder);
-        [x, out_k, out_v]
+        [x, out_k, out_v, conv_state]
     }
 
-    fn ty(&self) -> ([Type; 3], [Type; 3]) {
-        llm_type(&self.config)
+    // This adds a conv state to both inputs and outputs
+    fn ty(&self) -> ([Type; 4], [Type; 4]) {
+        use catgrad::typecheck::*;
+
+        let batch_size = NatExpr::Var(0);
+        let hidden_size = NatExpr::Constant(self.config.hidden_size);
+        let conv_size = NatExpr::Constant(self.config.conv_l_cache);
+
+        // The conv state is batch_size × hidden_size x conv_size
+        let t_conv_state = Type::Tensor(TypeExpr::NdArrayType(NdArrayType {
+            dtype: DtypeExpr::Constant(Dtype::U32),
+            shape: ShapeExpr::Shape(vec![batch_size, hidden_size, conv_size]),
+        }));
+
+        let ([tx, tk_in, tv_in, _], [ty, tk_out, tv_out, _]) = llm_type(&self.config);
+
+        (
+            [tx, tk_in, tv_in, t_conv_state.clone()],
+            [ty, tk_out, tv_out, t_conv_state],
+        )
     }
 }

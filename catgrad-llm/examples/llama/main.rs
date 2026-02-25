@@ -220,7 +220,7 @@ fn run_with_backend<B: interpreter::Backend>(
     let mut start_gen = std::time::Instant::now();
     let mut elapsed_pp = std::time::Duration::ZERO;
     let interpreter = interpreter::Interpreter::new(backend, env, parameter_values);
-    let empty_cache = empty_kv_cache(&interpreter.backend, model.config())?;
+    let empty_cache = empty_cache(&interpreter.backend, model.config())?;
     let eos_token_ids = model.config().get_eos_token_ids();
     let mut kv_cache = empty_cache.clone();
 
@@ -284,12 +284,18 @@ fn run_with_backend<B: interpreter::Backend>(
     Ok(())
 }
 
-type KvCache<B> = (interpreter::Value<B>, interpreter::Value<B>);
+// Holds KV cache and optionally other state cache (for non-attention layers)
+#[derive(Debug, Clone)]
+struct LLMCache<B: interpreter::Backend> {
+    k: interpreter::Value<B>,
+    v: interpreter::Value<B>,
+    state: interpreter::Value<B>,
+}
 
-fn empty_kv_cache<B: interpreter::Backend>(
+fn empty_cache<B: interpreter::Backend>(
     backend: &B,
     config: &dyn LLMConfig,
-) -> Result<KvCache<B>> {
+) -> Result<LLMCache<B>> {
     let k_shape = Shape(vec![
         config.num_hidden_layers(),
         1,
@@ -308,15 +314,24 @@ fn empty_kv_cache<B: interpreter::Backend>(
         .map_err(|err| anyhow::anyhow!("kv cache tensor error: {:?}", err))?;
     let v = interpreter::tensor(backend, v_shape, Vec::<f32>::new())
         .map_err(|err| anyhow::anyhow!("kv cache tensor error: {:?}", err))?;
-    Ok((k, v))
+
+    let unused_shape = Shape(vec![1, 0]);
+    let unused = interpreter::tensor(backend, unused_shape, Vec::<f32>::new())
+        .map_err(|err| anyhow::anyhow!("unused tensor error: {:?}", err))?;
+
+    Ok(LLMCache {
+        k,
+        v,
+        state: unused,
+    })
 }
 
 fn run_interpreter<B: interpreter::Backend>(
     typed_term: &TypedTerm,
     interpreter: &interpreter::Interpreter<B>,
     input_data: &[u32],
-    kv_cache: &KvCache<B>,
-) -> Result<(u32, KvCache<B>)> {
+    llm_cache: &LLMCache<B>,
+) -> Result<(u32, LLMCache<B>)> {
     let input_tensor = interpreter::tensor(
         &interpreter.backend,
         Shape(vec![1, input_data.len()]),
@@ -328,10 +343,18 @@ fn run_interpreter<B: interpreter::Backend>(
     let mut results = interpreter
         .run(
             typed_term.term.clone(),
-            vec![input_tensor, kv_cache.0.clone(), kv_cache.1.clone()],
+            vec![
+                input_tensor,
+                llm_cache.k.clone(),
+                llm_cache.v.clone(),
+                llm_cache.state.clone(),
+            ],
         )
         .expect("Failed to run inference");
 
+    let out_state = results
+        .pop()
+        .ok_or_else(|| anyhow::anyhow!("No state output"))?;
     let out_v = results
         .pop()
         .ok_or_else(|| anyhow::anyhow!("No KV cache V output"))?;
@@ -341,7 +364,14 @@ fn run_interpreter<B: interpreter::Backend>(
     if let Some(output) = results.pop() {
         match output {
             interpreter::Value::Tensor(arr) => match interpreter.backend.to_vec(arr) {
-                interpreter::TaggedVec::U32(v) => Ok((v[v.len() - 1], (out_k, out_v))),
+                interpreter::TaggedVec::U32(v) => Ok((
+                    v[v.len() - 1],
+                    LLMCache {
+                        k: out_k,
+                        v: out_v,
+                        state: out_state,
+                    },
+                )),
                 _ => Err(anyhow::anyhow!("Unexpected output dtype")),
             },
             t => Err(anyhow::anyhow!("Output was not a tensor: {:?}", t)),

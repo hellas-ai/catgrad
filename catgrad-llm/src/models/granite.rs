@@ -319,12 +319,12 @@ impl GraniteModel {
     }
 }
 
-impl Module<3, 3> for GraniteModel {
+impl Module<4, 4> for GraniteModel {
     fn path(&self) -> Path {
         path(vec!["granite"]).expect("invalid model path")
     }
 
-    fn def(&self, builder: &Builder, [x, in_k, in_v]: [Var; 3]) -> [Var; 3] {
+    fn def(&self, builder: &Builder, [x, in_k, in_v, unused]: [Var; 4]) -> [Var; 4] {
         let root = self.path();
 
         let mut cache = Cache::init(
@@ -377,11 +377,11 @@ impl Module<3, 3> for GraniteModel {
 
         x = argmax(builder, x);
         let (out_k, out_v) = cache.get_kv_cache(builder);
-        [x, out_k, out_v]
+        [x, out_k, out_v, unused]
     }
 
     // This should return the *detailed* type of the model
-    fn ty(&self) -> ([Type; 3], [Type; 3]) {
+    fn ty(&self) -> ([Type; 4], [Type; 4]) {
         llm_type(&self.config)
     }
 }

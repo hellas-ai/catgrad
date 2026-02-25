@@ -555,22 +555,28 @@ impl Gemma3Model {
     }
 }
 
-impl Module<3, 3> for Gemma3Model {
+impl Module<4, 4> for Gemma3Model {
     fn path(&self) -> Path {
         path(vec!["gemma3"]).expect("invalid model path")
     }
 
-    fn def(&self, builder: &Builder, [x, in_k, in_v]: [Var; 3]) -> [Var; 3] {
+    fn def(&self, builder: &Builder, [x, in_k, in_v, unused]: [Var; 4]) -> [Var; 4] {
         let mut root = self.path();
         if !self.root.is_empty() {
             root = root
                 .extend(self.root.split('.').collect::<Vec<&str>>())
                 .unwrap();
         }
-        self.forward(builder, root, x, in_k, in_v)
+        let result = self.forward(builder, root, x, in_k, in_v);
+        [
+            result[0].clone(),
+            result[1].clone(),
+            result[2].clone(),
+            unused,
+        ]
     }
 
-    fn ty(&self) -> ([Type; 3], [Type; 3]) {
+    fn ty(&self) -> ([Type; 4], [Type; 4]) {
         llm_type(&self.config)
     }
 }
