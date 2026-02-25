@@ -3,8 +3,10 @@ use catgrad::interpreter::backend::candle::CandleBackend;
 use catgrad::interpreter::backend::ndarray::NdArrayBackend;
 use catgrad::prelude::*;
 use clap::{Parser, ValueEnum};
+use serde::Deserialize;
 use std::collections::HashMap;
 use std::io::Write;
+use std::path::Path;
 use std::path::PathBuf;
 
 use catgrad_llm::config::LLMConfig;
@@ -25,6 +27,9 @@ struct Args {
     /// Model revision (branch, tag, or commit)
     #[arg(short = 'r', long, default_value = "main")]
     revision: String,
+    /// TOML config file overriding model aliases.
+    #[arg(short = 'c', long, value_name = "PATH")]
+    config_file: Option<PathBuf>,
     /// Initial prompt
     #[arg(short = 'p', long, default_value = "Category theory is")]
     prompt: String,
@@ -67,48 +72,69 @@ enum BackendChoice {
     Candle,
 }
 
+#[derive(Debug, Deserialize)]
+struct AppConfig {
+    aliases: HashMap<String, String>,
+}
+
+fn parse_config(contents: &str, source: &str) -> Result<AppConfig> {
+    let config: AppConfig = toml::from_str(contents)
+        .map_err(|e| anyhow::anyhow!("invalid config file {source}: {e}"))?;
+    Ok(config)
+}
+
+fn merge_config_file(app_config: &mut AppConfig, path: &Path) -> Result<()> {
+    let contents = std::fs::read_to_string(path)
+        .map_err(|e| anyhow::anyhow!("failed to read alias file {}: {e}", path.display()))?;
+    let cfg = parse_config(&contents, &path.display().to_string())?;
+    app_config.aliases.extend(cfg.aliases);
+    Ok(())
+}
+
+// The app config currently contains only model aliases.
+// The hardcoded ones can be overridden by user config files.
+fn get_app_config(args: &Args) -> Result<AppConfig> {
+    let default_config = include_str!("llm_config.default.toml");
+    let mut app_config = parse_config(default_config, "embedded defaults")?;
+
+    let local_alias_path = Path::new("llm_config.toml");
+    if local_alias_path.exists() {
+        merge_config_file(&mut app_config, local_alias_path)?;
+    }
+
+    if let Some(config_file) = &args.config_file {
+        merge_config_file(&mut app_config, config_file)?;
+    }
+    Ok(app_config)
+}
+
 /// Construct, shapecheck, and interpret the a given LLM using the selected backend.
 fn main() -> Result<()> {
     env_logger::init();
     let args = Args::parse();
+    let app_config = get_app_config(&args)?;
     match args.backend {
-        BackendChoice::Ndarray => run_with_backend(&args, NdArrayBackend),
-        BackendChoice::Candle => run_with_backend(&args, CandleBackend::new_accel(args.accel)),
+        BackendChoice::Ndarray => run_with_backend(&args, &app_config, NdArrayBackend),
+        BackendChoice::Candle => {
+            run_with_backend(&args, &app_config, CandleBackend::new_accel(args.accel))
+        }
     }
 }
 
-fn get_model_name(args: &Args) -> String {
-    let models = HashMap::from([
-        ("gpt2", "openai-community/gpt2"),
-        ("gptoss", "unsloth/gpt-oss-20b-BF16"),
-        ("smollm2", "HuggingFaceTB/SmolLM2-135M-Instruct"),
-        ("smollm3", "HuggingFaceTB/SmolLM3-3B"),
-        ("llama", "meta-llama/Llama-3.2-1B-Instruct"),
-        ("mistral", "mistralai/Ministral-8B-Instruct-2410"),
-        ("gemma", "google/gemma-3-1b-it"),
-        ("qwen3", "Qwen/Qwen3-0.6B"),
-        ("lfm", "LiquidAI/LFM2-350M"),
-        ("qwenmoe", "Qwen/Qwen3-30B-A3B-Instruct-2507"),
-        ("deepseek", "tiny-random/deepseek-v3.1"),
-        ("granitemoe", "ibm-granite/granite-3.1-1b-a400m-instruct"),
-        ("granite", "ibm-granite/granite-3.3-2b-instruct"),
-        ("granite4", "ibm-granite/granite-4.0-micro"),
-        ("olmo2", "allenai/OLMo-2-0425-1B-Instruct"),
-        ("olmo3", "allenai/Olmo-3-7B-Instruct"),
-        ("phi", "microsoft/Phi-4-mini-instruct"),
-        ("modernbert", "jhu-clsp/ettin-decoder-17m"),
-    ]);
-
-    let model_name = models
+fn get_model_name(args: &Args, app_config: &AppConfig) -> Result<String> {
+    Ok(app_config
+        .aliases
         .get(args.model_name.as_str())
-        .copied()
-        .unwrap_or(&args.model_name);
-
-    model_name.to_string()
+        .cloned()
+        .unwrap_or_else(|| args.model_name.clone()))
 }
 
-fn run_with_backend<B: interpreter::Backend>(args: &Args, backend: B) -> Result<()> {
-    let model_name = get_model_name(args);
+fn run_with_backend<B: interpreter::Backend>(
+    args: &Args,
+    app_config: &AppConfig,
+    backend: B,
+) -> Result<()> {
+    let model_name = get_model_name(args, app_config)?;
 
     let start_load = std::time::Instant::now();
     let (mut parameter_values, mut parameter_types, config_json, tokenizer, total_params) =
