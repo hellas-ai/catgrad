@@ -4,6 +4,7 @@ pub mod gpt2;
 pub mod gpt_oss;
 pub mod granite;
 pub mod llama;
+pub mod mistral3;
 pub mod olmo;
 pub mod phi3;
 pub mod qwen3;

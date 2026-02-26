@@ -438,11 +438,11 @@ pub fn clamp(builder: &Builder, x: Var, min_val: f32, max_val: f32) -> Var {
     mask_max.clone() * max_t + (one - mask_max) * x
 }
 
-fn rope_yarn_get_mscale(scale: f32) -> f32 {
+fn rope_yarn_get_mscale(scale: f32, mscale: f32) -> f32 {
     if scale <= 1.0 {
         return 1.0;
     }
-    0.1 * scale.ln() + 1.0
+    0.1 * mscale * scale.ln() + 1.0
 }
 
 fn find_correction_dim(
@@ -520,7 +520,12 @@ pub fn rope_tables_yarn(
     let sh = shape!(builder, seq_len, half_dim);
     let inv_freq = broadcast(builder, sh, inv_freq);
 
-    let scale = rope_yarn_get_mscale(rope_scaling.factor);
+    let scale = if rope_scaling.mscale != 0.0 && rope_scaling.mscale_all_dim != 0.0 {
+        rope_yarn_get_mscale(rope_scaling.factor, rope_scaling.mscale)
+            / rope_yarn_get_mscale(rope_scaling.factor, rope_scaling.mscale_all_dim)
+    } else {
+        rope_yarn_get_mscale(rope_scaling.factor, 1.0)
+    };
     let sh = shape!(builder, 1);
     let scale = constant(builder, scale, &sh);
 
