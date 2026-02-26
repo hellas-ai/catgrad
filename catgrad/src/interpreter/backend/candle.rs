@@ -242,6 +242,14 @@ impl Backend for CandleBackend {
         }
     }
 
+    fn floor(&self, x: TaggedTensor<Self>) -> TaggedTensor<Self> {
+        use TaggedTensorTuple::*;
+        match x {
+            F32([arr]) => F32([Self::floor(arr)]),
+            _ => panic!("Invalid type for floor"),
+        }
+    }
+
     fn max(&self, x: TaggedTensor<Self>) -> TaggedTensor<Self> {
         use TaggedTensorTuple::*;
         match x {
@@ -500,6 +508,10 @@ impl CandleBackend {
 
     fn log(x: CandleTensor) -> CandleTensor {
         CandleTensor(x.0.log().unwrap())
+    }
+
+    fn floor(x: CandleTensor) -> CandleTensor {
+        CandleTensor(x.0.floor().unwrap())
     }
 
     // Candle's pow function does not support negative base and silently generates NaNs

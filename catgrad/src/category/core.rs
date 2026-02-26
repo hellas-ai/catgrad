@@ -224,18 +224,19 @@ pub enum TensorOp {
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Debug, Hash, Clone, PartialEq, Eq)]
 pub enum ScalarOp {
-    Add, // 2 → 1
-    Sub, // 2 → 1
-    Mul, // 2 → 1
-    Div, // 2 → 1
-    Neg, // 1 → 1
-    Pow, // 2 → 1
-    LT,  // 2 → 1
-    GT,  // 2 → 1
-    EQ,  // 2 → 1
-    Cos, // 1 → 1
-    Sin, // 1 → 1
-    Log, // 1 → 1
+    Add,   // 2 → 1
+    Sub,   // 2 → 1
+    Mul,   // 2 → 1
+    Div,   // 2 → 1
+    Neg,   // 1 → 1
+    Pow,   // 2 → 1
+    LT,    // 2 → 1
+    GT,    // 2 → 1
+    EQ,    // 2 → 1
+    Cos,   // 1 → 1
+    Sin,   // 1 → 1
+    Log,   // 1 → 1
+    Floor, // 1 → 1
 }
 
 impl ScalarOp {
@@ -254,6 +255,7 @@ impl ScalarOp {
             ScalarOp::Cos => (1, 1),
             ScalarOp::Sin => (1, 1),
             ScalarOp::Log => (1, 1),
+            ScalarOp::Floor => (1, 1),
         }
     }
 }
