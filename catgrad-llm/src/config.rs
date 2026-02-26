@@ -25,8 +25,9 @@ pub struct YarnRopeScaling {
     pub truncate: bool,
     pub mscale: f32,
     pub mscale_all_dim: f32,
+    pub llama_4_scaling_beta: f32,
     pub original_max_position_embeddings: usize,
-    #[serde(alias = "type")]
+    pub rope_theta: f32,
     pub rope_type: String,
 }
 
