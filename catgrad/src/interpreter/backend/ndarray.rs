@@ -247,6 +247,14 @@ impl Backend for NdArrayBackend {
         }
     }
 
+    fn log(&self, x: TaggedTensor<Self>) -> TaggedTensor<Self> {
+        use TaggedTensorTuple::*;
+        match x {
+            F32([arr]) => from_f32(arr.unwrap_f32().ln()),
+            _ => panic!("Invalid input types for log"),
+        }
+    }
+
     fn max(&self, x: TaggedTensor<Self>) -> TaggedTensor<Self> {
         use TaggedTensorTuple::*;
         match x {

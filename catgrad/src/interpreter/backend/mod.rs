@@ -49,6 +49,7 @@ pub trait Backend: Clone + Debug {
     fn eq(&self, lhs: TaggedTensorTuple<Self, 2>) -> TaggedTensor<Self>;
     fn sin(&self, x: TaggedTensor<Self>) -> TaggedTensor<Self>;
     fn cos(&self, x: TaggedTensor<Self>) -> TaggedTensor<Self>;
+    fn log(&self, x: TaggedTensor<Self>) -> TaggedTensor<Self>;
     fn neg(&self, x: TaggedTensor<Self>) -> TaggedTensor<Self>;
     fn broadcast(&self, x: TaggedTensor<Self>, shape: Shape) -> TaggedTensor<Self>;
     fn reshape(&self, x: TaggedTensor<Self>, new_shape: Shape) -> TaggedTensor<Self>;

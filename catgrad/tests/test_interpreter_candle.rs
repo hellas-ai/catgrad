@@ -449,6 +449,29 @@ fn test_candle_backend_power() {
 }
 
 #[test]
+fn test_candle_backend_log() {
+    let backend = CandleBackend::new();
+
+    // Test F32 log
+    let data = vec![1.0f32, 2.0, 3.0, 4.0];
+    let tensor_tagged = backend
+        .ndarray_from_vec_f32(data, Shape(vec![2, 2]))
+        .unwrap();
+    let tensor = match tensor_tagged {
+        TaggedTensor::F32([arr]) => arr,
+        _ => panic!("Expected F32"),
+    };
+
+    let result = backend.log(TaggedTensor::F32([tensor]));
+    match result {
+        TaggedTensor::F32([arr]) => {
+            assert_eq!(arr.0.shape().dims(), &[2, 2]);
+        }
+        _ => panic!("Expected F32 result"),
+    }
+}
+
+#[test]
 fn test_candle_backend_negation() {
     let backend = CandleBackend::new();
 
