@@ -157,6 +157,55 @@ impl Model {
         linear_no_bias(builder, dim, dim, &format!("{name}.out_proj"), x)
     }
 
+    pub fn depthwise_conv1d(builder: &Builder, config: &Config, name: &str, x: Var) -> Var {
+        let b = x.label.shape.0[0];
+        let h = x.label.shape.0[1];
+        let s = x.label.shape.0[2];
+        let k = config.lfm2.conv_l_cache;
+        if k == 0 {
+            return x;
+        }
+
+        // Equivalent to Conv1d(..., groups=hidden, kernel_size=k, padding=k-1)[..., :seqlen]
+        let x_padded = if k > 1 {
+            let pad_t = NdArrayType::new(Shape(vec![b, h, k - 1]), x.label.dtype);
+            let pad = constant(builder, pad_t, 0.0);
+            concat(builder, 2, pad, x)
+        } else {
+            x
+        };
+
+        // Depthwise kernel: [hidden, 1, k] -> [hidden, k]
+        let w_t = NdArrayType::new(Shape(vec![config.hidden_size, 1, k]), config.dtype);
+        let conv_weight = parameter(builder, w_t, format!("{name}.conv.weight"));
+        let conv_weight = squeeze(builder, 1, conv_weight);
+
+        let x_slice = narrow(builder, 2, 0, s, x_padded.clone());
+        let w_slice = narrow(builder, 1, 0, 1, conv_weight.clone());
+        let w_slice = unsqueeze(builder, 0, w_slice);
+        let w_slice = expand(builder, x_slice.label.shape.clone(), w_slice);
+        let mut conv_out = x_slice * w_slice;
+
+        for offset in 1..k {
+            let x_slice = narrow(builder, 2, offset, s, x_padded.clone());
+            let w_slice = narrow(builder, 1, offset, 1, conv_weight.clone());
+            let w_slice = unsqueeze(builder, 0, w_slice);
+            let w_slice = expand(builder, x_slice.label.shape.clone(), w_slice);
+            conv_out = conv_out + x_slice * w_slice;
+        }
+
+        if config.lfm2.conv_bias {
+            let b_t = NdArrayType::new(Shape(vec![config.hidden_size]), config.dtype);
+            let conv_bias = parameter(builder, b_t, format!("{name}.conv.bias"));
+            let conv_bias = unsqueeze(builder, 0, conv_bias);
+            let conv_bias = unsqueeze(builder, 2, conv_bias);
+            let conv_bias = expand(builder, conv_out.label.shape.clone(), conv_bias);
+            conv_out = conv_out + conv_bias;
+        }
+
+        conv_out
+    }
+
     // class Lfm2ShortConv(nn.Module):
     //     def __init__(
     //         self,
@@ -207,45 +256,8 @@ impl Model {
 
         let Bx = B * x;
 
-        // let conv_out = if cache.position > 0 {
-        //     let mut conv_state = cache.conv_cache[layer_id].clone();
-        //     let cache_position = clamp(builder, 0, config.lfm2.conv_l_cache - 1, cache.position);
-        //     conv_state = roll(builder, -1, -1, conv_state);
-        //     conv_state = update_at(builder, cache_position, bx.clone(), conv_state);
-        //     cache.conv_cache[layer_id] = conv_state.clone();
-        //     let mut conv_out = sum(
-        //         builder,
-        //         conv_state * cache.conv_weights[layer_id].clone(),
-        //         -1,
-        //     );
-        //     if config.conv_bias {
-        //         conv_out = conv_out + cache.conv_biases[layer_id].clone();
-        //     }
-        //     unsqueeze(builder, -1, conv_out)
-        // } else {
-        //     if cache.position == 0 {
-        //         let padded_bx = pad(
-        //             builder,
-        //             config.conv_l_cache - bx.label.shape[-1],
-        //             0,
-        //             bx.clone(),
-        //         );
-        //         cache.conv_cache[layer_id] = padded_bx.clone();
-        //     }
-        //     conv1d(
-        //         builder,
-        //         bx,
-        //         config.hidden_size,
-        //         config.hidden_size,
-        //         config.conv_l_cache,
-        //         config.hidden_size,
-        //         config.conv_bias,
-        //         config.conv_l_cache - 1,
-        //         &format!("{name}.conv"),
-        //     )
-        // };
-
-        let conv_out = Bx;
+        // TODO: cache conv state like KV cache is
+        let conv_out = Model::depthwise_conv1d(builder, config, name, Bx);
         let y = C * conv_out;
         let y = transpose(builder, -1, -2, y);
         linear_no_bias(
@@ -256,45 +268,6 @@ impl Model {
             y,
         )
     }
-
-    //     @deprecate_kwarg("past_key_value", new_name="past_key_values", version="4.58")
-    //     def slow_forward(
-    //         self,
-    //         x: torch.Tensor,
-    //         past_key_values: Optional[Lfm2HybridConvCache] = None,
-    //         cache_position: Optional[torch.LongTensor] = None,
-    //         attention_mask: Optional[torch.Tensor] = None,
-    //     ):
-    //         seqlen = x.shape[1]
-
-    //         x = apply_mask_to_padding_states(x, attention_mask)
-    //         BCx = self.in_proj(x).transpose(-1, -2)
-    //         B, C, x = BCx.chunk(3, dim=-2)
-
-    //         Bx = B * x
-
-    //         if past_key_values is not None and cache_position[0] > 0:
-    //             conv_state = past_key_values.conv_cache[self.layer_idx]
-    //             cache_position = cache_position.clamp(0, self.L_cache - 1)
-    //             conv_state = conv_state.roll(shifts=-1, dims=-1)
-    //             conv_state[:, :, cache_position] = Bx.to(device=conv_state.device, dtype=conv_state.dtype)
-    //             past_key_values.conv_cache[self.layer_idx].copy_(conv_state)
-    //             conv_out = torch.sum(conv_state.to(Bx.device) * self.conv.weight[:, 0, :], dim=-1)
-    //             if self.bias:
-    //                 conv_out += self.conv.bias
-
-    //             conv_out = conv_out.unsqueeze(-1)
-    //         else:
-    //             if past_key_values is not None:
-    //                 conv_state = nn.functional.pad(Bx, (self.L_cache - Bx.shape[-1], 0))
-    //                 past_key_values.conv_cache[self.layer_idx].copy_(conv_state)
-
-    //             conv_out = self.conv(Bx)[..., :seqlen]
-
-    //         y = C * conv_out
-    //         y = y.transpose(-1, -2).contiguous()
-    //         y = self.out_proj(y)
-    //         return y
 
     pub fn feed_forward(builder: &Builder, config: &Config, name: &str, x: Var) -> Var {
         let mut intermediate_size = config.lfm2.intermediate_size;
