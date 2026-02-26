@@ -3,7 +3,7 @@
 use catgrad::category::core::Shape;
 use catgrad::interpreter::backend::Backend;
 use catgrad::interpreter::backend::candle::CandleBackend;
-use catgrad::interpreter::{TaggedTensor, TaggedTensorTuple, Value};
+use catgrad::interpreter::{TaggedTensor, TaggedTensorTuple, TaggedVec, Value};
 
 // ============================================================================
 // CANDLE BACKEND UNIT TESTS
@@ -62,6 +62,12 @@ fn test_candle_backend_arithmetic() {
     match result {
         TaggedTensor::F32([arr]) => {
             assert_eq!(arr.0.shape().dims(), &[2, 2]);
+            let values = backend.to_vec(TaggedTensor::F32([arr]));
+            if let TaggedVec::F32(v) = values {
+                assert_eq!(v, vec![3.0, 5.0, 7.0, 9.0]);
+            } else {
+                panic!("Expected F32 values");
+            }
         }
         _ => panic!("Expected F32 result"),
     }
@@ -88,6 +94,12 @@ fn test_candle_backend_arithmetic() {
     match result {
         TaggedTensor::F32([arr]) => {
             assert_eq!(arr.0.shape().dims(), &[2, 2]);
+            let values = backend.to_vec(TaggedTensor::F32([arr]));
+            if let TaggedVec::F32(v) = values {
+                assert_eq!(v, vec![2.0, 6.0, 12.0, 20.0]);
+            } else {
+                panic!("Expected F32 values");
+            }
         }
         _ => panic!("Expected F32 result"),
     }
@@ -120,6 +132,12 @@ fn test_candle_backend_subtraction() {
     match result {
         TaggedTensor::F32([arr]) => {
             assert_eq!(arr.0.shape().dims(), &[2, 2]);
+            let values = backend.to_vec(TaggedTensor::F32([arr]));
+            if let TaggedVec::F32(v) = values {
+                assert_eq!(v, vec![9.0, 6.0, 3.0, 0.0]);
+            } else {
+                panic!("Expected F32 values");
+            }
         }
         _ => panic!("Expected F32 result"),
     }
@@ -147,6 +165,12 @@ fn test_candle_backend_subtraction() {
     match result {
         TaggedTensor::U32([arr]) => {
             assert_eq!(arr.0.shape().dims(), &[2, 2]);
+            let values = backend.to_vec(TaggedTensor::U32([arr]));
+            if let TaggedVec::U32(v) = values {
+                assert_eq!(v, vec![9, 6, 3, 0]);
+            } else {
+                panic!("Expected U32 values");
+            }
         }
         _ => panic!("Expected U32 result"),
     }
@@ -170,6 +194,12 @@ fn test_candle_backend_max() {
     match result {
         TaggedTensor::F32([arr]) => {
             assert_eq!(arr.0.shape().dims(), &[2, 1]);
+            let values = backend.to_vec(TaggedTensor::F32([arr]));
+            if let TaggedVec::F32(v) = values {
+                assert_eq!(v, vec![5.0, 8.0]);
+            } else {
+                panic!("Expected F32 values");
+            }
         }
         _ => panic!("Expected F32 result"),
     }
@@ -188,6 +218,12 @@ fn test_candle_backend_max() {
     match result {
         TaggedTensor::U32([arr]) => {
             assert_eq!(arr.0.shape().dims(), &[2, 1]);
+            let values = backend.to_vec(TaggedTensor::U32([arr]));
+            if let TaggedVec::U32(v) = values {
+                assert_eq!(v, vec![5, 3]);
+            } else {
+                panic!("Expected U32 values");
+            }
         }
         _ => panic!("Expected U32 result"),
     }
@@ -212,6 +248,12 @@ fn test_candle_backend_argmax() {
         TaggedTensor::U32([arr]) => {
             println!("argmax result: {:?}", arr);
             assert_eq!(arr.0.shape().dims(), &[2, 1]);
+            let values = backend.to_vec(TaggedTensor::U32([arr]));
+            if let TaggedVec::U32(v) = values {
+                assert_eq!(v, vec![1, 1]);
+            } else {
+                panic!("Expected U32 values");
+            }
         }
         _ => panic!("Expected U32 result"),
     }
@@ -231,6 +273,12 @@ fn test_candle_backend_argmax() {
         TaggedTensor::U32([arr]) => {
             println!("argmax result: {:?}", arr);
             assert_eq!(arr.0.shape().dims(), &[2, 1]);
+            let values = backend.to_vec(TaggedTensor::U32([arr]));
+            if let TaggedVec::U32(v) = values {
+                assert_eq!(v, vec![1, 0]);
+            } else {
+                panic!("Expected U32 values");
+            }
         }
         _ => panic!("Expected U32 result"),
     }
@@ -254,6 +302,12 @@ fn test_candle_backend_sum() {
     match result {
         TaggedTensor::F32([arr]) => {
             assert_eq!(arr.0.shape().dims(), &[2, 1]);
+            let values = backend.to_vec(TaggedTensor::F32([arr]));
+            if let TaggedVec::F32(v) = values {
+                assert_eq!(v, vec![6.0, 15.0]);
+            } else {
+                panic!("Expected F32 values");
+            }
         }
         _ => panic!("Expected F32 result"),
     }
@@ -272,6 +326,12 @@ fn test_candle_backend_sum() {
     match result {
         TaggedTensor::U32([arr]) => {
             assert_eq!(arr.0.shape().dims(), &[2, 1]);
+            let values = backend.to_vec(TaggedTensor::U32([arr]));
+            if let TaggedVec::U32(v) = values {
+                assert_eq!(v, vec![6, 15]);
+            } else {
+                panic!("Expected U32 values");
+            }
         }
         _ => panic!("Expected U32 result"),
     }
@@ -304,6 +364,12 @@ fn test_candle_backend_matmul() {
     match result {
         TaggedTensor::F32([arr]) => {
             assert_eq!(arr.0.shape().dims(), &[2, 2]);
+            let values = backend.to_vec(TaggedTensor::F32([arr]));
+            if let TaggedVec::F32(v) = values {
+                assert_eq!(v, vec![22.0, 28.0, 49.0, 64.0]);
+            } else {
+                panic!("Expected F32 values");
+            }
         }
         _ => panic!("Expected F32 result"),
     }
@@ -352,6 +418,12 @@ fn test_candle_backend_cast() {
     match casted {
         TaggedTensor::U32([arr]) => {
             assert_eq!(arr.0.shape().dims(), &[2, 2]);
+            let values = backend.to_vec(TaggedTensor::U32([arr]));
+            if let TaggedVec::U32(v) = values {
+                assert_eq!(v, vec![1, 2, 3, 4]);
+            } else {
+                panic!("Expected U32 values");
+            }
         }
         _ => panic!("Expected U32 result"),
     }
@@ -384,6 +456,12 @@ fn test_candle_backend_division() {
     match result {
         TaggedTensor::F32([arr]) => {
             assert_eq!(arr.0.shape().dims(), &[2, 2]);
+            let values = backend.to_vec(TaggedTensor::F32([arr]));
+            if let TaggedVec::F32(v) = values {
+                assert_eq!(v, vec![3.0, 2.0, 2.0, 4.0]);
+            } else {
+                panic!("Expected F32 values");
+            }
         }
         _ => panic!("Expected F32 result"),
     }
@@ -411,6 +489,12 @@ fn test_candle_backend_division() {
     match result {
         TaggedTensor::U32([arr]) => {
             assert_eq!(arr.0.shape().dims(), &[2, 2]);
+            let values = backend.to_vec(TaggedTensor::U32([arr]));
+            if let TaggedVec::U32(v) = values {
+                assert_eq!(v, vec![3, 2, 2, 4]);
+            } else {
+                panic!("Expected U32 values");
+            }
         }
         _ => panic!("Expected U32 result"),
     }
@@ -443,6 +527,72 @@ fn test_candle_backend_power() {
     match result {
         TaggedTensor::F32([arr]) => {
             assert_eq!(arr.0.shape().dims(), &[2, 2]);
+            let values = backend.to_vec(TaggedTensor::F32([arr]));
+            if let TaggedVec::F32(v) = values {
+                assert_eq!(v, vec![4.0, 9.0, 16.0, 25.0]);
+            } else {
+                panic!("Expected F32 values");
+            }
+        }
+        _ => panic!("Expected F32 result"),
+    }
+}
+
+#[test]
+fn test_candle_backend_log() {
+    let backend = CandleBackend::new();
+
+    // Test F32 log
+    let data = vec![1.0f32, 2.0, 3.0, 4.0];
+    let tensor_tagged = backend
+        .ndarray_from_vec_f32(data, Shape(vec![2, 2]))
+        .unwrap();
+    let tensor = match tensor_tagged {
+        TaggedTensor::F32([arr]) => arr,
+        _ => panic!("Expected F32"),
+    };
+
+    let result = backend.log(TaggedTensor::F32([tensor]));
+    match result {
+        TaggedTensor::F32([arr]) => {
+            assert_eq!(arr.0.shape().dims(), &[2, 2]);
+            let values = backend.to_vec(TaggedTensor::F32([arr]));
+            if let TaggedVec::F32(v) = values {
+                let expected = [1.0f32, 2.0, 3.0, 4.0]
+                    .iter()
+                    .map(|x| x.ln())
+                    .collect::<Vec<f32>>();
+                for (a, e) in v.iter().zip(expected.iter()) {
+                    assert!((a - e).abs() < 1e-6, "expected {} got {}", e, a);
+                }
+            } else {
+                panic!("Expected F32 values");
+            }
+        }
+        _ => panic!("Expected F32 result"),
+    }
+}
+
+#[test]
+fn test_candle_backend_floor() {
+    let backend = CandleBackend::new();
+
+    // Test F32 floor
+    let data = vec![1.1f32, 2.9, -3.5, 4.0];
+    let tensor_tagged = backend
+        .ndarray_from_vec_f32(data, Shape(vec![2, 2]))
+        .unwrap();
+    let tensor = match tensor_tagged {
+        TaggedTensor::F32([arr]) => arr,
+        _ => panic!("Expected F32"),
+    };
+
+    let result = backend.floor(TaggedTensor::F32([tensor]));
+    match result {
+        TaggedTensor::F32([arr]) => {
+            assert_eq!(arr.0.shape().dims(), &[2, 2]);
+            let result_data = arr.0.flatten_all().unwrap().to_vec1::<f32>().unwrap();
+            assert_eq!(result_data, vec![1.0, 2.0, -4.0, 4.0]);
         }
         _ => panic!("Expected F32 result"),
     }
@@ -466,6 +616,12 @@ fn test_candle_backend_negation() {
     match result {
         TaggedTensor::F32([arr]) => {
             assert_eq!(arr.0.shape().dims(), &[2, 2]);
+            let values = backend.to_vec(TaggedTensor::F32([arr]));
+            if let TaggedVec::F32(v) = values {
+                assert_eq!(v, vec![-1.0, 2.0, -3.0, 4.0]);
+            } else {
+                panic!("Expected F32 values");
+            }
         }
         _ => panic!("Expected F32 result"),
     }

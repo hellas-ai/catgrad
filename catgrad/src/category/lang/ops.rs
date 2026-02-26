@@ -88,6 +88,14 @@ pub fn cos(builder: &Builder, value: Var) -> Var {
     var::fn_operation(builder, &[value], Object::Tensor, op!["tensor", "cos"])
 }
 
+pub fn log(builder: &Builder, value: Var) -> Var {
+    var::fn_operation(builder, &[value], Object::Tensor, op!["tensor", "log"])
+}
+
+pub fn floor(builder: &Builder, value: Var) -> Var {
+    var::fn_operation(builder, &[value], Object::Tensor, op!["tensor", "floor"])
+}
+
 ////////////////////////////////////////////////////////////////////////////////
 // Declarations
 

@@ -99,6 +99,14 @@ impl Backend for ShapeOnlyBackend {
         x
     }
 
+    fn log(&self, x: TaggedTensor<Self>) -> TaggedTensor<Self> {
+        x
+    }
+
+    fn floor(&self, x: TaggedTensor<Self>) -> TaggedTensor<Self> {
+        x
+    }
+
     fn neg(&self, x: TaggedTensor<Self>) -> TaggedTensor<Self> {
         x
     }

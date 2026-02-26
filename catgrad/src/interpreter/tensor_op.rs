@@ -18,6 +18,8 @@ pub(crate) fn tensor_op<B: Backend>(
         TensorOp::Map(ScalarOp::Pow) => binop(backend, args, ssa, B::pow),
         TensorOp::Map(ScalarOp::Sin) => unary_op(backend, args, ssa, B::sin),
         TensorOp::Map(ScalarOp::Cos) => unary_op(backend, args, ssa, B::cos),
+        TensorOp::Map(ScalarOp::Log) => unary_op(backend, args, ssa, B::log),
+        TensorOp::Map(ScalarOp::Floor) => unary_op(backend, args, ssa, B::floor),
         TensorOp::Map(ScalarOp::Neg) => unary_op(backend, args, ssa, B::neg),
         TensorOp::Map(ScalarOp::Mul) => binop(backend, args, ssa, B::mul),
         TensorOp::Map(ScalarOp::Div) => binop(backend, args, ssa, B::div),
