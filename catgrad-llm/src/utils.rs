@@ -237,6 +237,11 @@ pub fn get_model(
             config_json,
             max_sequence_length,
         )?),
+        "Mistral3ForConditionalGeneration" => Box::new(models::mistral3::Mistral3Model::new(
+            "language_model",
+            config_json,
+            max_sequence_length,
+        )?),
         "MistralForCausalLM" | "LlamaForCausalLM" | "SmolLM3ForCausalLM" => Box::new(
             models::llama::LlamaModel::new("", config_json, max_sequence_length)?,
         ),
