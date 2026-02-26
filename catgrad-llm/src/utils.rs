@@ -268,6 +268,10 @@ pub fn get_model(
             config_json,
             max_sequence_length,
         )?),
+        "Lfm2ForCausalLM" => Box::new(models::lfm2::Lfm2Model::new(
+            config_json,
+            max_sequence_length,
+        )?),
         "GPT2LMHeadModel" => Box::new(models::gpt2::GPT2Model::new(
             config_json,
             max_sequence_length,
