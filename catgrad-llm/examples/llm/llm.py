@@ -1,4 +1,3 @@
-import torch
 import argparse
 from transformers import (
     AutoModelForCausalLM,
@@ -36,7 +35,7 @@ if __name__ == "__main__":
             args.model, revision=args.revision, dtype=args.dtype
         )
 
-    print(f"Loaded model {args.model}, dtype:{model.dtype}")
+    print(f"Loaded model {args.model}, dtype:{model.dtype} on device {model.device}")
     prompt = args.prompt
 
     if not args.raw_prompt and tokenizer.chat_template is not None:
