@@ -4,7 +4,7 @@ use catgrad::prelude::*;
 use catgrad::stdlib::nn::*;
 
 /// Type signature for LLM Modules
-pub fn llm_type(config: &dyn LLMConfig) -> ([Type; 3], [Type; 3]) {
+pub fn llm_type(config: &dyn LLMConfig) -> (Vec<Type>, Vec<Type>) {
     use catgrad::typecheck::*;
     let batch_size = NatExpr::Var(0);
     let seq_len = NatExpr::Var(1);
@@ -72,7 +72,7 @@ pub fn llm_type(config: &dyn LLMConfig) -> ([Type; 3], [Type; 3]) {
         ]),
     }));
 
-    ([t_x, t_k, t_v], [t_y, t_k_out, t_v_out])
+    (vec![t_x, t_k, t_v], vec![t_y, t_k_out, t_v_out])
 }
 
 pub struct Cache {
@@ -637,8 +637,27 @@ pub enum WeightPostProcess {
     ConcatMoeExperts { num_local_experts: usize },
 }
 
-pub trait LLMModel: Module<3, 3> {
+pub trait LLMModel: DynModule {
     fn config(&self) -> &dyn LLMConfig;
+
+    fn empty_state_specs(&self) -> Vec<(Dtype, Shape)> {
+        let config = self.config();
+        let k_shape = Shape(vec![
+            config.num_hidden_layers(),
+            1,
+            config.num_key_value_heads(),
+            0,
+            config.get_qk_head_dim(),
+        ]);
+        let v_shape = Shape(vec![
+            config.num_hidden_layers(),
+            1,
+            config.num_key_value_heads(),
+            0,
+            config.get_v_head_dim(),
+        ]);
+        vec![(Dtype::F32, k_shape), (Dtype::F32, v_shape)]
+    }
 
     fn weight_post_process(&self) -> WeightPostProcess {
         WeightPostProcess::None

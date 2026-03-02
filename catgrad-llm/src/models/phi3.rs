@@ -251,12 +251,13 @@ impl Phi3Model {
     }
 }
 
-impl Module<3, 3> for Phi3Model {
+impl DynModule for Phi3Model {
     fn path(&self) -> Path {
         path(vec!["phi3"]).expect("invalid model path")
     }
 
-    fn def(&self, builder: &Builder, [x, in_k, in_v]: [Var; 3]) -> [Var; 3] {
+    fn def(&self, builder: &Builder, args: Vec<Var>) -> Vec<Var> {
+        let [x, in_k, in_v]: [Var; 3] = args.try_into().expect("expected 3 inputs");
         let root = self.path();
 
         let mut cache = Cache::init(
@@ -311,11 +312,11 @@ impl Module<3, 3> for Phi3Model {
 
         x = argmax(builder, x);
         let (out_k, out_v) = cache.get_kv_cache(builder);
-        [x, out_k, out_v]
+        vec![x, out_k, out_v]
     }
 
     // This should return the *detailed* type of the model
-    fn ty(&self) -> ([Type; 3], [Type; 3]) {
+    fn ty(&self) -> (Vec<Type>, Vec<Type>) {
         llm_type(&self.config)
     }
 }
