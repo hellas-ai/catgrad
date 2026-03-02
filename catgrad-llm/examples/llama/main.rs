@@ -29,6 +29,9 @@ struct Args {
     /// TOML config file overriding model aliases.
     #[arg(short = 'c', long, value_name = "PATH")]
     config_file: Option<PathBuf>,
+    /// List configured model aliases and exit
+    #[arg(long)]
+    list_models: bool,
     /// Initial prompt
     #[arg(short = 'p', long, default_value = "Category theory is")]
     prompt: String,
@@ -112,6 +115,12 @@ fn main() -> Result<()> {
     env_logger::init();
     let args = Args::parse();
     let app_config = get_app_config(&args)?;
+    if args.list_models {
+        for (model, alias) in get_models(&app_config) {
+            println!("{model} ({alias})");
+        }
+        return Ok(());
+    }
     match args.backend {
         BackendChoice::Ndarray => run_with_backend(&args, &app_config, NdArrayBackend),
         BackendChoice::Candle => {
@@ -126,6 +135,16 @@ fn get_model_name(args: &Args, app_config: &AppConfig) -> Result<String> {
         .get(args.model_name.as_str())
         .cloned()
         .unwrap_or_else(|| args.model_name.clone()))
+}
+
+fn get_models(app_config: &AppConfig) -> Vec<(&str, &str)> {
+    let mut models: Vec<(&str, &str)> = app_config
+        .aliases
+        .iter()
+        .map(|(alias, model)| (model.as_str(), alias.as_str()))
+        .collect();
+    models.sort_unstable_by(|a, b| a.0.to_lowercase().cmp(&b.0.to_lowercase()));
+    models
 }
 
 fn run_with_backend<B: interpreter::Backend>(
