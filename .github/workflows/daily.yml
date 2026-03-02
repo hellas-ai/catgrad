@@ -1,0 +1,16 @@
+name: "Compare LLM"
+on:
+  schedule:
+    - cron: "0 0 * * *"
+  workflow_dispatch:
+
+jobs:
+  daily:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+      - name: Build llama example
+        run: cargo build --release -p catgrad-llm --example llama
+      - name: Run daily script
+        run: bash catgrad-llm/scripts/daily.sh
