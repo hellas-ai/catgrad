@@ -640,7 +640,8 @@ pub enum WeightPostProcess {
 pub trait LLMModel: DynModule {
     fn config(&self) -> &dyn LLMConfig;
 
-    fn empty_state_specs(&self) -> Vec<(Dtype, Shape)> {
+    // Return empty KV-cache shape by default
+    fn empty_state_type(&self) -> Vec<(Dtype, Shape)> {
         let config = self.config();
         let k_shape = Shape(vec![
             config.num_hidden_layers(),

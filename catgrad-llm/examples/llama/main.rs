@@ -2,18 +2,17 @@ use anyhow::Result;
 use catgrad::interpreter::backend::candle::CandleBackend;
 use catgrad::interpreter::backend::ndarray::NdArrayBackend;
 use catgrad::prelude::*;
+use catgrad_llm::helpers::LLMModel;
+use catgrad_llm::utils::{
+    get_model, get_model_chat_template, load_model, post_process_model_weights, print_bench_table,
+    render_chat_template,
+};
 use clap::{Parser, ValueEnum};
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
-
-use catgrad_llm::config::LLMConfig;
-use catgrad_llm::utils::{
-    get_model, get_model_chat_template, load_model, post_process_model_weights, print_bench_table,
-    render_chat_template,
-};
 
 #[derive(Parser, Debug)]
 struct Args {
@@ -220,19 +219,15 @@ fn run_with_backend<B: interpreter::Backend>(
     let mut start_gen = std::time::Instant::now();
     let mut elapsed_pp = std::time::Duration::ZERO;
     let interpreter = interpreter::Interpreter::new(backend, env, parameter_values);
-    let empty_cache = empty_kv_cache(&interpreter.backend, model.config())?;
+
     let eos_token_ids = model.config().get_eos_token_ids();
-    let mut kv_cache = empty_cache.clone();
+
+    let mut state_cache = empty_state_cache(&interpreter.backend, model)?;
 
     // Run inference loop
     for i in 0..max_seq_len {
-        let cache = if args.kv_cache {
-            &kv_cache
-        } else {
-            &empty_cache
-        };
-        let (next_token_id, new_cache) =
-            run_interpreter(&typed_term, &interpreter, &token_ids, cache)?;
+        let (next_token_id, updated_state_cache) =
+            run_interpreter(&typed_term, &interpreter, &token_ids, &state_cache)?;
         if i == 0 {
             elapsed_pp = start_gen.elapsed();
             start_gen = std::time::Instant::now();
@@ -242,7 +237,7 @@ fn run_with_backend<B: interpreter::Backend>(
             break;
         }
         if args.kv_cache {
-            kv_cache = new_cache;
+            state_cache = updated_state_cache;
             token_ids = vec![next_token_id];
         } else {
             token_ids.push(next_token_id);
@@ -284,39 +279,36 @@ fn run_with_backend<B: interpreter::Backend>(
     Ok(())
 }
 
-type KvCache<B> = (interpreter::Value<B>, interpreter::Value<B>);
-
-fn empty_kv_cache<B: interpreter::Backend>(
+// Model-specific empty state cache.
+// Usually just KV-cache but for hybrid models it can include additional state from the linear layers.
+fn empty_state_cache<B: interpreter::Backend>(
     backend: &B,
-    config: &dyn LLMConfig,
-) -> Result<KvCache<B>> {
-    let k_shape = Shape(vec![
-        config.num_hidden_layers(),
-        1,
-        config.num_key_value_heads(),
-        0,
-        config.get_qk_head_dim(),
-    ]);
-    let v_shape = Shape(vec![
-        config.num_hidden_layers(),
-        1,
-        config.num_key_value_heads(),
-        0,
-        config.get_v_head_dim(),
-    ]);
-    let k = interpreter::tensor(backend, k_shape, Vec::<f32>::new())
-        .map_err(|err| anyhow::anyhow!("kv cache tensor error: {:?}", err))?;
-    let v = interpreter::tensor(backend, v_shape, Vec::<f32>::new())
-        .map_err(|err| anyhow::anyhow!("kv cache tensor error: {:?}", err))?;
-    Ok((k, v))
+    model: Box<dyn LLMModel>,
+) -> Result<Vec<interpreter::Value<B>>> {
+    let typ = model.empty_state_type();
+
+    typ.iter()
+        .map(|(dtype, shape)| match dtype {
+            Dtype::F32 => {
+                let data = vec![0.0f32; shape.0.iter().product()];
+                interpreter::tensor(backend, shape.clone(), data)
+                    .map_err(|err| anyhow::anyhow!("state tensor error: {:?}", err))
+            }
+            Dtype::U32 => {
+                let data = vec![0u32; shape.0.iter().product()];
+                interpreter::tensor(backend, shape.clone(), data)
+                    .map_err(|err| anyhow::anyhow!("state tensor error: {:?}", err))
+            }
+        })
+        .collect()
 }
 
 fn run_interpreter<B: interpreter::Backend>(
     typed_term: &TypedTerm,
     interpreter: &interpreter::Interpreter<B>,
     input_data: &[u32],
-    kv_cache: &KvCache<B>,
-) -> Result<(u32, KvCache<B>)> {
+    state_cache: &[interpreter::Value<B>],
+) -> Result<(u32, Vec<interpreter::Value<B>>)> {
     let input_tensor = interpreter::tensor(
         &interpreter.backend,
         Shape(vec![1, input_data.len()]),
@@ -324,29 +316,36 @@ fn run_interpreter<B: interpreter::Backend>(
     )
     .expect("Failed to create input tensor");
 
+    let mut inputs = Vec::with_capacity(state_cache.len() + 1);
+    inputs.push(input_tensor);
+    inputs.extend(state_cache.iter().cloned());
+
     // Run the model
     let mut results = interpreter
-        .run(
-            typed_term.term.clone(),
-            vec![input_tensor, kv_cache.0.clone(), kv_cache.1.clone()],
-        )
+        .run(typed_term.term.clone(), inputs)
         .expect("Failed to run inference");
 
-    let out_v = results
-        .pop()
-        .ok_or_else(|| anyhow::anyhow!("No KV cache V output"))?;
-    let out_k = results
-        .pop()
-        .ok_or_else(|| anyhow::anyhow!("No KV cache K output"))?;
-    if let Some(output) = results.pop() {
-        match output {
-            interpreter::Value::Tensor(arr) => match interpreter.backend.to_vec(arr) {
-                interpreter::TaggedVec::U32(v) => Ok((v[v.len() - 1], (out_k, out_v))),
-                _ => Err(anyhow::anyhow!("Unexpected output dtype")),
-            },
-            t => Err(anyhow::anyhow!("Output was not a tensor: {:?}", t)),
-        }
+    if results.is_empty() {
+        return Err(anyhow::anyhow!("model returned no outputs"));
+    }
+    let updated_state_cache = if results.len() > 1 {
+        results.split_off(1)
     } else {
-        Err(anyhow::anyhow!("No result"))
+        Vec::new()
+    };
+    let output = results.remove(0);
+
+    match output {
+        interpreter::Value::Tensor(arr) => match interpreter.backend.to_vec(arr) {
+            interpreter::TaggedVec::U32(v) => {
+                let token = v
+                    .last()
+                    .copied()
+                    .ok_or_else(|| anyhow::anyhow!("token output tensor was empty"))?;
+                Ok((token, updated_state_cache))
+            }
+            _ => Err(anyhow::anyhow!("Unexpected output dtype")),
+        },
+        t => Err(anyhow::anyhow!("Output was not a tensor: {:?}", t)),
     }
 }
