@@ -484,7 +484,7 @@ impl Gemma3Model {
     }
 
     // Forward pass with text tokens as input
-    pub fn forward(&self, builder: &Builder, p: Path, x: Var, in_k: Var, in_v: Var) -> [Var; 3] {
+    pub fn forward(&self, builder: &Builder, p: Path, x: Var, in_k: Var, in_v: Var) -> Vec<Var> {
         let x = self.scaled_embeddings(builder, p.extend(vec!["embed_tokens"]).unwrap(), x);
 
         let [_b, s, _] = unpack::<3>(builder, shape(builder, x.clone()));
@@ -502,7 +502,7 @@ impl Gemma3Model {
         x: Var,
         in_k: Var,
         in_v: Var,
-    ) -> [Var; 3] {
+    ) -> Vec<Var> {
         let mut cache = Cache::init(
             builder,
             &self.config,
@@ -551,16 +551,17 @@ impl Gemma3Model {
 
         x = argmax(builder, x);
         let (out_k, out_v) = cache.get_kv_cache(builder);
-        [x, out_k, out_v]
+        vec![x, out_k, out_v]
     }
 }
 
-impl Module<3, 3> for Gemma3Model {
+impl DynModule for Gemma3Model {
     fn path(&self) -> Path {
         path(vec!["gemma3"]).expect("invalid model path")
     }
 
-    fn def(&self, builder: &Builder, [x, in_k, in_v]: [Var; 3]) -> [Var; 3] {
+    fn def(&self, builder: &Builder, args: Vec<Var>) -> Vec<Var> {
+        let [x, in_k, in_v]: [Var; 3] = args.try_into().expect("expected 3 inputs");
         let mut root = self.path();
         if !self.root.is_empty() {
             root = root
@@ -570,7 +571,7 @@ impl Module<3, 3> for Gemma3Model {
         self.forward(builder, root, x, in_k, in_v)
     }
 
-    fn ty(&self) -> ([Type; 3], [Type; 3]) {
+    fn ty(&self) -> (Vec<Type>, Vec<Type>) {
         llm_type(&self.config)
     }
 }

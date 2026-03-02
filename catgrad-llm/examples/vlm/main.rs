@@ -127,7 +127,7 @@ impl VLMModel {
         text2: Var,
         in_k: Var,
         in_v: Var,
-    ) -> [Var; 3] {
+    ) -> Vec<Var> {
         let text1 = self.language_model.scaled_embeddings(
             builder,
             p.extend(vec!["embed_tokens"]).unwrap(),
@@ -159,33 +159,28 @@ impl VLMModel {
             attention_mask * image_mask
         };
 
-        let [x, out_k, out_v] = self.language_model.forward_embeddings(
-            builder,
-            p,
-            attention_mask,
-            embeddings,
-            in_k,
-            in_v,
-        );
-        [x, out_k, out_v]
+        self.language_model
+            .forward_embeddings(builder, p, attention_mask, embeddings, in_k, in_v)
     }
 }
 
 // VLM model taking an image and a prompt, generating text
-impl Module<5, 3> for VLMModel {
+impl DynModule for VLMModel {
     fn path(&self) -> Path {
         path(vec!["VLM"]).unwrap()
     }
 
-    fn ty(&self) -> ([Type; 5], [Type; 3]) {
+    fn ty(&self) -> (Vec<Type>, Vec<Type>) {
         let t = Type::Tensor(TypeExpr::Var(0));
         (
-            [t.clone(), t.clone(), t.clone(), t.clone(), t.clone()],
-            [t.clone(), t.clone(), t],
+            vec![t.clone(), t.clone(), t.clone(), t.clone(), t.clone()],
+            vec![t.clone(), t.clone(), t],
         )
     }
 
-    fn def(&self, builder: &Builder, [text1, image, text2, in_k, in_v]: [Var; 5]) -> [Var; 3] {
+    fn def(&self, builder: &Builder, args: Vec<Var>) -> Vec<Var> {
+        let [text1, image, text2, in_k, in_v]: [Var; 5] =
+            args.try_into().expect("expected 5 inputs");
         self.forward_image_and_texts(
             builder,
             path(vec!["language_model", "model"]).unwrap(),

@@ -6,7 +6,7 @@ pub use stdlib_definitions::{stdlib, to_load_ops};
 
 // The [`Module`] helper for creating language definitions
 mod module;
-pub use module::{FnModule, Module};
+pub use module::{DynModule, FnModule, Module};
 
 // Basic ops like reshape, transpose, matmul
 pub mod ops;
