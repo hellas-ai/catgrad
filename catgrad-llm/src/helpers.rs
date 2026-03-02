@@ -617,13 +617,18 @@ pub fn embeddings(builder: &Builder, p: Path, x: Var) -> Var {
 
     //flatten the input tensor as that is how index expects it
     let [b, s] = unpack::<2>(builder, shape(builder, x.clone()));
-    let sh = shape!(builder, b * s);
+    let sh = shape!(builder, b.clone() * s.clone());
     let x = reshape(builder, sh, x);
+
+    let sh = shape(builder, wte.clone());
+    let [_vocab_size, hidden_dim] = unpack::<2>(builder, sh);
 
     //index into the weight tensor
     let te = index(builder, 0, x, wte);
 
-    unsqueeze::<2, 3>(builder, 0, te)
+    // add back batch dimension
+    let sh = shape!(builder, b, s, hidden_dim);
+    reshape(builder, sh, te)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
