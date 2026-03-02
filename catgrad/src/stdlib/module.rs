@@ -81,6 +81,77 @@ pub trait Module<const A: usize, const B: usize> {
     }
 }
 
+/// Like [`Module`], but with dynamic arity/coarity using vectors.
+pub trait DynModule {
+    /// The *type* of this definition, used to construct a [`TypedTerm`].
+    fn ty(&self) -> (Vec<Type>, Vec<Type>);
+
+    /// Unique global name in the stdlib/environment.
+    fn path(&self) -> Path;
+
+    /// The *definition* of this term, as a function which mutably inlines it into the provided
+    /// Builder.
+    fn def(&self, builder: &Builder, args: Vec<Var>) -> Vec<Var>;
+
+    ////////////////////////////////////////
+    // Derived functions
+
+    /// The *sort* of this type are the *object labels* of the sources/targets of its definition.
+    fn sort(&self) -> (Vec<Object>, Vec<Object>) {
+        let (source_type, target_type) = self.ty();
+        (
+            source_type.into_iter().map(to_sort).collect(),
+            target_type.into_iter().map(to_sort).collect(),
+        )
+    }
+
+    /// Alias for `def` which is clearer to use in context.
+    fn inline(&self, builder: &Builder, args: Vec<Var>) -> Vec<Var> {
+        self.def(builder, args)
+    }
+
+    /// Create a single `Definition` operation in the graph with name `self.path()`.
+    fn op(&self, builder: &Builder, args: Vec<Var>) -> Vec<Var> {
+        let result_types = self.sort().1;
+        var::operation(
+            builder,
+            &args,
+            result_types,
+            Operation::Definition(self.path()),
+        )
+    }
+
+    /// Construct a standalone OpenHypergraph for this definition.
+    fn term(&self) -> Option<TypedTerm> {
+        let (source_type, target_type) = self.ty();
+        let source_object: Vec<Object> = source_type.iter().cloned().map(to_sort).collect();
+
+        let term = var::build(|builder| {
+            let args: Vec<Var> = source_object
+                .iter()
+                .cloned()
+                .map(|o| Var::new(builder.clone(), o))
+                .collect();
+            let sources = args.clone();
+            let targets = self.inline(builder, args);
+            (sources, targets)
+        })
+        .ok()?;
+
+        use open_hypergraphs::category::*;
+        let target_object: Vec<Object> = target_type.iter().cloned().map(to_sort).collect();
+        if term.target() != target_object {
+            None
+        } else {
+            Some(TypedTerm {
+                term,
+                source_type,
+                target_type,
+            })
+        }
+    }
+}
+
 /// Get the corresponding [`Object`] (sort) for a given [`Type`]
 // TODO: move?
 fn to_sort(value: Type) -> Object {
