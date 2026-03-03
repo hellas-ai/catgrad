@@ -151,7 +151,7 @@ impl VLMModel {
             let sh = shape!(builder, s.clone(), s);
             constant(builder, 0.0, &sh)
         } else {
-            let attention_mask = causal_mask(builder, s.clone());
+            let attention_mask = causal_mask(builder, s.clone(), 0.to_nat(builder));
 
             // hardcoded 256 tokens per image
             let image_mask = self.bidirectional_mask(builder, s, img_start, 256.to_nat(builder));
