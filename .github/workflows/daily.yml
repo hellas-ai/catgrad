@@ -13,4 +13,4 @@ jobs:
       - name: Build llama example
         run: cargo build --release -p catgrad-llm --example llama
       - name: Run daily script
-        run: bash catgrad-llm/scripts/daily.sh
+        run: bash catgrad-llm/scripts/compare/compare.sh

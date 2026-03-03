@@ -159,7 +159,7 @@ fn run_with_backend<B: interpreter::Backend>(
         load_model(&model_name, &args.revision, &backend)?;
     let elapsed_load = start_load.elapsed();
 
-    println!(
+    eprintln!(
         "Model weights loaded for {} in {:.2} seconds",
         model_name,
         elapsed_load.as_secs_f64()
@@ -176,7 +176,7 @@ fn run_with_backend<B: interpreter::Backend>(
         pp = bench[0];
         tg = bench[1];
         max_seq_len = tg;
-        println!(
+        eprintln!(
             "Benchmarking {} with prefill size {} and sequence length {}",
             &model_name, pp, tg
         );
@@ -212,7 +212,7 @@ fn run_with_backend<B: interpreter::Backend>(
     if let Some(dump_path) = &args.dump {
         let file = std::fs::File::create(dump_path)?;
         serde_json::to_writer_pretty(file, &typed_term)?;
-        println!(
+        eprintln!(
             "Graph for {} and max_seq_length of {max_sequence_length} dumped to {}",
             model.path(),
             dump_path.display()
@@ -288,8 +288,9 @@ fn run_with_backend<B: interpreter::Backend>(
             elapsed_gen,
         );
     } else {
-        println!(
-            "\n{} tokens generated in {} seconds. ({:.2} tps)",
+        println!();
+        eprintln!(
+            "{} tokens generated in {} seconds. ({:.2} tps)",
             generated_tokens,
             (elapsed_pp + elapsed_gen).as_secs(),
             generated_tokens as f64 / (elapsed_pp + elapsed_gen).as_secs_f64(),
