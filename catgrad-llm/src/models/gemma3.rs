@@ -148,38 +148,6 @@ impl LLMModel for Gemma3Model {
     }
 }
 
-// Gemma uses a non-standard RMSNorm implementation.
-// Generic because of unpack needing the last dimension and it is being called
-// with ranks 2 and 3 too.
-fn rmsnorm_raw_gemma<const N: usize>(builder: &Builder, eps: f32, x: Var) -> Var {
-    let x_shape = shape(builder, x.clone());
-    let u = unpack::<N>(builder, x_shape.clone());
-    let n = u[N - 1].clone();
-    let s = sum(builder, x.clone() * x.clone());
-
-    let constn = nat_to_u32(builder, n);
-    let constn = cast(builder, constn, dtype(builder, x.clone()));
-    let sh = shape(builder, s.clone());
-    let constn = broadcast(builder, sh, constn);
-
-    let mean = s / constn;
-
-    let epsilon = constant(builder, eps, &shape(builder, mean.clone()));
-    let rms = sqrt(builder, mean + epsilon);
-    let denom = broadcast(builder, x_shape, rms);
-    x / denom
-}
-
-pub fn rmsnorm_gemma<const N: usize>(builder: &Builder, eps: f32, p: Path, x: Var) -> Var {
-    let gamma = param(builder, &p.extend(["weight"]).unwrap());
-    let lr = rmsnorm_raw_gemma::<N>(builder, eps, x);
-    let lr_shape = shape(builder, lr.clone());
-    let gamma = broadcast(builder, lr_shape, gamma);
-    let sh = shape(builder, gamma.clone());
-    let one = constant(builder, 1.0, &sh);
-    lr * (one + gamma)
-}
-
 /// Multi-modal projector for Gemma 3
 pub fn multi_modal_projector(builder: &Builder, p: Path, x: Var) -> Var {
     // SigLIP parameters used in Gemma 3
