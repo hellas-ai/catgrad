@@ -389,7 +389,7 @@ impl DynModule for Qwen3Model {
             x,
         );
         let [_b, s, _] = unpack::<3>(builder, shape(builder, x.clone()));
-        let attention_mask = causal_mask(builder, s);
+        let attention_mask = causal_mask(builder, s, cache_len.clone());
 
         for i in 0..self.config.num_hidden_layers {
             x = self.layer(

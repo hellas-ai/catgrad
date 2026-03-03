@@ -288,7 +288,7 @@ impl DynModule for Mistral3Model {
             in_k.clone(),
             in_v,
         );
-        let [_, _, _, cache_len, _] = unpack::<5>(builder, shape(builder, in_k));
+        let [_, _, _, pos, _] = unpack::<5>(builder, shape(builder, in_k));
 
         let mut x = embeddings(
             builder,
@@ -297,7 +297,7 @@ impl DynModule for Mistral3Model {
         );
 
         let [_b, s, _] = unpack::<3>(builder, shape(builder, x.clone()));
-        let attention_mask = causal_mask(builder, s);
+        let attention_mask = causal_mask(builder, s, pos.clone());
 
         for i in 0..self.config.num_hidden_layers {
             x = self.layer(
@@ -305,7 +305,7 @@ impl DynModule for Mistral3Model {
                 i,
                 attention_mask.clone(),
                 &mut cache,
-                cache_len.clone(),
+                pos.clone(),
                 root.extend(["model", "layers", &i.to_string()]).unwrap(),
                 x,
             );

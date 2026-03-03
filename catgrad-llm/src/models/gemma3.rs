@@ -488,7 +488,8 @@ impl Gemma3Model {
         let x = self.scaled_embeddings(builder, p.extend(vec!["embed_tokens"]).unwrap(), x);
 
         let [_b, s, _] = unpack::<3>(builder, shape(builder, x.clone()));
-        let attention_mask = causal_mask(builder, s);
+        let [_, _, _, pos, _] = unpack::<5>(builder, shape(builder, in_k.clone()));
+        let attention_mask = causal_mask(builder, s, pos);
 
         self.forward_embeddings(builder, p, attention_mask, x, in_k, in_v)
     }
@@ -510,7 +511,7 @@ impl Gemma3Model {
             in_k.clone(),
             in_v,
         );
-        let [_, _, _, cache_len, _] = unpack::<5>(builder, shape(builder, in_k));
+        let [_, _, _, pos, _] = unpack::<5>(builder, shape(builder, in_k));
 
         let mut x = if !self.is_gemma3() {
             self.normalize(builder, x)
@@ -524,7 +525,7 @@ impl Gemma3Model {
                 i,
                 attention_mask.clone(),
                 &mut cache,
-                cache_len.clone(),
+                pos.clone(),
                 p.extend(["layers", &i.to_string()]).unwrap(),
                 x,
             );

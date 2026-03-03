@@ -201,11 +201,11 @@ impl DynModule for GPT2Model {
         let [x, in_k, in_v]: [Var; 3] = args.try_into().expect("expected 3 inputs");
         let root = self.path();
 
-        let [_, _, _, cache_len, _] = unpack::<5>(builder, shape(builder, in_k.clone()));
+        let [_, _, _, pos, _] = unpack::<5>(builder, shape(builder, in_k.clone()));
         let mut cache = Cache::init(builder, &self.config, self.max_sequence_length, in_k, in_v);
-        let mut x = self.embeddings(builder, root.clone(), cache_len, x);
+        let mut x = self.embeddings(builder, root.clone(), pos.clone(), x);
         let [_b, s, _] = unpack::<3>(builder, shape(builder, x.clone()));
-        let attention_mask = causal_mask(builder, s);
+        let attention_mask = causal_mask(builder, s, pos);
 
         for i in 0..self.config.num_hidden_layers {
             x = self.layer(
