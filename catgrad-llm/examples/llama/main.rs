@@ -288,8 +288,9 @@ fn run_with_backend<B: interpreter::Backend>(
             elapsed_gen,
         );
     } else {
+        println!();
         eprintln!(
-            "\n{} tokens generated in {} seconds. ({:.2} tps)",
+            "{} tokens generated in {} seconds. ({:.2} tps)",
             generated_tokens,
             (elapsed_pp + elapsed_gen).as_secs(),
             generated_tokens as f64 / (elapsed_pp + elapsed_gen).as_secs_f64(),
