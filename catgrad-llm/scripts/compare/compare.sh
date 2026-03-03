@@ -1,19 +1,30 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# List of models to test
+# List of models to test in CI
 MODELS=(
     "HuggingFaceTB/SmolLM2-135M-Instruct"
     "openai-community/gpt2"
     "Qwen/Qwen3-0.6B"
-    "google/gemma-3-270m-it"
+    "ibm-granite/granite-3.1-1b-a400m-instruct"
 )
+
+# Add more models if not in GitHub CI (they are larger and/or need a user agreement to download from HF)
+if [[ -z "${GITHUB_ACTIONS:-}" ]]; then
+    MODELS+=(
+        "meta-llama/Llama-3.2-1B-Instruct"
+        "google/gemma-3-270m-it"
+        "allenai/OLMo-2-0425-1B-Instruct"
+        "LiquidAI/LFM2-350M"
+    )
+fi
 
 DIR=$(dirname "$0")
 REFERENCE_DIR="$DIR/expected"
 OUTPUT_DIR="$DIR/outputs"
 
 mkdir -p "$OUTPUT_DIR"
+rm -rf "$OUTPUT_DIR"/*
 
 echo "Generating outputs for ${#MODELS[@]} models..."
 
@@ -23,7 +34,7 @@ for model in "${MODELS[@]}"; do
     
     echo "Running for $model -> $OUTPUT_DIR/$filename"
    
-    cargo run -r --example llama -- -m "$model" -p 'Category theory is' -s 40 --raw -k > "$OUTPUT_DIR/$filename" 2>/dev/null
+    ./target/release/examples/llama -m "$model" -p 'Category theory is' -s 40 --raw -k > "$OUTPUT_DIR/$filename" 2>/dev/null
 done
 
 echo "Comparing $OUTPUT_DIR with $REFERENCE_DIR..."
