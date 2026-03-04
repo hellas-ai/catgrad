@@ -75,6 +75,8 @@ impl LLMConfig for Lfm2Config {
 pub struct Lfm2Model {
     config: Lfm2Config,
     layer_to_cache_id: Vec<Option<usize>>,
+    layer_to_linear_id: Vec<Option<usize>>,
+    num_linear_layers: usize,
     pub max_sequence_length: usize,
 }
 
@@ -82,25 +84,77 @@ impl LLMModel for Lfm2Model {
     fn config(&self) -> &dyn LLMConfig {
         &self.config
     }
+
+    fn empty_state_type(&self) -> Vec<(Dtype, Shape)> {
+        vec![
+            (
+                Dtype::F32,
+                Shape(vec![
+                    self.config.num_hidden_layers,
+                    1,
+                    self.config.num_key_value_heads,
+                    0,
+                    self.config.get_head_dim(),
+                ]),
+            ),
+            (
+                Dtype::F32,
+                Shape(vec![
+                    self.config.num_hidden_layers,
+                    1,
+                    self.config.num_key_value_heads,
+                    0,
+                    self.config.get_head_dim(),
+                ]),
+            ),
+            (
+                Dtype::F32,
+                Shape(vec![
+                    self.num_linear_layers,
+                    1,
+                    self.config.hidden_size,
+                    self.config.conv_l_cache,
+                ]),
+            ),
+        ]
+    }
+}
+
+// Select values from `x` where `mask` is 1, otherwise from `y`.
+fn cond(builder: &Builder, mask: Var, x: Var, y: Var) -> Var {
+    let sh = shape(builder, x.clone());
+    let x_dtype = dtype(builder, x.clone());
+    let mask = broadcast(builder, sh.clone(), mask);
+    let mask = cast(builder, mask, x_dtype);
+    let one = constant(builder, 1.0, &sh);
+    x * mask.clone() + y * (one - mask)
 }
 
 impl Lfm2Model {
     pub fn new(config_json: &serde_json::Value, max_sequence_length: usize) -> crate::Result<Self> {
         let config: Lfm2Config = serde_json::from_value(config_json.clone())?;
+        assert!(config.conv_l_cache > 0, "lfm2 conv_l_cache must be > 0");
         let mut layer_to_cache_id = Vec::with_capacity(config.num_hidden_layers);
+        let mut layer_to_linear_id = Vec::with_capacity(config.num_hidden_layers);
         let mut next_cache_id = 0;
+        let mut next_linear_id = 0;
         for layer_id in 0..config.num_hidden_layers {
             if config.is_full_attention_layer(layer_id) {
                 layer_to_cache_id.push(Some(next_cache_id));
+                layer_to_linear_id.push(None);
                 next_cache_id += 1;
             } else {
                 layer_to_cache_id.push(None);
+                layer_to_linear_id.push(Some(next_linear_id));
+                next_linear_id += 1;
             }
         }
 
         Ok(Self {
             config,
             layer_to_cache_id,
+            layer_to_linear_id,
+            num_linear_layers: next_linear_id,
             max_sequence_length,
         })
     }
@@ -201,21 +255,8 @@ impl Lfm2Model {
         linear_no_bias(builder, dim, dim, p.extend(["out_proj"]).unwrap(), attn)
     }
 
-    fn depthwise_conv1d(&self, builder: &Builder, p: &Path, x: Var) -> Var {
-        let [b, h, s] = unpack::<3>(builder, shape(builder, x.clone()));
+    fn depthwise_conv1d(&self, builder: &Builder, p: &Path, x_padded: Var, s: Var) -> Var {
         let k = self.config.conv_l_cache;
-        if k == 0 {
-            return x;
-        }
-
-        // Equivalent to Conv1d(..., groups=hidden, kernel_size=k, padding=k-1)[..., :seqlen]
-        let x_padded = if k > 1 {
-            let pad_shape = shape!(builder, b, h, (k - 1).to_nat(builder));
-            let pad = constant(builder, 0.0, &pad_shape);
-            concat(builder, 2, pad, x)
-        } else {
-            x
-        };
 
         let conv_weight = param(builder, &p.extend(["conv", "weight"]).unwrap());
         let conv_weight = squeeze::<3, 2>(builder, 1, conv_weight);
@@ -248,8 +289,9 @@ impl Lfm2Model {
     fn short_conv(
         &self,
         builder: &Builder,
-        _layer_id: usize,
-        _cache: &mut Cache,
+        layer_id: usize,
+        cache: &mut Cache,
+        pos: Var,
         p: Path,
         x: Var,
     ) -> Var {
@@ -260,8 +302,8 @@ impl Lfm2Model {
             p.extend(["in_proj"]).unwrap(),
             x,
         );
-
         let bcx = transpose(builder, 1, 2, in_proj);
+
         let bcx = chunk(builder, 1, 3, self.config.hidden_size, bcx);
         let b = bcx[0].clone();
         let c = bcx[1].clone();
@@ -269,8 +311,104 @@ impl Lfm2Model {
 
         let bx = b * x;
 
-        // TODO: store/update this across generation passes for correctness when running with KV cache
-        let conv_out = self.depthwise_conv1d(builder, &p, bx);
+        let [batch_size, hidden_dim, s] = unpack::<3>(builder, shape(builder, bx.clone()));
+        let cache_len = self.config.conv_l_cache;
+        let linear_layer_id =
+            self.layer_to_linear_id[layer_id].expect("short-conv layer missing linear state index");
+        let conv_state = cache
+            .linear_state
+            .as_ref()
+            .expect("lfm2 short_conv requires linear state")[linear_layer_id]
+            .clone();
+
+        // HF prefill:
+        // `conv_out = self.conv(Bx)[..., :seqlen]`
+        let zeros_prefill_conv = constant(
+            builder,
+            0.0,
+            &shape!(builder, batch_size, hidden_dim, cache_len - 1),
+        );
+        let x_padded_prefill_conv = concat(builder, 2, zeros_prefill_conv, bx.clone());
+        let conv_out_prefill = self.depthwise_conv1d(builder, &p, x_padded_prefill_conv, s.clone());
+        // HF prefill:
+        // `conv_state = nn.functional.pad(Bx, (self.L_cache - Bx.shape[-1], 0))`
+        let zeros_prefill_state = constant(
+            builder,
+            0.0,
+            &shape!(builder, batch_size, hidden_dim, cache_len),
+        );
+        let x_padded_prefill_state = concat(builder, 2, zeros_prefill_state, bx.clone());
+        let out_linear_state_prefill =
+            slice(builder, 2, s.clone(), cache_len, x_padded_prefill_state);
+        // HF prefill cache write:
+        // `past_key_values.conv_cache[self.layer_idx].copy_(conv_state)`
+        // where `conv_state` is exactly the padded/truncated `Bx`.
+
+        // HF decode:
+        // `conv_state = conv_state.roll(shifts=-1, dims=-1)`
+        let rolled_state = {
+            let tail = slice(builder, 2, 1, cache_len - 1, conv_state.clone());
+            let head = slice(builder, 2, 0, 1, conv_state);
+            concat(builder, 2, tail, head)
+        };
+
+        // HF: `cache_position = cache_position.clamp(0, self.L_cache - 1)`
+        let sh_pos = shape(builder, nat_to_u32(builder, pos.clone()));
+        let pos_u32 = nat_to_u32(builder, pos.clone());
+        let zero_pos = constant(builder, 0u32, &sh_pos);
+        let pos_f32 = cast(builder, pos_u32, Dtype::F32);
+        let pos_f32 = clamp(builder, pos_f32, 0.0, (cache_len - 1) as f32);
+        let u32_dtype = dtype_constant(builder, Dtype::U32);
+        let pos_clamped_u32 = cast(builder, pos_f32, u32_dtype);
+
+        // HF equivalent of indexing at `cache_position`: build one-hot over cache axis.
+        // `conv_state[:, :, cache_position] = Bx`
+        let sh_k = shape!(builder, cache_len.to_nat(builder));
+        let positions = arange(builder, cache_len);
+        let pos_vec = broadcast(builder, sh_k, pos_clamped_u32);
+        let one_hot = eq(builder, positions, pos_vec);
+
+        let sh_state = shape(builder, rolled_state.clone());
+
+        // HF decode writes a single-token `Bx` into the selected cache slot.
+        let bx_decode = slice(builder, 2, 0, 1, bx);
+        let bx_decode = broadcast(builder, sh_state, bx_decode);
+        let out_linear_state_decode = cond(builder, one_hot, bx_decode, rolled_state);
+
+        // HF decode:
+        // `conv_out = torch.sum(conv_state * self.conv.weight[:, 0, :], dim=-1).unsqueeze(-1)`
+        // Build a padded decode input with output length `s` so both branches have identical shape.
+        let zeros_decode_tail = constant(builder, 0.0, &shape!(builder, batch_size, hidden_dim, s));
+        let x_padded_decode = concat(
+            builder,
+            2,
+            out_linear_state_decode.clone(),
+            zeros_decode_tail,
+        );
+        let conv_out_decode = self.depthwise_conv1d(builder, &p, x_padded_decode, s);
+
+        // HF branch condition: `if cache_position[0] > 0: ... else: ...`
+        let is_decode = gt(builder, nat_to_u32(builder, pos), zero_pos);
+        let conv_out = cond(
+            builder,
+            is_decode.clone(),
+            conv_out_decode,
+            conv_out_prefill,
+        );
+        let out_linear_state = cond(
+            builder,
+            is_decode,
+            out_linear_state_decode,
+            out_linear_state_prefill,
+        );
+
+        cache
+            .linear_state
+            .as_mut()
+            .expect("lfm2 short_conv requires mutable linear state")[linear_layer_id] =
+            out_linear_state;
+
+        // HF: `y = C * conv_out; y = y.transpose(-1, -2).contiguous(); y = self.out_proj(y)`
         let y = c * conv_out;
         let y = transpose(builder, 1, 2, y);
 
@@ -349,7 +487,14 @@ impl Lfm2Model {
                 x,
             )
         } else {
-            self.short_conv(builder, layer_id, cache, p.extend(["conv"]).unwrap(), x)
+            self.short_conv(
+                builder,
+                layer_id,
+                cache,
+                pos,
+                p.extend(["conv"]).unwrap(),
+                x,
+            )
         };
 
         let x = res + x;
@@ -371,7 +516,7 @@ impl DynModule for Lfm2Model {
     }
 
     fn def(&self, builder: &Builder, args: Vec<Var>) -> Vec<Var> {
-        let [x, in_k, in_v]: [Var; 3] = args.try_into().expect("expected 3 inputs");
+        let [x, in_k, in_v, in_conv]: [Var; 4] = args.try_into().expect("expected 4 inputs");
         let root = self.path();
 
         let mut cache = Cache::init(
@@ -380,6 +525,16 @@ impl DynModule for Lfm2Model {
             self.max_sequence_length,
             in_k.clone(),
             in_v,
+        );
+
+        // initialize linear state
+        cache.linear_state = Some(
+            (0..self.num_linear_layers)
+                .map(|layer_id| {
+                    let layer = slice(builder, 0, layer_id, 1, in_conv.clone());
+                    squeeze::<4, 3>(builder, 0, layer)
+                })
+                .collect(),
         );
         let [_, _, _, pos, _] = unpack::<5>(builder, shape(builder, in_k));
 
@@ -420,10 +575,45 @@ impl DynModule for Lfm2Model {
 
         x = argmax(builder, x);
         let (out_k, out_v) = cache.get_kv_cache(builder);
-        vec![x, out_k, out_v]
+        let out_conv = {
+            let states = cache
+                .linear_state
+                .as_ref()
+                .expect("lfm2 cache missing output linear state");
+            let mut iter = states.iter();
+            let first = iter
+                .next()
+                .expect("lfm2 cache linear state missing")
+                .clone();
+            let mut out = unsqueeze::<3, 4>(builder, 0, first);
+            for state in iter {
+                let state = unsqueeze::<3, 4>(builder, 0, state.clone());
+                out = concat(builder, 0, out, state);
+            }
+            out
+        };
+        vec![x, out_k, out_v, out_conv]
     }
 
     fn ty(&self) -> (Vec<Type>, Vec<Type>) {
-        llm_type(&self.config)
+        use catgrad::typecheck::*;
+
+        let (mut source, mut target) = llm_type(&self.config);
+        let batch_size = NatExpr::Var(0);
+        let num_linear_layers = NatExpr::Constant(self.num_linear_layers);
+        let hidden_size = NatExpr::Constant(self.config.hidden_size);
+        let conv_l_cache = NatExpr::Constant(self.config.conv_l_cache);
+        let t_conv = Type::Tensor(TypeExpr::NdArrayType(NdArrayType {
+            dtype: DtypeExpr::Constant(Dtype::F32),
+            shape: ShapeExpr::Shape(vec![
+                num_linear_layers,
+                batch_size,
+                hidden_size,
+                conv_l_cache,
+            ]),
+        }));
+        source.push(t_conv.clone());
+        target.push(t_conv);
+        (source, target)
     }
 }
