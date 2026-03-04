@@ -4,8 +4,8 @@ use crate::prelude::{Builder, Var};
 
 // re-export lang ops
 pub use ops::{
-    arange, argmax, broadcast, cast, concat, cos, dtype, dtype_constant, floor, gt, index, log, lt,
-    matmul, max, nat_to_u32, pack, param, pow, probe, reshape, shape, sin, slice, sum, topk,
+    arange, argmax, broadcast, cast, concat, cos, dtype, dtype_constant, eq, floor, gt, index, log,
+    lt, matmul, max, nat, nat_to_u32, pack, param, pow, probe, reshape, shape, sin, slice, sum, topk,
     transpose, unpack,
 };
 
