@@ -263,9 +263,19 @@ pub fn rmsnorm_raw<const N: usize>(builder: &Builder, eps: f32, x: Var) -> Var {
 pub fn rmsnorm<const N: usize>(builder: &Builder, eps: f32, p: Path, x: Var) -> Var {
     let gamma = param(builder, &p.extend(["weight"]).unwrap());
     let lr = rmsnorm_raw::<N>(builder, eps, x);
-    let lr_shape = shape(builder, lr.clone());
-    let gamma = broadcast(builder, lr_shape, gamma);
+    let sh = shape(builder, lr.clone());
+    let gamma = broadcast(builder, sh, gamma);
     lr * gamma
+}
+
+// A variant of RMSNorm used by Gemma 3 and Qwen 3.5
+pub fn rmsnorm_gemma<const N: usize>(builder: &Builder, eps: f32, p: Path, x: Var) -> Var {
+    let gamma = param(builder, &p.extend(["weight"]).unwrap());
+    let lr = rmsnorm_raw::<N>(builder, eps, x);
+    let sh = shape(builder, lr.clone());
+    let one = constant(builder, 1.0, &sh);
+    let gamma = broadcast(builder, sh, gamma);
+    lr * (gamma + one)
 }
 
 pub fn repeat_kv(builder: &Builder, rep: usize, x: Var) -> Var {

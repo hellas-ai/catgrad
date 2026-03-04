@@ -34,7 +34,7 @@ for model in "${MODELS[@]}"; do
     
     echo "Running for $model -> $OUTPUT_DIR/$filename"
    
-    ./target/release/examples/llama -m "$model" -p 'Category theory is' -s 40 --raw -k > "$OUTPUT_DIR/$filename" 2>/dev/null
+    ./target/release/examples/llama -m "$model" -p 'Category theory is' -s 40 --raw -k -t > "$OUTPUT_DIR/$filename" 2>/dev/null
 done
 
 echo "Comparing $OUTPUT_DIR with $REFERENCE_DIR..."
