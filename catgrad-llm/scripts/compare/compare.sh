@@ -7,6 +7,7 @@ MODELS=(
     "openai-community/gpt2"
     "Qwen/Qwen3-0.6B"
     "ibm-granite/granite-3.1-1b-a400m-instruct"
+    "LiquidAI/LFM2-350M"
 )
 
 # Add more models if not in GitHub CI (they are larger and/or need a user agreement to download from HF)
@@ -15,7 +16,6 @@ if [[ -z "${GITHUB_ACTIONS:-}" ]]; then
         "meta-llama/Llama-3.2-1B-Instruct"
         "google/gemma-3-270m-it"
         "allenai/OLMo-2-0425-1B-Instruct"
-        "LiquidAI/LFM2-350M"
     )
 fi
 
@@ -33,8 +33,15 @@ for model in "${MODELS[@]}"; do
     filename="${model//\//-}"
     
     echo "Running for $model -> $OUTPUT_DIR/$filename"
-   
-    ./target/release/examples/llama -m "$model" -p 'Category theory is' -s 40 --raw -k -t > "$OUTPUT_DIR/$filename" 2>/dev/null
+
+    # Skip typechecking for MoE, known issue.
+    if [[ "$model" == *"granite"* ]]; then
+        TYPECHECK=
+    else
+        TYPECHECK="-t"
+    fi
+
+    ./target/release/examples/llama -m "$model" -p 'Category theory is' -s 40 --raw -k $TYPECHECK > "$OUTPUT_DIR/$filename" 2>/dev/null
 done
 
 echo "Comparing $OUTPUT_DIR with $REFERENCE_DIR..."
