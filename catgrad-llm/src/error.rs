@@ -33,6 +33,9 @@ pub enum LLMError {
     #[error("Template rendering error: {0}")]
     TemplateError(#[from] minijinja::Error),
 
+    #[error("Unsupported template feature: {0}")]
+    UnsupportedTemplateFeature(String),
+
     #[error("Unsupported wire-format conversion: {0}")]
     UnsupportedWireConversion(String),
 }
