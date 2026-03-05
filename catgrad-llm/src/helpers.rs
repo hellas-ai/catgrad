@@ -16,10 +16,12 @@ pub fn llm_type(config: &dyn LLMConfig) -> (Vec<Type>, Vec<Type>) {
         shape: ShapeExpr::Shape(vec![batch_size.clone(), seq_len.clone()]),
     }));
 
-    // Output shape B×1
+    let vocab_size = NatExpr::Constant(config.vocab_size());
+
+    // Output shape B×S×V
     let t_y = Type::Tensor(TypeExpr::NdArrayType(NdArrayType {
-        dtype: DtypeExpr::Constant(Dtype::U32),
-        shape: ShapeExpr::Shape(vec![batch_size.clone(), NatExpr::Constant(1)]),
+        dtype: DtypeExpr::Constant(Dtype::F32),
+        shape: ShapeExpr::Shape(vec![batch_size.clone(), seq_len.clone(), vocab_size]),
     }));
 
     let num_layers = NatExpr::Constant(config.num_hidden_layers());

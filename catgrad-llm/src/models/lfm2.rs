@@ -67,6 +67,10 @@ impl LLMConfig for Lfm2Config {
         self.hidden_size / self.num_attention_heads
     }
 
+    fn vocab_size(&self) -> usize {
+        self.vocab_size
+    }
+
     fn eos_token_id(&self) -> Option<EosTokenId> {
         self.eos_token_id.clone()
     }
@@ -568,8 +572,6 @@ impl DynModule for Lfm2Model {
             root.extend(["model", "embed_tokens"]).unwrap(),
             x,
         );
-
-        x = argmax(builder, x);
         let (out_k, out_v) = cache.get_kv_cache(builder);
         let out_conv = {
             let states = cache
