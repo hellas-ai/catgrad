@@ -36,7 +36,7 @@ fn default_layer_norm_eps() -> f32 {
 pub struct SiglipVisionBackbone {}
 
 impl SiglipVisionBackbone {
-    fn attention(&self, builder: &Builder, config: &VisionConfig, p: Path, x: Var) -> Var {
+    fn attention(builder: &Builder, config: &VisionConfig, p: Path, x: Var) -> Var {
         let dim = config.hidden_size;
         let num_heads = config.num_attention_heads;
         let head_dim = config.hidden_size / config.num_attention_heads;
@@ -99,7 +99,7 @@ impl SiglipVisionBackbone {
             p.extend(["layer_norm1"]).unwrap(),
             x,
         );
-        let x = self.attention(builder, config, p.extend(["self_attn"]).unwrap(), x);
+        let x = Self::attention(builder, config, p.extend(["self_attn"]).unwrap(), x);
         let x = x + res;
 
         let res = x.clone();
@@ -113,7 +113,7 @@ impl SiglipVisionBackbone {
         x + res
     }
 
-    fn vision_embeddings(&self, builder: &Builder, config: &VisionConfig, p: Path, x: Var) -> Var {
+    fn vision_embeddings(builder: &Builder, config: &VisionConfig, p: Path, x: Var) -> Var {
         let patch_size = config.patch_size;
         let image_size = config.image_size;
         let num_patches = image_size / patch_size;
@@ -171,7 +171,7 @@ impl SiglipVisionBackbone {
     }
 
     pub fn vision_model(&self, builder: &Builder, config: &VisionConfig, p: Path, x: Var) -> Var {
-        let mut x = self.vision_embeddings(builder, config, p.extend(["embeddings"]).unwrap(), x);
+        let mut x = Self::vision_embeddings(builder, config, p.extend(["embeddings"]).unwrap(), x);
         for i in 0..config.num_hidden_layers {
             x = self.encoder_layer(
                 builder,

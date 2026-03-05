@@ -250,9 +250,7 @@ impl DynModule for LlamaModel {
         let [x, in_k, in_v]: [Var; 3] = args.try_into().expect("expected 3 inputs");
         let mut root = self.path();
         if !self.root.is_empty() {
-            root = root
-                .extend(self.root.split('.').collect::<Vec<&str>>())
-                .unwrap();
+            root = root.extend(self.root.split('.')).unwrap();
         }
 
         let mut cache = Cache::init(
@@ -264,11 +262,7 @@ impl DynModule for LlamaModel {
         );
         let [_, _, _, pos, _] = unpack::<5>(builder, shape(builder, in_k));
 
-        let mut x = embeddings(
-            builder,
-            root.extend(vec!["model", "embed_tokens"]).unwrap(),
-            x,
-        );
+        let mut x = embeddings(builder, root.extend(["model", "embed_tokens"]).unwrap(), x);
 
         let [_b, s, _] = unpack::<3>(builder, shape(builder, x.clone()));
         let attention_mask = causal_mask(builder, s, pos.clone());

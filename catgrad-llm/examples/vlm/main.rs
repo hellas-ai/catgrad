@@ -130,12 +130,12 @@ impl VLMModel {
     ) -> Vec<Var> {
         let text1 = self.language_model.scaled_embeddings(
             builder,
-            p.extend(vec!["embed_tokens"]).unwrap(),
+            p.extend(["embed_tokens"]).unwrap(),
             text1,
         );
         let text2 = self.language_model.scaled_embeddings(
             builder,
-            p.extend(vec!["embed_tokens"]).unwrap(),
+            p.extend(["embed_tokens"]).unwrap(),
             text2,
         );
 

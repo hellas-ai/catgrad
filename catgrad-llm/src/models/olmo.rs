@@ -264,11 +264,7 @@ impl DynModule for OlmoModel {
         );
         let [_, _, _, pos, _] = unpack::<5>(builder, shape(builder, in_k));
 
-        let mut x = embeddings(
-            builder,
-            root.extend(vec!["model", "embed_tokens"]).unwrap(),
-            x,
-        );
+        let mut x = embeddings(builder, root.extend(["model", "embed_tokens"]).unwrap(), x);
         let [_b, s, _] = unpack::<3>(builder, shape(builder, x.clone()));
         let attention_mask = causal_mask(builder, s, pos.clone());
 

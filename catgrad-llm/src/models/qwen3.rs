@@ -122,15 +122,15 @@ impl Qwen3Model {
 
         let gate_all = param(
             builder,
-            &p.extend(vec!["experts", "gate_proj", "weight"]).unwrap(),
+            &p.extend(["experts", "gate_proj", "weight"]).unwrap(),
         );
         let up_all = param(
             builder,
-            &p.extend(vec!["experts", "up_proj", "weight"]).unwrap(),
+            &p.extend(["experts", "up_proj", "weight"]).unwrap(),
         );
         let down_all = param(
             builder,
-            &p.extend(vec!["experts", "down_proj", "weight"]).unwrap(),
+            &p.extend(["experts", "down_proj", "weight"]).unwrap(),
         );
 
         let routed = linear_no_bias(
@@ -383,11 +383,7 @@ impl DynModule for Qwen3Model {
         );
         let [_, _, _, cache_len, _] = unpack::<5>(builder, shape(builder, in_k));
 
-        let mut x = embeddings(
-            builder,
-            root.extend(vec!["model", "embed_tokens"]).unwrap(),
-            x,
-        );
+        let mut x = embeddings(builder, root.extend(["model", "embed_tokens"]).unwrap(), x);
         let [_b, s, _] = unpack::<3>(builder, shape(builder, x.clone()));
         let attention_mask = causal_mask(builder, s, cache_len.clone());
 

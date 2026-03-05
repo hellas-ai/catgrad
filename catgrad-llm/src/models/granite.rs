@@ -135,8 +135,8 @@ impl GraniteModel {
     fn moe(&self, builder: &Builder, p: Path, x: Var) -> Var {
         let [batch_size, seq_len, hidden_size] = unpack::<3>(builder, shape(builder, x.clone()));
 
-        let moe_input = param(builder, &p.extend(vec!["input_linear", "weight"]).unwrap());
-        let moe_output = param(builder, &p.extend(vec!["output_linear", "weight"]).unwrap());
+        let moe_input = param(builder, &p.extend(["input_linear", "weight"]).unwrap());
+        let moe_output = param(builder, &p.extend(["output_linear", "weight"]).unwrap());
         let routed = linear_no_bias(
             builder,
             self.config.hidden_size,
@@ -337,11 +337,7 @@ impl DynModule for GraniteModel {
         );
         let [_, _, _, pos, _] = unpack::<5>(builder, shape(builder, in_k));
 
-        let emb = embeddings(
-            builder,
-            root.extend(vec!["model", "embed_tokens"]).unwrap(),
-            x,
-        );
+        let emb = embeddings(builder, root.extend(["model", "embed_tokens"]).unwrap(), x);
 
         let sh = shape(builder, emb.clone());
         let mul = constant(builder, self.config.embedding_multiplier, &sh);

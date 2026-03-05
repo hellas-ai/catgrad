@@ -14,7 +14,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Get stdlib environment and extend with parameter declarations
     let mut env = stdlib();
-    env.definitions.extend(vec![(model.path(), typed_term)]);
+    env.definitions.extend([(model.path(), typed_term)]);
     env.declarations
         .extend(to_load_ops(model.path(), parameters.keys()));
 
