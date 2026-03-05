@@ -14,8 +14,12 @@ pub enum LLMError {
     #[error("Invalid model config: {0}")]
     InvalidModelConfig(String),
 
-    #[error("Failed to parse JSON: {0}")]
-    JsonError(#[from] serde_json::Error),
+    #[error("Failed to decode JSON at path `{path}`: {source}")]
+    JsonError {
+        path: String,
+        #[source]
+        source: serde_json::Error,
+    },
 
     #[error("Failed to deserialize safetensors: {0}")]
     SafetensorsError(#[from] safetensors::SafeTensorError),
@@ -28,11 +32,32 @@ pub enum LLMError {
 
     #[error("Template rendering error: {0}")]
     TemplateError(#[from] minijinja::Error),
+
+    #[error("Unsupported wire-format conversion: {0}")]
+    UnsupportedWireConversion(String),
 }
 
 // iirc we didn't want to expose the `tokenizers` crate's error type directly (why?)
 impl From<tokenizers::Error> for LLMError {
     fn from(err: tokenizers::Error) -> Self {
         LLMError::TokenizerError(err.to_string())
+    }
+}
+
+impl From<serde_path_to_error::Error<serde_json::Error>> for LLMError {
+    fn from(err: serde_path_to_error::Error<serde_json::Error>) -> Self {
+        LLMError::JsonError {
+            path: err.path().to_string(),
+            source: err.into_inner(),
+        }
+    }
+}
+
+impl From<serde_json::Error> for LLMError {
+    fn from(err: serde_json::Error) -> Self {
+        LLMError::JsonError {
+            path: "$".to_string(),
+            source: err,
+        }
     }
 }

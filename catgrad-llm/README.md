@@ -8,7 +8,7 @@ The intent is to have three main self-contained modules:
 2. `run` (WIP) is for *running* LLM graphs given a 'package' of additional information like weights and tokenizers.
     - A stateful interface managing interpreters & KV caches etc.
     - Manages packaging configuration & weights from e.g. huggingface
-3. `serve` are abstract interfaces for *serving* LLMs as token iterators
+3. `types` are abstract serving interfaces plus API wire-format types
 
 This is not reflected by the current state of the code.
 What's missing:
@@ -19,4 +19,3 @@ What's missing:
 Future changes: split `run` into generic "tensor runtime" and "llm code" where:
     - tensor runtime: (run graph with arrays only; state/cache aware, tokenization-*un*aware, runnable on remote host)
     - LLM code: tokenization, chat templates, etc.
-

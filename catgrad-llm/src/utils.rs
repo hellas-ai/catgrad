@@ -3,7 +3,9 @@ use catgrad_legacy::backend::cpu::ndarray::{NdArray, TaggedNdArray};
 use catgrad_legacy::core::Shape;
 use hf_hub::{Repo, RepoType, api::sync::ApiBuilder};
 use rayon::prelude::*;
+use serde::de::DeserializeOwned;
 use std::collections::{HashMap, HashSet};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use tokenizers::tokenizer::Tokenizer;
 
@@ -11,6 +13,37 @@ use crate::config::LLMConfig;
 use crate::helpers::{LLMModel, WeightPostProcess};
 use crate::models;
 use crate::{LLMError, Result};
+
+fn build_hf_api() -> Result<hf_hub::api::sync::Api> {
+    let mut builder = ApiBuilder::from_env();
+    let env_token = std::env::var("HF_TOKEN")
+        .ok()
+        .or_else(|| std::env::var("HUGGING_FACE_HUB_TOKEN").ok())
+        .map(|token| token.trim().to_string())
+        .filter(|token| !token.is_empty());
+    if let Some(token) = env_token {
+        builder = builder.with_token(Some(token));
+    }
+    Ok(builder.build()?)
+}
+
+/// Deserialize a type from JSON while preserving the failing field path in errors.
+pub fn from_json_str<T: DeserializeOwned>(json: &str) -> Result<T> {
+    let mut deserializer = serde_json::Deserializer::from_str(json);
+    serde_path_to_error::deserialize(&mut deserializer).map_err(LLMError::from)
+}
+
+/// Deserialize a type from JSON bytes while preserving the failing field path in errors.
+pub fn from_json_slice<T: DeserializeOwned>(json: &[u8]) -> Result<T> {
+    let mut deserializer = serde_json::Deserializer::from_slice(json);
+    serde_path_to_error::deserialize(&mut deserializer).map_err(LLMError::from)
+}
+
+/// Deserialize a type from a JSON reader while preserving the failing field path in errors.
+pub fn from_json_reader<T: DeserializeOwned, R: Read>(reader: R) -> Result<T> {
+    let mut deserializer = serde_json::Deserializer::from_reader(reader);
+    serde_path_to_error::deserialize(&mut deserializer).map_err(LLMError::from)
+}
 
 pub fn read_safetensors_file(
     path: impl AsRef<Path>,
@@ -118,7 +151,7 @@ pub fn get_model_files(
     model: &str,
     revision: &str,
 ) -> Result<(Vec<PathBuf>, PathBuf, PathBuf, PathBuf)> {
-    let api = ApiBuilder::from_env().build()?;
+    let api = build_hf_api()?;
     let repo = api.repo(Repo::with_revision(
         model.to_string(),
         RepoType::Model,
@@ -128,7 +161,7 @@ pub fn get_model_files(
     // Get the model.safetensor file(s)
     let m = if let Ok(index) = repo.get("model.safetensors.index.json") {
         let index = std::fs::File::open(index)?;
-        let json: serde_json::Value = serde_json::from_reader(&index)?;
+        let json: serde_json::Value = from_json_reader(index)?;
 
         let mut weight_files = HashSet::new();
         if let Some(weight_map) = json
@@ -160,7 +193,7 @@ pub fn get_model_files(
 
 // Try getting the model's chat template from the repository
 pub fn get_model_chat_template(model: &str, revision: &str) -> Result<String> {
-    let api = ApiBuilder::from_env().build()?;
+    let api = build_hf_api()?;
     let repo = api.repo(Repo::with_revision(
         model.to_string(),
         RepoType::Model,
@@ -172,7 +205,7 @@ pub fn get_model_chat_template(model: &str, revision: &str) -> Result<String> {
     } else {
         let tc_path = repo.get("tokenizer_config.json")?;
         let tc = std::fs::read_to_string(tc_path)?;
-        let tokenizer_config: serde_json::Value = serde_json::from_str(&tc)?;
+        let tokenizer_config: serde_json::Value = from_json_str(&tc)?;
         Ok(tokenizer_config
             .get("chat_template")
             .and_then(|v| v.as_str())
@@ -487,8 +520,7 @@ pub fn load_model<B: interpreter::Backend>(
     usize,
 )> {
     let (model_paths, config_path, tokenizer_path, _) = get_model_files(model_name, revision)?;
-    let config_json: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(config_path)?)?;
+    let config_json: serde_json::Value = from_json_str(&std::fs::read_to_string(config_path)?)?;
     let tokenizer = Tokenizer::from_file(tokenizer_path)
         .map_err(|err| LLMError::TokenizerError(format!("tokenizer load error {:?}", err)))?;
 

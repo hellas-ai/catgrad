@@ -14,6 +14,7 @@ catgrad = {version = "0.2.1", path = "../catgrad"}
 open-hypergraphs = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+schemars = { workspace = true }
 tokenizers = { workspace = true }
 
 # TODO: remove these?
@@ -28,6 +29,9 @@ thiserror = "2.0"
 rayon = "1.11.0"
 image = "0.25.6"
 chrono = "0.4.41"
+typed-builder = "0.23"
+serde_with = { version = "3.17", default-features = false, features = ["macros"] }
+serde_path_to_error = "0.1"
 
 
 [dev-dependencies]
@@ -39,3 +43,4 @@ env_logger = "0.11"
 test-log = "0.2.17"
 catgrad = {path = "../catgrad", features=["ndarray-backend", "candle-backend", "svg", "serde"]}
 anyhow = "1.0.99"
+tiny_http = "0.12"

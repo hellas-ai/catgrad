@@ -2,8 +2,10 @@
 use crate::Result;
 use crate::legacy::models::utils::{Cache, Config, ModelBuilder, get_model};
 use crate::legacy::nn::layers::{argmax, cast, reshape};
-use crate::serve;
-use crate::utils::{get_model_chat_template, get_model_files, read_safetensors_multiple};
+use crate::types;
+use crate::utils::{
+    from_json_str, get_model_chat_template, get_model_files, read_safetensors_multiple,
+};
 use catgrad_legacy::{
     backend::cpu::{
         eval::{Builder, EvalState},
@@ -11,7 +13,7 @@ use catgrad_legacy::{
     },
     core::{Dtype, NdArrayType, Shape, Var},
 };
-use minijinja::{Environment, context};
+use minijinja::{Environment, Value, context};
 use minijinja_contrib::pycompat::unknown_method_callback;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -29,7 +31,7 @@ pub struct ModelLoader {
 
 fn read_to_value<V: for<'a> serde::Deserialize<'a>>(path: impl AsRef<Path>) -> Result<V> {
     let config_str = &std::fs::read_to_string(path)?;
-    Ok(serde_json::from_str(config_str)?)
+    from_json_str(config_str)
 }
 
 impl ModelLoader {
@@ -69,21 +71,179 @@ impl ModelTokenizer {
         })
     }
 
-    fn render_context(&self, messages: &[serve::Message]) -> Result<String> {
+    fn render_context(
+        &self,
+        messages: &[types::Message],
+        tools: Option<&[types::ToolSpec]>,
+    ) -> Result<String> {
         let mut env = Environment::new();
         env.set_unknown_method_callback(unknown_method_callback);
         env.add_template("chat", &self.chat_template)?;
         let tmpl = env.get_template("chat")?;
-        let message_context: Vec<_> = messages
-            .iter()
-            .map(|msg| context!(role => msg.role, content => msg.content))
-            .collect();
+        let message_context: Vec<_> = messages.iter().map(message_to_template_context).collect();
         Ok(tmpl.render(context!(
             messages => message_context,
+            tools => tools,
             add_generation_prompt => true,
             enable_thinking => false
         ))?)
     }
+}
+
+const OPENAI_TEMPLATE_MESSAGE_FIELDS: &[&str] = &[
+    "role",
+    "content",
+    "name",
+    "tool_call_id",
+    "tool_calls",
+    "function_call",
+    "refusal",
+    "audio",
+    "content_parts",
+];
+const ANTHROPIC_TEMPLATE_MESSAGE_FIELDS: &[&str] = &["role", "content", "content_blocks"];
+
+// Keep a single message as the source of truth and derive template-facing fields lazily.
+fn message_to_template_context(message: &types::Message) -> Value {
+    Value::make_object_map(
+        message.clone(),
+        enumerate_template_message_fields,
+        lookup_template_message_field,
+    )
+}
+
+fn enumerate_template_message_fields(
+    message: &types::Message,
+) -> Box<dyn Iterator<Item = Value> + Send + Sync + '_> {
+    let fields = match message {
+        types::Message::OpenAI(_) => OPENAI_TEMPLATE_MESSAGE_FIELDS,
+        types::Message::Anthropic(_) => ANTHROPIC_TEMPLATE_MESSAGE_FIELDS,
+    };
+    Box::new(fields.iter().copied().map(Value::from))
+}
+
+fn lookup_template_message_field(message: &types::Message, key: &Value) -> Option<Value> {
+    let key = key.as_str()?;
+    match message {
+        types::Message::OpenAI(msg) => lookup_openai_message_field(msg, key),
+        types::Message::Anthropic(msg) => lookup_anthropic_message_field(msg, key),
+    }
+}
+
+fn lookup_openai_message_field(msg: &types::openai::ChatMessage, key: &str) -> Option<Value> {
+    match key {
+        "role" => Some(Value::from(msg.role.clone())),
+        "content" => Some(Value::from(openai_content_to_template_string(
+            msg.content.as_ref(),
+        ))),
+        "name" => msg.name.clone().map(Value::from),
+        "tool_call_id" => msg.tool_call_id.clone().map(Value::from),
+        "tool_calls" => msg.tool_calls.as_ref().map(Value::from_serialize),
+        "function_call" => msg.function_call.as_ref().map(Value::from_serialize),
+        "refusal" => msg.refusal.clone().map(Value::from),
+        "audio" => msg.audio.as_ref().map(Value::from_serialize),
+        "content_parts" => Some(Value::from_serialize(openai_content_to_template_parts(
+            msg.content.as_ref(),
+        ))),
+        _ => None,
+    }
+}
+
+fn lookup_anthropic_message_field(
+    msg: &types::anthropic::AnthropicMessage,
+    key: &str,
+) -> Option<Value> {
+    match key {
+        "role" => Some(Value::from(msg.role.clone())),
+        "content" => Some(Value::from(anthropic_content_to_template_string(
+            &msg.content,
+        ))),
+        "content_blocks" => Some(Value::from_serialize(anthropic_content_to_template_blocks(
+            &msg.content,
+        ))),
+        _ => None,
+    }
+}
+
+// HF chat templates generally expect message.content to be a plain string.
+// Wire-format content can be structured; flatten it to text for template rendering.
+fn openai_content_to_template_string(content: Option<&types::openai::MessageContent>) -> String {
+    match content {
+        None => String::new(),
+        Some(types::openai::MessageContent::Text(text)) => text.clone(),
+        Some(types::openai::MessageContent::Parts(parts)) => parts
+            .iter()
+            .map(|part| match part {
+                types::openai::ContentPart::Text { text } => text.clone(),
+                types::openai::ContentPart::Refusal { refusal } => refusal.clone(),
+                types::openai::ContentPart::ImageUrl { .. }
+                | types::openai::ContentPart::InputAudio { .. }
+                | types::openai::ContentPart::File { .. } => String::new(),
+            })
+            .collect(),
+    }
+}
+
+fn openai_content_to_template_parts(
+    content: Option<&types::openai::MessageContent>,
+) -> Vec<types::openai::ContentPart> {
+    match content {
+        None => Vec::new(),
+        Some(types::openai::MessageContent::Text(text)) => {
+            vec![types::openai::ContentPart::Text { text: text.clone() }]
+        }
+        Some(types::openai::MessageContent::Parts(parts)) => parts.clone(),
+    }
+}
+
+fn anthropic_content_to_template_string(content: &types::anthropic::MessageContent) -> String {
+    match content {
+        types::anthropic::MessageContent::Text(text) => text.clone(),
+        types::anthropic::MessageContent::Blocks(blocks) => {
+            anthropic_blocks_to_template_string(blocks)
+        }
+    }
+}
+
+fn anthropic_content_to_template_blocks(
+    content: &types::anthropic::MessageContent,
+) -> Vec<types::anthropic::ContentBlock> {
+    match content {
+        types::anthropic::MessageContent::Text(text) => {
+            vec![types::anthropic::ContentBlock::Text {
+                text: text.clone(),
+                citations: None,
+                cache_control: None,
+            }]
+        }
+        types::anthropic::MessageContent::Blocks(blocks) => blocks.clone(),
+    }
+}
+
+fn anthropic_blocks_to_template_string(blocks: &[types::anthropic::ContentBlock]) -> String {
+    blocks
+        .iter()
+        .map(|block| match block {
+            types::anthropic::ContentBlock::Text { text, .. } => text.clone(),
+            types::anthropic::ContentBlock::ToolResult { content, .. } => content
+                .as_ref()
+                .map(anthropic_content_to_template_string)
+                .unwrap_or_default(),
+            types::anthropic::ContentBlock::Document { source, .. } => match source {
+                types::anthropic::DocumentSource::Text { text } => text.clone(),
+                types::anthropic::DocumentSource::Content { content } => {
+                    anthropic_blocks_to_template_string(content)
+                }
+                types::anthropic::DocumentSource::Base64 { .. }
+                | types::anthropic::DocumentSource::Url { .. }
+                | types::anthropic::DocumentSource::File { .. } => String::new(),
+            },
+            types::anthropic::ContentBlock::Thinking { thinking, .. } => thinking.clone(),
+            types::anthropic::ContentBlock::Image { .. }
+            | types::anthropic::ContentBlock::ToolUse { .. }
+            | types::anthropic::ContentBlock::RedactedThinking { .. } => String::new(),
+        })
+        .collect()
 }
 
 pub struct ModelRunner {
@@ -291,7 +451,7 @@ fn longest_common_prefix<T: Eq>(x: &[T], y: &[T]) -> usize {
     n
 }
 
-impl serve::LM<i32> for ModelRunner {
+impl types::LM<i32> for ModelRunner {
     fn set_context(&mut self, context: Vec<i32>) {
         let n = longest_common_prefix(&self.context, &context);
         if n < self.context.len() {
@@ -304,7 +464,7 @@ impl serve::LM<i32> for ModelRunner {
     }
 }
 
-impl serve::Tokenizer<i32> for ModelTokenizer {
+impl types::Tokenizer<i32> for ModelTokenizer {
     fn encode(&self, content: String) -> Result<Vec<i32>> {
         let tokens = self.tokenizer.encode(content, true)?;
         Ok(tokens.get_ids().iter().map(|&x| x as i32).collect())
@@ -318,16 +478,25 @@ impl serve::Tokenizer<i32> for ModelTokenizer {
     }
 }
 
-impl serve::ChatTokenizer<i32> for ModelTokenizer {
-    fn encode_messages(&self, messages: Vec<serve::Message>) -> Result<Vec<i32>> {
+impl types::ChatTokenizer<i32> for ModelTokenizer {
+    fn encode_messages(
+        &self,
+        messages: Vec<types::Message>,
+        tools: Vec<types::ToolSpec>,
+    ) -> Result<Vec<i32>> {
+        let tools = if tools.is_empty() {
+            None
+        } else {
+            Some(tools.as_slice())
+        };
         // initialize context
-        let content = self.render_context(&messages)?;
-        use serve::Tokenizer;
+        let content = self.render_context(&messages, tools)?;
+        use types::Tokenizer;
         self.encode(content)
     }
 }
 
-impl serve::Loader<i32, ModelRunner, ModelTokenizer> for ModelLoader {
+impl types::Loader<i32, ModelRunner, ModelTokenizer> for ModelLoader {
     fn load_runner(&self) -> Result<ModelRunner> {
         ModelRunner::new(
             self.model_paths.clone(),
@@ -338,5 +507,122 @@ impl serve::Loader<i32, ModelRunner, ModelTokenizer> for ModelLoader {
 
     fn load_tokenizer(&self) -> Result<ModelTokenizer> {
         ModelTokenizer::new(self.tokenizer_path.clone(), self.chat_template.clone())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use minijinja::{Environment, context};
+
+    fn render_message_template(message: &types::Message, template: &str) -> String {
+        let mut env = Environment::new();
+        env.add_template("test", template).unwrap();
+        env.get_template("test")
+            .unwrap()
+            .render(context!(message => message_to_template_context(message)))
+            .unwrap()
+    }
+
+    #[test]
+    fn openai_parts_flatten_to_template_text() {
+        let content = types::openai::MessageContent::Parts(vec![
+            types::openai::ContentPart::Text {
+                text: "hello".to_string(),
+            },
+            types::openai::ContentPart::ImageUrl {
+                image_url: types::openai::ImageUrlPart::builder()
+                    .url("https://example.com/img.png".to_string())
+                    .build(),
+            },
+            types::openai::ContentPart::Refusal {
+                refusal: "no".to_string(),
+            },
+        ]);
+        assert_eq!(
+            openai_content_to_template_string(Some(&content)),
+            "hellono".to_string()
+        );
+    }
+
+    #[test]
+    fn anthropic_blocks_flatten_to_template_text() {
+        let content = types::anthropic::MessageContent::Blocks(vec![
+            types::anthropic::ContentBlock::Text {
+                text: "alpha".to_string(),
+                citations: None,
+                cache_control: None,
+            },
+            types::anthropic::ContentBlock::ToolResult {
+                tool_use_id: "toolu_1".to_string(),
+                content: Some(types::anthropic::MessageContent::Text("beta".to_string())),
+                is_error: None,
+                cache_control: None,
+            },
+            types::anthropic::ContentBlock::Document {
+                source: types::anthropic::DocumentSource::Text {
+                    text: "gamma".to_string(),
+                },
+                title: None,
+                context: None,
+                citations: None,
+                cache_control: None,
+            },
+            types::anthropic::ContentBlock::Thinking {
+                thinking: "delta".to_string(),
+                signature: None,
+            },
+        ]);
+        assert_eq!(
+            anthropic_content_to_template_string(&content),
+            "alphabetagammadelta".to_string()
+        );
+    }
+
+    #[test]
+    fn openai_message_context_exposes_normalized_parts() {
+        let message = types::Message::OpenAI(types::openai::ChatMessage::assistant("hello"));
+        let rendered = render_message_template(
+            &message,
+            "{{ message.content }}|{{ message.content_parts|length }}|{{ message.content_parts[0].text }}",
+        );
+
+        assert_eq!(rendered, "hello|1|hello");
+    }
+
+    #[test]
+    fn anthropic_message_context_exposes_structured_blocks_without_breaking_content() {
+        let message = types::Message::Anthropic(types::anthropic::AnthropicMessage {
+            role: "assistant".to_string(),
+            content: types::anthropic::MessageContent::Blocks(vec![
+                types::anthropic::ContentBlock::Text {
+                    text: "alpha".to_string(),
+                    citations: None,
+                    cache_control: None,
+                },
+                types::anthropic::ContentBlock::ToolUse {
+                    id: "toolu_1".to_string(),
+                    name: "lookup".to_string(),
+                    input: types::JsonMap::new(),
+                },
+                types::anthropic::ContentBlock::ToolResult {
+                    tool_use_id: "toolu_1".to_string(),
+                    content: Some(types::anthropic::MessageContent::Text("beta".to_string())),
+                    is_error: None,
+                    cache_control: None,
+                },
+                types::anthropic::ContentBlock::Thinking {
+                    thinking: "delta".to_string(),
+                    signature: None,
+                },
+            ]),
+        });
+
+        let rendered = render_message_template(
+            &message,
+            "{{ message.content }}|{{ message.content_blocks|length }}|{{ message.content_blocks[1].name }}|{{ message.content_blocks[2].tool_use_id }}|{{ message.content_blocks[3].thinking }}",
+        );
+
+        assert_eq!(rendered, "alphabetadelta|4|lookup|toolu_1|delta");
     }
 }

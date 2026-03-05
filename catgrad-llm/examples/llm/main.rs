@@ -13,8 +13,8 @@ use std::rc::Rc;
 use tokenizers::tokenizer::{Result, Tokenizer};
 
 use catgrad_llm::utils::{
-    get_model_chat_template, get_model_files, print_bench_table, read_safetensors_multiple,
-    render_chat_template,
+    from_json_str, get_model_chat_template, get_model_files, print_bench_table,
+    read_safetensors_multiple, render_chat_template,
 };
 
 use catgrad_llm::legacy::models::utils::{Cache, Config, ModelBuilder, get_model};
@@ -310,7 +310,7 @@ pub fn main() -> Result<()> {
     let (model_paths, config_path, tokenizer_path, _) =
         get_model_files(model_name, &args.revision).expect("loading model files");
     let tokenizer = Tokenizer::from_file(tokenizer_path)?;
-    let mut config: Config = serde_json::from_str(&std::fs::read_to_string(config_path)?)?;
+    let mut config: Config = from_json_str(&std::fs::read_to_string(config_path)?)?;
 
     if args.use_fp16 {
         config.dtype = Dtype::F16;

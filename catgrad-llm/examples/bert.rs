@@ -16,7 +16,7 @@ use catgrad_legacy::{
 
 use catgrad_llm::legacy::nn::layers::*;
 
-use catgrad_llm::utils::read_safetensors_file;
+use catgrad_llm::utils::{from_json_slice, read_safetensors_file};
 
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct Config {
@@ -205,7 +205,7 @@ fn get_config(model_path: &str) -> Config {
 
     let config_dir = model_path.parent().unwrap();
     let config_path = config_dir.join("config.json");
-    serde_json::from_slice(&std::fs::read(config_path).unwrap()).unwrap()
+    from_json_slice(&std::fs::read(config_path).unwrap()).unwrap()
 }
 
 pub fn main() -> Result<()> {
