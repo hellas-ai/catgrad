@@ -34,12 +34,7 @@ for model in "${MODELS[@]}"; do
     
     echo "Running for $model -> $OUTPUT_DIR/$filename"
 
-    # Skip typechecking for MoE, known issue.
-    if [[ "$model" == *"granite"* ]]; then
-        TYPECHECK=
-    else
-        TYPECHECK="-t"
-    fi
+    TYPECHECK="-t"
 
     ./target/release/examples/llama -m "$model" -p 'Category theory is' -s 40 --raw -k $TYPECHECK > "$OUTPUT_DIR/$filename" 2>/dev/null
 done
