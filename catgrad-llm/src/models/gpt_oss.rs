@@ -111,6 +111,8 @@ impl GPTOssModel {
     }
 
     fn mlp(&self, builder: &Builder, p: Path, x: Var) -> Var {
+        let [batch_size, seq_len, hidden_size] = unpack::<3>(builder, shape(builder, x.clone()));
+
         let gate_up_proj = param(builder, &p.extend(["experts", "gate_up_proj"]).unwrap());
         let gate_up_proj_bias = param(
             builder,
@@ -128,14 +130,15 @@ impl GPTOssModel {
         );
 
         let (values, indices) = topk(builder, self.config.num_experts_per_tok, routed);
-        let [_, seq_len, _] = unpack::<3>(builder, shape(builder, x.clone()));
-        let sh = shape!(builder, seq_len, self.config.num_experts_per_tok);
-        let mut values = reshape(builder, sh.clone(), values);
+        let num_tokens = batch_size.clone() * seq_len.clone();
+        let sh = shape!(builder, num_tokens, self.config.num_experts_per_tok);
+        let values = reshape(builder, sh.clone(), values);
         let indices = reshape(builder, sh, indices);
-        values = softmax(builder, values);
+        let values = softmax(builder, values);
 
-        let fullx = transpose(builder, 0, 1, x);
-        let mut sumk = constant(builder, 0.0, &shape(builder, fullx.clone()));
+        let fullx_sh = shape!(builder, num_tokens, 1, hidden_size);
+        let fullx = reshape(builder, fullx_sh.clone(), x);
+        let mut sumk = constant(builder, 0.0, &fullx_sh);
 
         for i in 0..self.config.num_experts_per_tok {
             let idx = get(builder, 1, i, indices.clone());
@@ -156,7 +159,8 @@ impl GPTOssModel {
             sumk = sumk + x * val;
         }
 
-        transpose(builder, 0, 1, sumk)
+        let sh = shape!(builder, batch_size, seq_len, hidden_size);
+        reshape(builder, sh, sumk)
     }
 
     fn attention(
@@ -318,11 +322,7 @@ impl DynModule for GPTOssModel {
         );
         let [_, _, _, pos, _] = unpack::<5>(builder, shape(builder, in_k));
 
-        let mut x = embeddings(
-            builder,
-            root.extend(vec!["model", "embed_tokens"]).unwrap(),
-            x,
-        );
+        let mut x = embeddings(builder, root.extend(["model", "embed_tokens"]).unwrap(), x);
         let [_b, s, _] = unpack::<3>(builder, shape(builder, x.clone()));
         let attention_mask = causal_mask(builder, s, pos.clone());
 

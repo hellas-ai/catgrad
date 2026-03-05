@@ -80,14 +80,7 @@ impl GPT2Model {
         te + pe
     }
 
-    fn gpt_linear(
-        &self,
-        builder: &Builder,
-        _in_dim: usize,
-        _out_dim: usize,
-        p: Path,
-        x: Var,
-    ) -> Var {
+    fn gpt_linear(builder: &Builder, _in_dim: usize, _out_dim: usize, p: Path, x: Var) -> Var {
         let w = param(builder, &p.extend(["weight"]).unwrap());
         let b = param(builder, &p.extend(["bias"]).unwrap());
 
@@ -105,10 +98,10 @@ impl GPT2Model {
     }
 
     fn mlp(&self, builder: &Builder, dim: usize, p: Path, x: Var) -> Var {
-        let x = self.gpt_linear(builder, dim, dim * 4, p.extend(["c_fc"]).unwrap(), x);
+        let x = Self::gpt_linear(builder, dim, dim * 4, p.extend(["c_fc"]).unwrap(), x);
         // let x = gelu(builder, x);
         let x = Gelu.call(builder, [x]);
-        self.gpt_linear(builder, dim * 4, dim, p.extend(["c_proj"]).unwrap(), x)
+        Self::gpt_linear(builder, dim * 4, dim, p.extend(["c_proj"]).unwrap(), x)
     }
 
     fn attention(
@@ -126,7 +119,7 @@ impl GPT2Model {
 
         let [b, s, _] = unpack::<3>(builder, shape(builder, x.clone()));
 
-        let c_attn = self.gpt_linear(builder, dim, 3 * dim, p.extend(["c_attn"]).unwrap(), x);
+        let c_attn = Self::gpt_linear(builder, dim, 3 * dim, p.extend(["c_attn"]).unwrap(), x);
 
         let a = chunk(builder, 2, 3, self.config.hidden_size, c_attn);
         let q = a[0].clone();
@@ -160,7 +153,7 @@ impl GPT2Model {
         let sh = shape!(builder, b, s, dim);
         let attn = reshape(builder, sh, attn);
 
-        self.gpt_linear(builder, dim, dim, p.extend(["c_proj"]).unwrap(), attn)
+        Self::gpt_linear(builder, dim, dim, p.extend(["c_proj"]).unwrap(), attn)
     }
 
     fn layer(

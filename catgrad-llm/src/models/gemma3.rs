@@ -168,16 +168,8 @@ pub fn multi_modal_projector(builder: &Builder, p: Path, x: Var) -> Var {
         x,
     );
     let x = transpose(builder, 1, 2, x);
-    let x = rmsnorm_gemma::<3>(
-        builder,
-        1e-6,
-        p.extend(vec!["mm_soft_emb_norm"]).unwrap(),
-        x,
-    );
-    let proj = param(
-        builder,
-        &p.extend(vec!["mm_input_projection_weight"]).unwrap(),
-    );
+    let x = rmsnorm_gemma::<3>(builder, 1e-6, p.extend(["mm_soft_emb_norm"]).unwrap(), x);
+    let proj = param(builder, &p.extend(["mm_input_projection_weight"]).unwrap());
     let proj = unsqueeze::<2, 3>(builder, 0, proj);
     matmul(builder, x, proj)
 }
@@ -323,7 +315,7 @@ impl Gemma3Model {
                 p.extend(["k_norm"]).unwrap(),
                 k,
             );
-        };
+        }
 
         let sh = shape!(builder, b, num_heads, s, head_dim);
         let q = reshape(builder, sh, q);
@@ -453,8 +445,7 @@ impl Gemma3Model {
 
     // Forward pass with text tokens as input
     pub fn forward(&self, builder: &Builder, p: Path, x: Var, in_k: Var, in_v: Var) -> Vec<Var> {
-        let x = self.scaled_embeddings(builder, p.extend(vec!["embed_tokens"]).unwrap(), x);
-
+        let x = self.scaled_embeddings(builder, p.extend(["embed_tokens"]).unwrap(), x);
         let [_b, s, _] = unpack::<3>(builder, shape(builder, x.clone()));
         let [_, _, _, pos, _] = unpack::<5>(builder, shape(builder, in_k.clone()));
         let attention_mask = causal_mask(builder, s, pos);
@@ -481,10 +472,10 @@ impl Gemma3Model {
         );
         let [_, _, _, pos, _] = unpack::<5>(builder, shape(builder, in_k));
 
-        let mut x = if !self.is_gemma3() {
-            self.normalize(builder, x)
-        } else {
+        let mut x = if self.is_gemma3() {
             x
+        } else {
+            self.normalize(builder, x)
         };
 
         for i in 0..self.config.num_hidden_layers {
@@ -533,9 +524,7 @@ impl DynModule for Gemma3Model {
         let [x, in_k, in_v]: [Var; 3] = args.try_into().expect("expected 3 inputs");
         let mut root = self.path();
         if !self.root.is_empty() {
-            root = root
-                .extend(self.root.split('.').collect::<Vec<&str>>())
-                .unwrap();
+            root = root.extend(self.root.split('.')).unwrap();
         }
         self.forward(builder, root, x, in_k, in_v)
     }

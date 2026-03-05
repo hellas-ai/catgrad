@@ -625,7 +625,7 @@ pub fn causal_mask(builder: &Builder, seq_len: Var, pos: Var) -> Var {
 }
 
 pub fn embeddings(builder: &Builder, p: Path, x: Var) -> Var {
-    let wte = param(builder, &p.extend(vec!["weight"]).unwrap());
+    let wte = param(builder, &p.extend(["weight"]).unwrap());
 
     //flatten the input tensor as that is how index expects it
     let [b, s] = unpack::<2>(builder, shape(builder, x.clone()));
