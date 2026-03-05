@@ -133,7 +133,7 @@ impl GraniteModel {
     }
 
     fn moe(&self, builder: &Builder, p: Path, x: Var) -> Var {
-        let [_, seq_len, _] = unpack::<3>(builder, shape(builder, x.clone()));
+        let [batch_size, seq_len, hidden_size] = unpack::<3>(builder, shape(builder, x.clone()));
 
         let moe_input = param(builder, &p.extend(vec!["input_linear", "weight"]).unwrap());
         let moe_output = param(builder, &p.extend(vec!["output_linear", "weight"]).unwrap());
@@ -145,27 +145,26 @@ impl GraniteModel {
             x.clone(),
         );
 
-        let vi = topk(builder, self.config.num_experts_per_tok, routed);
-        let values = vi.0;
-        let indices = vi.1;
+        let (values, indices) = topk(builder, self.config.num_experts_per_tok, routed);
 
-        let sh = shape!(builder, seq_len, self.config.num_experts_per_tok);
-
+        let num_tokens = batch_size.clone() * seq_len.clone();
+        let sh = shape!(builder, num_tokens, self.config.num_experts_per_tok);
         let indices = reshape(builder, sh.clone(), indices);
-
         let values = reshape(builder, sh, values);
 
         let values = softmax(builder, values);
 
-        let fullx = transpose(builder, 0, 1, x);
-        let mut sumk = constant(builder, 0., &shape(builder, fullx.clone()));
+        let fullx_sh = shape!(builder, num_tokens, 1, hidden_size);
+        let fullx = reshape(builder, fullx_sh.clone(), x);
+        let mut sumk = constant(builder, 0., &fullx_sh);
 
         for i in 0..self.config.num_experts_per_tok {
             let idx = get(builder, 1, i, indices.clone());
+            let idx = squeeze::<2, 1>(builder, 1, idx);
             let val = get(builder, 1, i, values.clone());
 
             let gate_up = index(builder, 0, idx.clone(), moe_input.clone());
-            let out = index(builder, 0, idx.clone(), moe_output.clone());
+            let out = index(builder, 0, idx, moe_output.clone());
 
             let gate_up = chunk(builder, 1, 2, self.config.intermediate_size, gate_up);
             let gate = transpose(builder, 1, 2, gate_up[0].clone());
@@ -183,7 +182,8 @@ impl GraniteModel {
             sumk = sumk + x * v;
         }
 
-        transpose(builder, 0, 1, sumk)
+        let sh = shape!(builder, batch_size, seq_len, hidden_size);
+        reshape(builder, sh, sumk)
     }
 
     fn attention(
