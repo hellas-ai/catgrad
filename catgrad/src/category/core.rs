@@ -232,6 +232,8 @@ pub enum ScalarOp {
     Pow,   // 2 → 1
     LT,    // 2 → 1
     GT,    // 2 → 1
+    GTE,   // 2 → 1
+    LTE,   // 2 → 1
     EQ,    // 2 → 1
     Cos,   // 1 → 1
     Sin,   // 1 → 1
@@ -251,6 +253,8 @@ impl ScalarOp {
             ScalarOp::Pow => (2, 1),
             ScalarOp::LT => (2, 1),
             ScalarOp::GT => (2, 1),
+            ScalarOp::GTE => (2, 1),
+            ScalarOp::LTE => (2, 1),
             ScalarOp::EQ => (2, 1),
             ScalarOp::Cos => (1, 1),
             ScalarOp::Sin => (1, 1),
