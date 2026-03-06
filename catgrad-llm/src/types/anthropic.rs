@@ -13,24 +13,6 @@ pub enum MessageContent {
     Blocks(Vec<ContentBlock>),
 }
 
-impl From<String> for MessageContent {
-    fn from(value: String) -> Self {
-        Self::Text(value)
-    }
-}
-
-impl From<&str> for MessageContent {
-    fn from(value: &str) -> Self {
-        Self::Text(value.to_string())
-    }
-}
-
-impl From<Vec<ContentBlock>> for MessageContent {
-    fn from(value: Vec<ContentBlock>) -> Self {
-        Self::Blocks(value)
-    }
-}
-
 /// Top-level message entry.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct AnthropicMessage {
@@ -61,24 +43,6 @@ impl AnthropicMessage {
 pub enum SystemPrompt {
     Text(String),
     Blocks(Vec<SystemTextBlock>),
-}
-
-impl From<String> for SystemPrompt {
-    fn from(value: String) -> Self {
-        Self::Text(value)
-    }
-}
-
-impl From<&str> for SystemPrompt {
-    fn from(value: &str) -> Self {
-        Self::Text(value.to_string())
-    }
-}
-
-impl From<Vec<SystemTextBlock>> for SystemPrompt {
-    fn from(value: Vec<SystemTextBlock>) -> Self {
-        Self::Blocks(value)
-    }
 }
 
 /// System text block.
@@ -126,26 +90,6 @@ pub struct MessageRequest {
     pub tool_choice: Option<ToolChoice>,
     pub metadata: Option<RequestMetadata>,
     pub thinking: Option<ThinkingConfig>,
-}
-
-impl MessageRequest {
-    pub fn new(model: impl Into<String>, messages: Vec<AnthropicMessage>, max_tokens: u32) -> Self {
-        Self::builder()
-            .model(model.into())
-            .messages(messages)
-            .max_tokens(max_tokens)
-            .build()
-    }
-
-    pub fn with_system_text(mut self, system: impl Into<String>) -> Self {
-        self.system = Some(SystemPrompt::Text(system.into()));
-        self
-    }
-
-    pub fn with_stream(mut self, stream: bool) -> Self {
-        self.stream = Some(stream);
-        self
-    }
 }
 
 /// Tool definition.
@@ -510,24 +454,6 @@ mod tests {
         assert_eq!(out.len(), 2);
         assert!(matches!(&out[0], super::super::Message::Anthropic(_)));
         assert!(matches!(&out[1], super::super::Message::Anthropic(_)));
-    }
-
-    #[test]
-    fn helper_constructors_build_expected_request() {
-        let req = MessageRequest::new(
-            "claude-3-5-sonnet",
-            vec![AnthropicMessage::user("Hi there")],
-            64,
-        )
-        .with_system_text("Be concise")
-        .with_stream(true);
-
-        assert_eq!(req.model, "claude-3-5-sonnet");
-        assert_eq!(req.max_tokens, 64);
-        assert_eq!(req.stream, Some(true));
-        assert!(matches!(req.system, Some(SystemPrompt::Text(_))));
-        assert_eq!(req.messages.len(), 1);
-        assert_eq!(req.messages[0].role, "user");
     }
 
     #[test]

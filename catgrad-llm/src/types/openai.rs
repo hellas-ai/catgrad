@@ -15,48 +15,12 @@ pub enum Stop {
     Multiple(Vec<String>),
 }
 
-impl From<String> for Stop {
-    fn from(value: String) -> Self {
-        Self::Single(value)
-    }
-}
-
-impl From<&str> for Stop {
-    fn from(value: &str) -> Self {
-        Self::Single(value.to_string())
-    }
-}
-
-impl From<Vec<String>> for Stop {
-    fn from(value: Vec<String>) -> Self {
-        Self::Multiple(value)
-    }
-}
-
 /// A chat message's content payload.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(untagged)]
 pub enum MessageContent {
     Text(String),
     Parts(Vec<ContentPart>),
-}
-
-impl From<String> for MessageContent {
-    fn from(value: String) -> Self {
-        Self::Text(value)
-    }
-}
-
-impl From<&str> for MessageContent {
-    fn from(value: &str) -> Self {
-        Self::Text(value.to_string())
-    }
-}
-
-impl From<Vec<ContentPart>> for MessageContent {
-    fn from(value: Vec<ContentPart>) -> Self {
-        Self::Parts(value)
-    }
 }
 
 /// A typed content part in chat messages.
@@ -291,25 +255,6 @@ pub struct ChatCompletionRequest {
     pub user: Option<String>,
 }
 
-impl ChatCompletionRequest {
-    pub fn new(model: impl Into<String>, messages: Vec<ChatMessage>) -> Self {
-        Self::builder()
-            .model(model.into())
-            .messages(messages)
-            .build()
-    }
-
-    pub fn with_max_tokens(mut self, max_tokens: u32) -> Self {
-        self.max_tokens = Some(max_tokens);
-        self
-    }
-
-    pub fn with_stream(mut self, stream: bool) -> Self {
-        self.stream = Some(stream);
-        self
-    }
-}
-
 /// Token usage details.
 #[skip_serializing_none]
 #[derive(Debug, Clone, Serialize, Deserialize, TypedBuilder, PartialEq, Eq)]
@@ -515,21 +460,6 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn stop_deserializes_single_and_multiple() {
-        let single: Stop = serde_json::from_str("\"stop_word\"").unwrap();
-        assert_eq!(single, Stop::Single("stop_word".to_string()));
-
-        let multi: Stop = serde_json::from_str("[\"stop1\",\"stop2\"]").unwrap();
-        assert_eq!(
-            multi,
-            Stop::Multiple(vec!["stop1".to_string(), "stop2".to_string()])
-        );
-
-        let via_into: Stop = "stop3".into();
-        assert_eq!(via_into, Stop::Single("stop3".to_string()));
-    }
-
-    #[test]
     fn finish_reason_serializes_to_snake_case() {
         let value = serde_json::to_value(FinishReason::ToolCalls).unwrap();
         assert_eq!(value, json!("tool_calls"));
@@ -571,7 +501,10 @@ mod tests {
             audio: None,
         };
         let internal: super::super::Message = openai.clone().into();
-        assert_eq!(internal, super::super::Message::OpenAI(Box::new(openai.clone())));
+        assert_eq!(
+            internal,
+            super::super::Message::OpenAI(Box::new(openai.clone()))
+        );
 
         let back = ChatMessage::try_from(internal).unwrap();
         assert_eq!(back, openai);
@@ -676,51 +609,5 @@ mod tests {
         let parsed: ChatCompletionChunk = serde_json::from_value(sample.clone()).unwrap();
         let serialized = serde_json::to_value(parsed).unwrap();
         assert_eq!(serialized, sample);
-    }
-
-    #[test]
-    fn helper_constructors_build_expected_request() {
-        let req = ChatCompletionRequest::new(
-            "gpt-4o-mini",
-            vec![ChatMessage::system("Be concise"), ChatMessage::user("Hi")],
-        )
-        .with_max_tokens(32)
-        .with_stream(true);
-
-        assert_eq!(req.model, "gpt-4o-mini");
-        assert_eq!(req.max_tokens, Some(32));
-        assert_eq!(req.stream, Some(true));
-        assert_eq!(req.messages.len(), 2);
-        assert_eq!(req.messages[0].role, "system");
-        assert_eq!(
-            req.messages[1].content,
-            Some(MessageContent::Text("Hi".to_string()))
-        );
-    }
-
-    #[test]
-    fn builder_allows_omitting_optional_fields() {
-        let req = ChatCompletionRequest::builder()
-            .model("gpt-4o-mini".to_string())
-            .messages(vec![ChatMessage {
-                role: "user".to_string(),
-                content: Some(MessageContent::Text("hello".to_string())),
-                name: None,
-                tool_call_id: None,
-                tool_calls: None,
-                function_call: None,
-                refusal: None,
-                audio: None,
-            }])
-            .build();
-        assert_eq!(req.model, "gpt-4o-mini");
-        assert!(req.max_tokens.is_none());
-        assert!(req.temperature.is_none());
-        assert!(req.top_p.is_none());
-        assert!(req.stream.is_none());
-        assert!(req.stop.is_none());
-        assert!(req.presence_penalty.is_none());
-        assert!(req.frequency_penalty.is_none());
-        assert!(req.user.is_none());
     }
 }
