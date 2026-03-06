@@ -43,6 +43,7 @@ pub enum RopeScaling {
 pub trait LLMConfig {
     fn num_hidden_layers(&self) -> usize;
     fn num_key_value_heads(&self) -> usize;
+    fn vocab_size(&self) -> usize;
     fn rope_theta(&self) -> f32 {
         10000.0
     }

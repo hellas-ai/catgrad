@@ -5,8 +5,9 @@ mod error;
 pub mod helpers;
 pub mod legacy;
 pub mod models;
+pub mod prompt;
 pub mod run;
-pub mod serve;
+pub mod types;
 pub mod utils;
 
 pub use error::LLMError;

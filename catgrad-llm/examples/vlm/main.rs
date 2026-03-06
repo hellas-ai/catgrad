@@ -11,8 +11,8 @@ use catgrad::typecheck::TypeExpr;
 use catgrad_llm::models::gemma3::{Gemma3Model, GemmaTextConfig, multi_modal_projector};
 use catgrad_llm::models::siglip::{SiglipVisionBackbone, VisionConfig};
 use catgrad_llm::utils::{
-    get_model_chat_template, get_model_files, load_and_preprocess_image, load_model_weights,
-    render_chat_template,
+    from_json_str, get_model_chat_template, get_model_files, load_and_preprocess_image,
+    load_model_weights, render_chat_template,
 };
 use clap::Parser;
 use std::path::PathBuf;
@@ -317,7 +317,7 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let (model_paths, config_path, tokenizer_path, _) = get_model_files(&args.model_name, "main")?;
 
-    let mut config: VLMConfig = serde_json::from_str(&std::fs::read_to_string(config_path)?)?;
+    let mut config: VLMConfig = from_json_str(&std::fs::read_to_string(config_path)?)?;
 
     let is_paligemma = config.text_config.model_type == "gemma2";
 

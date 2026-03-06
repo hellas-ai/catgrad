@@ -2,8 +2,11 @@
 use crate::Result;
 use crate::legacy::models::utils::{Cache, Config, ModelBuilder, get_model};
 use crate::legacy::nn::layers::{argmax, cast, reshape};
-use crate::serve;
-use crate::utils::{get_model_chat_template, get_model_files, read_safetensors_multiple};
+use crate::prompt;
+use crate::types;
+use crate::utils::{
+    from_json_str, get_model_chat_template, get_model_files, read_safetensors_multiple,
+};
 use catgrad_legacy::{
     backend::cpu::{
         eval::{Builder, EvalState},
@@ -11,8 +14,6 @@ use catgrad_legacy::{
     },
     core::{Dtype, NdArrayType, Shape, Var},
 };
-use minijinja::{Environment, context};
-use minijinja_contrib::pycompat::unknown_method_callback;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -29,7 +30,7 @@ pub struct ModelLoader {
 
 fn read_to_value<V: for<'a> serde::Deserialize<'a>>(path: impl AsRef<Path>) -> Result<V> {
     let config_str = &std::fs::read_to_string(path)?;
-    Ok(serde_json::from_str(config_str)?)
+    from_json_str(config_str)
 }
 
 impl ModelLoader {
@@ -51,10 +52,15 @@ impl ModelLoader {
 pub struct ModelTokenizer {
     pub tokenizer: Tokenizer,
     pub chat_template: String,
+    pub eos_token_ids: Vec<i32>,
 }
 
 impl ModelTokenizer {
-    fn new(tokenizer_path: PathBuf, chat_template: String) -> Result<Self> {
+    fn new(
+        tokenizer_path: PathBuf,
+        chat_template: String,
+        eos_token_ids: Vec<i32>,
+    ) -> Result<Self> {
         let tokenizer = Tokenizer::from_file(tokenizer_path)?;
 
         // Modify the loaded chat template so it can be parsed by Minijinja
@@ -66,23 +72,38 @@ impl ModelTokenizer {
         Ok(Self {
             tokenizer,
             chat_template,
+            eos_token_ids,
         })
     }
 
-    fn render_context(&self, messages: &[serve::Message]) -> Result<String> {
-        let mut env = Environment::new();
-        env.set_unknown_method_callback(unknown_method_callback);
-        env.add_template("chat", &self.chat_template)?;
-        let tmpl = env.get_template("chat")?;
-        let message_context: Vec<_> = messages
-            .iter()
-            .map(|msg| context!(role => msg.role, content => msg.content))
-            .collect();
-        Ok(tmpl.render(context!(
-            messages => message_context,
-            add_generation_prompt => true,
-            enable_thinking => false
-        ))?)
+    pub fn stop_token_ids(&self) -> &[i32] {
+        &self.eos_token_ids
+    }
+
+    pub fn render_messages(
+        &self,
+        messages: &[types::Message],
+        tools: &[types::ToolSpec],
+    ) -> Result<prompt::RenderedPrompt> {
+        prompt::prepare::render_messages(&self.chat_template, &self.eos_token_ids, messages, tools)
+    }
+
+    pub fn prepare_messages(
+        &self,
+        messages: &[types::Message],
+        tools: &[types::ToolSpec],
+    ) -> Result<prompt::PreparedPrompt> {
+        prompt::prepare::prepare_messages(
+            &self.tokenizer,
+            &self.chat_template,
+            &self.eos_token_ids,
+            messages,
+            tools,
+        )
+    }
+
+    pub fn prepare_prompt(&self, prompt: &str) -> Result<prompt::PreparedPrompt> {
+        prompt::prepare::prepare_text(&self.tokenizer, &self.eos_token_ids, prompt)
     }
 }
 
@@ -291,7 +312,7 @@ fn longest_common_prefix<T: Eq>(x: &[T], y: &[T]) -> usize {
     n
 }
 
-impl serve::LM<i32> for ModelRunner {
+impl types::LM<i32> for ModelRunner {
     fn set_context(&mut self, context: Vec<i32>) {
         let n = longest_common_prefix(&self.context, &context);
         if n < self.context.len() {
@@ -304,7 +325,7 @@ impl serve::LM<i32> for ModelRunner {
     }
 }
 
-impl serve::Tokenizer<i32> for ModelTokenizer {
+impl types::Tokenizer<i32> for ModelTokenizer {
     fn encode(&self, content: String) -> Result<Vec<i32>> {
         let tokens = self.tokenizer.encode(content, true)?;
         Ok(tokens.get_ids().iter().map(|&x| x as i32).collect())
@@ -318,16 +339,17 @@ impl serve::Tokenizer<i32> for ModelTokenizer {
     }
 }
 
-impl serve::ChatTokenizer<i32> for ModelTokenizer {
-    fn encode_messages(&self, messages: Vec<serve::Message>) -> Result<Vec<i32>> {
-        // initialize context
-        let content = self.render_context(&messages)?;
-        use serve::Tokenizer;
-        self.encode(content)
+impl types::ChatTokenizer<i32> for ModelTokenizer {
+    fn encode_messages(
+        &self,
+        messages: Vec<types::Message>,
+        tools: Vec<types::ToolSpec>,
+    ) -> Result<Vec<i32>> {
+        Ok(self.prepare_messages(&messages, &tools)?.input_ids)
     }
 }
 
-impl serve::Loader<i32, ModelRunner, ModelTokenizer> for ModelLoader {
+impl types::Loader<i32, ModelRunner, ModelTokenizer> for ModelLoader {
     fn load_runner(&self) -> Result<ModelRunner> {
         ModelRunner::new(
             self.model_paths.clone(),
@@ -337,6 +359,10 @@ impl serve::Loader<i32, ModelRunner, ModelTokenizer> for ModelLoader {
     }
 
     fn load_tokenizer(&self) -> Result<ModelTokenizer> {
-        ModelTokenizer::new(self.tokenizer_path.clone(), self.chat_template.clone())
+        ModelTokenizer::new(
+            self.tokenizer_path.clone(),
+            self.chat_template.clone(),
+            self.config.get_eos_token_ids(),
+        )
     }
 }

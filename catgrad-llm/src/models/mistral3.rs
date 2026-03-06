@@ -50,6 +50,10 @@ impl LLMConfig for Mistral3TextConfig {
         self.head_dim
     }
 
+    fn vocab_size(&self) -> usize {
+        self.vocab_size
+    }
+
     fn eos_token_id(&self) -> Option<EosTokenId> {
         self.eos_token_id.clone()
     }
@@ -325,8 +329,6 @@ impl DynModule for Mistral3Model {
             root.extend(lm_head_weights).unwrap(),
             x,
         );
-
-        x = argmax(builder, x);
         let (out_k, out_v) = cache.get_kv_cache(builder);
         vec![x, out_k, out_v]
     }

@@ -4,8 +4,8 @@ use catgrad::interpreter::backend::ndarray::NdArrayBackend;
 use catgrad::prelude::*;
 use catgrad_llm::helpers::LLMModel;
 use catgrad_llm::utils::{
-    get_model, get_model_chat_template, load_model, post_process_model_weights, print_bench_table,
-    render_chat_template,
+    from_json_reader, get_model, get_model_chat_template, load_model, post_process_model_weights,
+    print_bench_table, render_chat_template,
 };
 use clap::{Parser, ValueEnum};
 use serde::Deserialize;
@@ -204,7 +204,7 @@ fn run_with_backend<B: interpreter::Backend>(
 
     let typed_term = if let Some(load_path) = &args.load {
         let file = std::fs::File::open(load_path)?;
-        serde_json::from_reader(file)?
+        from_json_reader(file)?
     } else {
         model.term().expect("Failed to create typed term")
     };

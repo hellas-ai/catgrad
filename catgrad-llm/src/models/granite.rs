@@ -59,6 +59,10 @@ impl LLMConfig for GraniteConfig {
         self.hidden_size / self.num_attention_heads
     }
 
+    fn vocab_size(&self) -> usize {
+        self.vocab_size
+    }
+
     fn eos_token_id(&self) -> Option<EosTokenId> {
         self.eos_token_id.clone()
     }
@@ -371,8 +375,6 @@ impl DynModule for GraniteModel {
             root.extend(["model", "embed_tokens"]).unwrap(),
             x,
         );
-
-        x = argmax(builder, x);
         let (out_k, out_v) = cache.get_kv_cache(builder);
         vec![x, out_k, out_v]
     }
