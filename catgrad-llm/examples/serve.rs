@@ -848,7 +848,7 @@ fn serve_plain(request: Request, engine: &InferenceEngine, req: plain::Completio
                     .created(created)
                     .model(model.clone())
                     .choices(vec![
-                        plain::CompletionStreamChoice::builder()
+                        plain::CompletionChoice::builder()
                             .index(0)
                             .text(delta.to_string())
                             .build(),
@@ -865,7 +865,7 @@ fn serve_plain(request: Request, engine: &InferenceEngine, req: plain::Completio
                 .created(created)
                 .model(model)
                 .choices(vec![
-                    plain::CompletionStreamChoice::builder()
+                    plain::CompletionChoice::builder()
                         .index(0)
                         .text(String::new())
                         .finish_reason(Some(openai::FinishReason::Stop))
