@@ -1,4 +1,5 @@
 use crate::Result;
+use std::sync::Arc;
 
 pub trait TokenDecoder {
     fn decode_tokens(&self, tokens: &[i32]) -> Result<String>;
@@ -11,28 +12,44 @@ impl TokenDecoder for crate::run::ModelTokenizer {
     }
 }
 
-impl<F> TokenDecoder for F
-where
-    F: Fn(&[i32]) -> Result<String>,
-{
+impl TokenDecoder for fn(&[i32]) -> Result<String> {
     fn decode_tokens(&self, tokens: &[i32]) -> Result<String> {
         (self)(tokens)
     }
 }
 
-pub struct StreamingDecoder<'a> {
-    decoder: &'a dyn TokenDecoder,
-    stop_token_ids: &'a [i32],
+impl TokenDecoder for &crate::run::ModelTokenizer {
+    fn decode_tokens(&self, tokens: &[i32]) -> Result<String> {
+        use crate::types::Tokenizer;
+        self.decode(tokens.to_vec())
+    }
+}
+
+impl<T> TokenDecoder for Arc<T>
+where
+    T: TokenDecoder + ?Sized,
+{
+    fn decode_tokens(&self, tokens: &[i32]) -> Result<String> {
+        self.as_ref().decode_tokens(tokens)
+    }
+}
+
+pub struct StreamingDecoder<D> {
+    decoder: D,
+    stop_token_ids: Vec<i32>,
     tokens: Vec<i32>,
     decoded: String,
     stopped: bool,
 }
 
-impl<'a> StreamingDecoder<'a> {
-    pub fn new(decoder: &'a dyn TokenDecoder, stop_token_ids: &'a [i32]) -> Self {
+impl<D> StreamingDecoder<D>
+where
+    D: TokenDecoder,
+{
+    pub fn new(decoder: D, stop_token_ids: &[i32]) -> Self {
         Self {
             decoder,
-            stop_token_ids,
+            stop_token_ids: stop_token_ids.to_vec(),
             tokens: Vec::new(),
             decoded: String::new(),
             stopped: false,
@@ -93,7 +110,7 @@ mod tests {
 
     #[test]
     fn emits_only_incremental_delta() {
-        let mut decoder = StreamingDecoder::new(&fake_decoder, &[]);
+        let mut decoder = StreamingDecoder::new(fake_decoder as fn(&[i32]) -> Result<String>, &[]);
         assert_eq!(decoder.push_tokens(&[1]).unwrap(), "alpha");
         assert_eq!(decoder.push_tokens(&[2]).unwrap(), "beta");
         assert_eq!(decoder.finish(), "alphabeta");
@@ -101,7 +118,8 @@ mod tests {
 
     #[test]
     fn suppresses_stop_tokens() {
-        let mut decoder = StreamingDecoder::new(&fake_decoder, &[99]);
+        let mut decoder =
+            StreamingDecoder::new(fake_decoder as fn(&[i32]) -> Result<String>, &[99]);
         assert_eq!(decoder.push_tokens(&[1, 99, 2]).unwrap(), "alpha");
         assert!(decoder.is_stopped());
         assert_eq!(decoder.push_tokens(&[3]).unwrap(), "");
@@ -110,7 +128,7 @@ mod tests {
 
     #[test]
     fn handles_multi_token_batches() {
-        let mut decoder = StreamingDecoder::new(&fake_decoder, &[]);
+        let mut decoder = StreamingDecoder::new(fake_decoder as fn(&[i32]) -> Result<String>, &[]);
         assert_eq!(decoder.push_tokens(&[1, 2]).unwrap(), "alphabeta");
         assert_eq!(decoder.push_tokens(&[3]).unwrap(), "gamma");
     }

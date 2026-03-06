@@ -48,6 +48,20 @@ impl ToolCall {
         }
     }
 
+    pub fn to_openai_delta_tool_call(&self, index: u32) -> types::openai::DeltaToolCall {
+        types::openai::DeltaToolCall::builder()
+            .index(index)
+            .id(Some(self.id.clone()))
+            .tool_type(Some("function".to_string()))
+            .function(Some(
+                types::openai::DeltaFunctionCall::builder()
+                    .name(Some(self.name.clone()))
+                    .arguments(Some(self.arguments.clone()))
+                    .build(),
+            ))
+            .build()
+    }
+
     pub fn arguments_json_map(&self) -> types::JsonMap {
         match serde_json::from_str::<types::JsonData>(&self.arguments) {
             Ok(types::JsonData::Object(map)) => map,

@@ -268,20 +268,6 @@ fn u32_tokens_to_i32(tokens: Vec<u32>) -> anyhow::Result<Vec<i32>> {
         .collect()
 }
 
-fn to_delta_tool_call(index: u32, call: &prompt::ToolCall) -> openai::DeltaToolCall {
-    openai::DeltaToolCall::builder()
-        .index(index)
-        .id(Some(call.id.clone()))
-        .tool_type(Some("function".to_string()))
-        .function(Some(
-            openai::DeltaFunctionCall::builder()
-                .name(Some(call.name.clone()))
-                .arguments(Some(call.arguments.clone()))
-                .build(),
-        ))
-        .build()
-}
-
 fn to_openai_tool_calls(tool_calls: &[prompt::ToolCall]) -> Vec<openai::MessageToolCall> {
     tool_calls
         .iter()
@@ -459,7 +445,7 @@ fn serve_openai(request: Request, engine: &InferenceEngine, req: openai::ChatCom
                     let delta_calls: Vec<openai::DeltaToolCall> = tool_calls
                         .iter()
                         .enumerate()
-                        .map(|(index, call)| to_delta_tool_call(index as u32, call))
+                        .map(|(index, call)| call.to_openai_delta_tool_call(index as u32))
                         .collect();
                     let tool_chunk = openai::ChatCompletionChunk::builder()
                         .id(id.clone())
