@@ -352,7 +352,7 @@ mod tests {
 
     #[test]
     fn openai_message_context_exposes_normalized_parts() {
-        let message = types::Message::OpenAI(types::openai::ChatMessage::assistant("hello"));
+        let message = types::Message::OpenAI(Box::new(types::openai::ChatMessage::assistant("hello")));
         let rendered = render_message_template(
             &message,
             "{{ message.content }}|{{ message.content_parts|length }}|{{ message.content_parts[0].text }}",

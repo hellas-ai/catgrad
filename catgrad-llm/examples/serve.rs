@@ -335,7 +335,7 @@ fn serve_openai(request: Request, engine: &InferenceEngine, req: openai::ChatCom
     let messages: Vec<types::Message> = req
         .messages
         .into_iter()
-        .map(types::Message::OpenAI)
+        .map(|m| types::Message::OpenAI(Box::new(m)))
         .collect();
     let prepared = match engine.prepare_messages(&messages, &tools) {
         Ok(prepared) => prepared,
@@ -582,7 +582,7 @@ fn serve_anthropic(request: Request, engine: &InferenceEngine, req: anthropic::M
             let created_usage = anthropic::AnthropicUsage::new(prepared.prompt_tokens, 0);
             let message_start = anthropic::MessageStreamEvent::MessageStart {
                 message: anthropic::MessageResponse::builder()
-                    .id(id.clone())
+                    .id(id)
                     .message_type(Some("message".to_string()))
                     .role("assistant".to_string())
                     .content(vec![])

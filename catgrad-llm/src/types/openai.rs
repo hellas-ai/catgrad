@@ -492,7 +492,7 @@ pub struct DeltaCustomToolCall {
 
 impl From<ChatMessage> for super::Message {
     fn from(value: ChatMessage) -> Self {
-        super::Message::OpenAI(value)
+        super::Message::OpenAI(Box::new(value))
     }
 }
 
@@ -501,7 +501,7 @@ impl TryFrom<super::Message> for ChatMessage {
 
     fn try_from(value: super::Message) -> Result<Self, Self::Error> {
         match value {
-            super::Message::OpenAI(msg) => Ok(msg),
+            super::Message::OpenAI(msg) => Ok(*msg),
             super::Message::Anthropic(_) => Err(LLMError::UnsupportedWireConversion(
                 "Cannot convert Anthropic message variant into OpenAI ChatMessage".to_string(),
             )),
@@ -571,7 +571,7 @@ mod tests {
             audio: None,
         };
         let internal: super::super::Message = openai.clone().into();
-        assert_eq!(internal, super::super::Message::OpenAI(openai.clone()));
+        assert_eq!(internal, super::super::Message::OpenAI(Box::new(openai.clone())));
 
         let back = ChatMessage::try_from(internal).unwrap();
         assert_eq!(back, openai);

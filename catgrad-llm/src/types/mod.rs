@@ -94,13 +94,13 @@ impl From<anthropic::ToolDefinition> for ToolSpec {
 /// Internal message container used by chat tokenizers.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Message {
-    OpenAI(openai::ChatMessage),
+    OpenAI(Box<openai::ChatMessage>),
     Anthropic(anthropic::AnthropicMessage),
 }
 
 impl Message {
     pub fn text(role: impl Into<String>, content: impl Into<String>) -> Self {
-        Self::OpenAI(openai::ChatMessage {
+        Self::OpenAI(Box::new(openai::ChatMessage {
             role: role.into(),
             content: Some(openai::MessageContent::Text(content.into())),
             name: None,
@@ -109,7 +109,7 @@ impl Message {
             function_call: None,
             refusal: None,
             audio: None,
-        })
+        }))
     }
 }
 
