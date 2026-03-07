@@ -61,14 +61,14 @@ fn empty_kv_cache<B: interpreter::Backend>(
     config: &dyn LLMConfig,
 ) -> Result<KvCache<B>> {
     let k_shape = Shape(vec![
-        config.num_hidden_layers(),
+        config.num_kv_layers(),
         1,
         config.num_key_value_heads(),
         0,
         config.get_qk_head_dim(),
     ]);
     let v_shape = Shape(vec![
-        config.num_hidden_layers(),
+        config.num_kv_layers(),
         1,
         config.num_key_value_heads(),
         0,

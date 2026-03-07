@@ -25,6 +25,8 @@ pub(crate) fn tensor_op<B: Backend>(
         TensorOp::Map(ScalarOp::Div) => binop(backend, args, ssa, B::div),
         TensorOp::Map(ScalarOp::LT) => binop(backend, args, ssa, B::lt),
         TensorOp::Map(ScalarOp::GT) => binop(backend, args, ssa, B::gt),
+        TensorOp::Map(ScalarOp::GTE) => binop(backend, args, ssa, B::gte),
+        TensorOp::Map(ScalarOp::LTE) => binop(backend, args, ssa, B::lte),
         TensorOp::Map(ScalarOp::EQ) => binop(backend, args, ssa, B::eq),
         TensorOp::NatToU32 => tensor_nat_to_u32(backend, args, ssa),
         TensorOp::Cast => tensor_cast(backend, args, ssa),

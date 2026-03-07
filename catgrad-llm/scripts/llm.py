@@ -1,12 +1,14 @@
 import sys
 import argparse
+import torch
 from transformers import (
+    logging,
     AutoModelForCausalLM,
     AutoModelForImageTextToText,
     AutoTokenizer,
 )
 
-from transformers import logging
+torch.set_printoptions(linewidth=200)
 
 logging.set_verbosity_error()
 
@@ -23,6 +25,7 @@ if __name__ == "__main__":
     parser.add_argument("-s", "--seq-len", type=int, default=10)
     parser.add_argument("-r", "--raw-prompt", action="store_true")
     parser.add_argument("-t", "--thinking", action="store_true")
+    parser.add_argument("--cache", dest="use_cache", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("-d", "--dtype", type=str, default="float32")
     args = parser.parse_args()
 
@@ -56,7 +59,7 @@ if __name__ == "__main__":
     model.generation_config.top_k = None
 
     inputs = tokenizer(prompt, return_token_type_ids=False, return_tensors="pt")
-    logits = model.generate(**inputs, max_new_tokens=args.seq_len, do_sample=False)
+    logits = model.generate(**inputs, max_new_tokens=args.seq_len, do_sample=False, use_cache=args.use_cache)
     output = tokenizer.decode(logits[0])
 
     print(output)

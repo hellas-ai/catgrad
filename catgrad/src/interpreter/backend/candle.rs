@@ -194,6 +194,22 @@ impl Backend for CandleBackend {
         }
     }
 
+    fn gte(&self, lhs: TaggedTensorTuple<Self, 2>) -> TaggedTensor<Self> {
+        use TaggedTensorTuple::*;
+        match lhs {
+            F32([x, y]) => F32([Self::gte(x, y)]),
+            U32([x, y]) => U32([Self::gte(x, y)]),
+        }
+    }
+
+    fn lte(&self, lhs: TaggedTensorTuple<Self, 2>) -> TaggedTensor<Self> {
+        use TaggedTensorTuple::*;
+        match lhs {
+            F32([x, y]) => F32([Self::lte(x, y)]),
+            U32([x, y]) => U32([Self::lte(x, y)]),
+        }
+    }
+
     fn eq(&self, lhs: TaggedTensorTuple<Self, 2>) -> TaggedTensor<Self> {
         use TaggedTensorTuple::*;
         match lhs {
@@ -484,6 +500,24 @@ impl CandleBackend {
         }
 
         CandleTensor(x.0.gt(&y.0).unwrap().to_dtype(dtype).unwrap())
+    }
+
+    fn gte(x: CandleTensor, y: CandleTensor) -> CandleTensor {
+        let dtype = x.0.dtype();
+        if x.0.dims() != y.0.dims() {
+            panic!("Shape mismatch in operation");
+        }
+
+        CandleTensor(x.0.ge(&y.0).unwrap().to_dtype(dtype).unwrap())
+    }
+
+    fn lte(x: CandleTensor, y: CandleTensor) -> CandleTensor {
+        let dtype = x.0.dtype();
+        if x.0.dims() != y.0.dims() {
+            panic!("Shape mismatch in operation");
+        }
+
+        CandleTensor(x.0.le(&y.0).unwrap().to_dtype(dtype).unwrap())
     }
 
     fn eq(x: CandleTensor, y: CandleTensor) -> CandleTensor {

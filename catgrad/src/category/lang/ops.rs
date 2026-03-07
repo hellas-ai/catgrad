@@ -266,6 +266,14 @@ pub fn gt(builder: &Builder, x: Var, y: Var) -> Var {
     var::fn_operation(builder, &[x, y], Object::Tensor, op!["tensor", "gt"])
 }
 
+pub fn gte(builder: &Builder, x: Var, y: Var) -> Var {
+    var::fn_operation(builder, &[x, y], Object::Tensor, op!["tensor", "gte"])
+}
+
+pub fn lte(builder: &Builder, x: Var, y: Var) -> Var {
+    var::fn_operation(builder, &[x, y], Object::Tensor, op!["tensor", "lte"])
+}
+
 pub fn eq(builder: &Builder, x: Var, y: Var) -> Var {
     var::fn_operation(builder, &[x, y], Object::Tensor, op!["tensor", "eq"])
 }

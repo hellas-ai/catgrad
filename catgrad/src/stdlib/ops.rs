@@ -4,9 +4,9 @@ use crate::prelude::{Builder, Var};
 
 // re-export lang ops
 pub use ops::{
-    arange, argmax, broadcast, cast, concat, cos, dtype, dtype_constant, eq, floor, gt, index, log,
-    lt, matmul, max, nat, nat_to_u32, pack, param, pow, probe, reshape, shape, sin, slice, sum,
-    topk, transpose, unpack,
+    arange, argmax, broadcast, cast, concat, cos, dtype, dtype_constant, eq, floor, gt, gte, index,
+    log, lt, lte, matmul, max, nat, nat_to_u32, pack, param, pow, probe, reshape, shape, sin,
+    slice, sum, topk, transpose, unpack,
 };
 
 pub fn get(builder: &Builder, dim: impl IntoNatVar, start: impl IntoNatVar, x: Var) -> Var {
@@ -27,16 +27,4 @@ pub fn inverse(builder: &Builder, x: Var) -> Var {
     let shape = shape(builder, x.clone());
     let one = constant(builder, 1.0, &shape);
     one / x
-}
-
-pub fn lte(builder: &Builder, x: Var, y: Var) -> Var {
-    let sh = shape(builder, y.clone());
-    let one = constant(builder, 1, &sh);
-    lt(builder, x, y + one)
-}
-
-pub fn gte(builder: &Builder, x: Var, y: Var) -> Var {
-    let sh = shape(builder, y.clone());
-    let one = constant(builder, 1, &sh);
-    gt(builder, x, y - one)
 }

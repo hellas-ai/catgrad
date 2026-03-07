@@ -87,6 +87,14 @@ impl Backend for ShapeOnlyBackend {
         self.exact_match(lhs)
     }
 
+    fn gte(&self, lhs: TaggedTensorTuple<Self, 2>) -> TaggedTensor<Self> {
+        self.exact_match(lhs)
+    }
+
+    fn lte(&self, lhs: TaggedTensorTuple<Self, 2>) -> TaggedTensor<Self> {
+        self.exact_match(lhs)
+    }
+
     fn eq(&self, lhs: TaggedTensorTuple<Self, 2>) -> TaggedTensor<Self> {
         self.exact_match(lhs)
     }
