@@ -1,12 +1,14 @@
 import sys
 import argparse
+import torch
 from transformers import (
+    logging,
     AutoModelForCausalLM,
     AutoModelForImageTextToText,
     AutoTokenizer,
 )
 
-from transformers import logging
+torch.set_printoptions(linewidth=200)
 
 logging.set_verbosity_error()
 
