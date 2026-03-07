@@ -22,7 +22,7 @@ pub fn llm_type(config: &dyn LLMConfig) -> (Vec<Type>, Vec<Type>) {
         shape: ShapeExpr::Shape(vec![batch_size.clone(), NatExpr::Constant(1)]),
     }));
 
-    let num_layers = NatExpr::Constant(config.num_hidden_layers());
+    let num_layers = NatExpr::Constant(config.num_kv_layers());
     let num_kv_heads = NatExpr::Constant(config.num_key_value_heads());
     let qk_head_dim = NatExpr::Constant(config.get_qk_head_dim());
     let v_head_dim = NatExpr::Constant(config.get_v_head_dim());
@@ -115,9 +115,10 @@ impl Cache {
             ),
         };
 
-        let mut in_kv_cache = Vec::with_capacity(config.num_hidden_layers());
-        let mut out_kv_cache = Vec::with_capacity(config.num_hidden_layers());
-        for layer_id in 0..config.num_hidden_layers() {
+        let num_kv_layers = config.num_kv_layers();
+        let mut in_kv_cache = Vec::with_capacity(num_kv_layers);
+        let mut out_kv_cache = Vec::with_capacity(num_kv_layers);
+        for layer_id in 0..num_kv_layers {
             let k = slice(builder, 0, layer_id, 1, in_k.clone());
             let v = slice(builder, 0, layer_id, 1, in_v.clone());
             let k = squeeze::<5, 4>(builder, 0, k);
@@ -656,14 +657,14 @@ pub trait LLMModel: DynModule {
     fn empty_state_type(&self) -> Vec<(Dtype, Shape)> {
         let config = self.config();
         let k_shape = Shape(vec![
-            config.num_hidden_layers(),
+            config.num_kv_layers(),
             1,
             config.num_key_value_heads(),
             0,
             config.get_qk_head_dim(),
         ]);
         let v_shape = Shape(vec![
-            config.num_hidden_layers(),
+            config.num_kv_layers(),
             1,
             config.num_key_value_heads(),
             0,

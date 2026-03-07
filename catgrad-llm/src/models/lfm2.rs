@@ -41,18 +41,17 @@ impl Lfm2Config {
             || (self.layer_types.len() == self.num_hidden_layers
                 && self.layer_types[layer_id] == "full_attention")
     }
+}
+
+impl LLMConfig for Lfm2Config {
+    fn num_hidden_layers(&self) -> usize {
+        self.num_hidden_layers
+    }
 
     fn num_kv_layers(&self) -> usize {
         (0..self.num_hidden_layers)
             .filter(|&layer_id| self.is_full_attention_layer(layer_id))
             .count()
-    }
-}
-
-impl LLMConfig for Lfm2Config {
-    // This returns the number of layers for which to cache KV values.
-    fn num_hidden_layers(&self) -> usize {
-        self.num_kv_layers()
     }
 
     fn num_key_value_heads(&self) -> usize {
