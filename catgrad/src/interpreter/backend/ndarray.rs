@@ -443,7 +443,7 @@ impl NdArrayBackend {
         dim0: usize,
         dim1: usize,
     ) -> ArrayD<D> {
-        let mut res = arr.to_owned();
+        let mut res = arr;
         res.swap_axes(dim0, dim1);
         res
     }
@@ -464,8 +464,7 @@ impl NdArrayBackend {
         start: usize,
         len: usize,
     ) -> ArrayD<D> {
-        let r = arr.slice_axis(Axis(dim), (start..start + len).into());
-        r.to_owned()
+        arr.slice_axis_move(Axis(dim), (start..start + len).into())
     }
 
     fn concat_ndarray<D: Copy + Send + Sync + Debug>(
@@ -678,10 +677,10 @@ impl NdArrayBackend {
         let mut result_data = Vec::with_capacity(batch_size * lhs_m * rhs_n);
 
         for b in 0..batch_size {
-            let lhs_batch = lhs_reshaped.slice(ndarray::s![b, .., ..]).to_owned();
-            let rhs_batch = rhs_reshaped.slice(ndarray::s![b, .., ..]).to_owned();
-            let batch_result = Self::matmul_generic(lhs_batch.into_dyn(), rhs_batch.into_dyn());
-            result_data.extend_from_slice(batch_result.as_slice().unwrap());
+            let lhs_batch = lhs_reshaped.index_axis(Axis(0), b);
+            let rhs_batch = rhs_reshaped.index_axis(Axis(0), b);
+            let batch_result = lhs_batch.dot(&rhs_batch);
+            result_data.extend(batch_result.iter().copied());
         }
 
         // Reshape result back to proper batch shape
