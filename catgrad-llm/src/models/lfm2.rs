@@ -119,16 +119,6 @@ impl LLMModel for Lfm2Model {
     }
 }
 
-// Select values from `x` where `mask` is 1, otherwise from `y`.
-fn cond(builder: &Builder, mask: Var, x: Var, y: Var) -> Var {
-    let sh = shape(builder, x.clone());
-    let x_dtype = dtype(builder, x.clone());
-    let mask = broadcast(builder, sh.clone(), mask);
-    let mask = cast(builder, mask, x_dtype);
-    let one = constant(builder, 1.0, &sh);
-    x * mask.clone() + y * (one - mask)
-}
-
 impl Lfm2Model {
     pub fn new(config_json: &serde_json::Value, max_sequence_length: usize) -> crate::Result<Self> {
         let config: Lfm2Config = serde_json::from_value(config_json.clone())?;
@@ -372,7 +362,7 @@ impl Lfm2Model {
         // HF decode writes a single-token `Bx` into the selected cache slot.
         let bx_decode = slice(builder, 2, 0, 1, bx);
         let bx_decode = broadcast(builder, sh_state, bx_decode);
-        let out_linear_state_decode = cond(builder, one_hot, bx_decode, rolled_state);
+        let out_linear_state_decode = where_cond(builder, one_hot, bx_decode, rolled_state);
 
         // HF decode:
         // `conv_out = torch.sum(conv_state * self.conv.weight[:, 0, :], dim=-1).unsqueeze(-1)`
@@ -388,13 +378,13 @@ impl Lfm2Model {
 
         // HF branch condition: `if cache_position[0] > 0: ... else: ...`
         let is_decode = gt(builder, nat_to_u32(builder, pos), zero_pos);
-        let conv_out = cond(
+        let conv_out = where_cond(
             builder,
             is_decode.clone(),
             conv_out_decode,
             conv_out_prefill,
         );
-        let out_linear_state = cond(
+        let out_linear_state = where_cond(
             builder,
             is_decode,
             out_linear_state_decode,

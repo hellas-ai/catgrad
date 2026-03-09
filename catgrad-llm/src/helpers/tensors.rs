@@ -198,3 +198,82 @@ pub fn embeddings(builder: &Builder, p: Path, x: Var) -> Var {
     let sh = shape!(builder, b, s, hidden_dim);
     reshape(builder, sh, te)
 }
+
+// Select values from `x` where `mask` is 1, otherwise from `y`.
+pub fn where_cond(builder: &Builder, mask: Var, x: Var, y: Var) -> Var {
+    let sh = shape(builder, x.clone());
+    let x_dtype = dtype(builder, x.clone());
+    let mask = broadcast(builder, sh.clone(), mask);
+    let mask = cast(builder, mask, x_dtype);
+    let one = constant(builder, 1.0, &sh);
+    x * mask.clone() + y * (one - mask)
+}
+
+// Fill `x` with `fill` where `mask` is 1, otherwise leave `x` unchanged.
+pub fn masked_fill(builder: &Builder, mask: Var, fill: f32, x: Var) -> Var {
+    let fill = constant(builder, fill, &shape(builder, x.clone()));
+    where_cond(builder, mask, fill, x)
+}
+
+// Make a diagonal matrix with ones on the diagonal and zeros elsewhere.
+pub fn eye(builder: &Builder, size: Var, dtype: Dtype) -> Var {
+    let row = arange(builder, size.clone());
+    let col = arange(builder, size.clone());
+
+    let row = reshape(builder, shape!(builder, size, 1), row);
+    let row = broadcast(builder, shape!(builder, size.clone(), size), row);
+
+    let col = reshape(builder, shape!(builder, 1, size), col);
+    let col = broadcast(builder, shape!(builder, size.clone(), size), col);
+
+    let eye = eq(builder, row, col);
+    cast(builder, eye, dtype)
+}
+
+fn tri_mask(builder: &Builder, size: Var, diagonal: u32, triu: bool) -> Var {
+    let sh = shape!(builder, size, size);
+    let diagonal = constant(builder, diagonal, &sh);
+    let idx = arange(builder, size.clone());
+    let row = reshape(builder, shape!(builder, size, 1), idx.clone());
+    let col = reshape(builder, shape!(builder, 1, size), idx);
+
+    let row = broadcast(builder, sh.clone(), row);
+    let col = broadcast(builder, sh, col);
+
+    let row = row + diagonal;
+    // Upper-triangular entries satisfy `col >= row + diagonal`.
+    // Lower-triangular entries satisfy `col <= row + diagonal`.
+    let mask = if triu {
+        gte(builder, col, row)
+    } else {
+        lte(builder, col, row)
+    };
+    cast(builder, mask, Dtype::F32)
+}
+
+// Upper-riangular mask
+pub fn triu_mask(builder: &Builder, size: Var, diagonal: u32) -> Var {
+    tri_mask(builder, size, diagonal, true)
+}
+
+// Lower-triangular mask
+pub fn tril_mask(builder: &Builder, size: Var, diagonal: u32) -> Var {
+    tri_mask(builder, size, diagonal, false)
+}
+
+// Cumsum along the last dimension of a tensor
+pub fn cumsum<const N: usize>(builder: &Builder, x: Var) -> Var {
+    let sh = unpack::<N>(builder, shape(builder, x.clone()));
+    let ldim = sh[N - 1].clone();
+
+    let mut new_sh = sh;
+    new_sh[N - 2] = ldim.clone();
+
+    let new_sh = pack::<N>(builder, new_sh);
+    let lower = tril_mask(builder, ldim, 0);
+    let lower = transpose(builder, 0, 1, lower);
+
+    let lower = broadcast(builder, new_sh, lower);
+
+    matmul(builder, x, lower)
+}
