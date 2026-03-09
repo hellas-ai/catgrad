@@ -278,6 +278,15 @@ pub fn eq(builder: &Builder, x: Var, y: Var) -> Var {
     var::fn_operation(builder, &[x, y], Object::Tensor, op!["tensor", "eq"])
 }
 
+pub fn where_cond(builder: &Builder, mask: Var, x: Var, y: Var) -> Var {
+    var::fn_operation(
+        builder,
+        &[mask, x, y],
+        Object::Tensor,
+        op!["tensor", "where"],
+    )
+}
+
 /// Batch matmul
 pub fn matmul(builder: &Builder, f: Var, g: Var) -> Var {
     // checked during shapechecking, but errors easier to follow here.

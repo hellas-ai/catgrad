@@ -259,6 +259,32 @@ impl Backend for NdArrayBackend {
         }
     }
 
+    fn where_cond(&self, args: TaggedTensorTuple<Self, 3>) -> TaggedTensor<Self> {
+        use TaggedTensorTuple::*;
+        match args {
+            F32([mask, x, y]) => {
+                let mask = mask.unwrap_f32();
+                let x = x.unwrap_f32();
+                let y = y.unwrap_f32();
+                let res = ndarray::Zip::from(&mask)
+                    .and(&x)
+                    .and(&y)
+                    .map_collect(|&m, &x, &y| if m > 0.0 { x } else { y });
+                from_f32(res)
+            }
+            U32([mask, x, y]) => {
+                let mask = mask.unwrap_u32();
+                let x = x.unwrap_u32();
+                let y = y.unwrap_u32();
+                let res = ndarray::Zip::from(&mask)
+                    .and(&x)
+                    .and(&y)
+                    .map_collect(|&m, &x, &y| if m != 0 { x } else { y });
+                from_u32(res)
+            }
+        }
+    }
+
     fn neg(&self, x: TaggedTensor<Self>) -> TaggedTensor<Self> {
         use TaggedTensorTuple::*;
         match x {

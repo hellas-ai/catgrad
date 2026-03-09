@@ -99,6 +99,22 @@ impl Backend for ShapeOnlyBackend {
         self.exact_match(lhs)
     }
 
+    fn where_cond(&self, args: TaggedTensorTuple<Self, 3>) -> TaggedTensor<Self> {
+        use TaggedTensorTuple::*;
+        match args {
+            F32([mask, x, y]) => {
+                Self::exact_shape_match(mask, x.clone());
+                Self::exact_shape_match(x.clone(), y);
+                F32([x])
+            }
+            U32([mask, x, y]) => {
+                Self::exact_shape_match(mask, x.clone());
+                Self::exact_shape_match(x.clone(), y);
+                U32([x])
+            }
+        }
+    }
+
     fn sin(&self, x: TaggedTensor<Self>) -> TaggedTensor<Self> {
         x
     }

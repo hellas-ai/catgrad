@@ -28,6 +28,7 @@ pub(crate) fn tensor_op<B: Backend>(
         TensorOp::Map(ScalarOp::GTE) => binop(backend, args, ssa, B::gte),
         TensorOp::Map(ScalarOp::LTE) => binop(backend, args, ssa, B::lte),
         TensorOp::Map(ScalarOp::EQ) => binop(backend, args, ssa, B::eq),
+        TensorOp::Map(ScalarOp::Where) => ternary_op(backend, args, ssa, B::where_cond),
         TensorOp::NatToU32 => tensor_nat_to_u32(backend, args, ssa),
         TensorOp::Cast => tensor_cast(backend, args, ssa),
         TensorOp::MatMul => binop(backend, args, ssa, B::matmul),
@@ -186,6 +187,9 @@ fn tensor_index<B: Backend>(backend: &B, args: Vec<Value<B>>, ssa: &CoreSSA) -> 
 type Binop<B: Backend> = fn(&B, TaggedTensorTuple<B, 2>) -> TaggedTensorTuple<B, 1>;
 
 #[allow(type_alias_bounds)]
+type Ternaryop<B: Backend> = fn(&B, TaggedTensorTuple<B, 3>) -> TaggedTensorTuple<B, 1>;
+
+#[allow(type_alias_bounds)]
 type Unaryop<B: Backend> = fn(&B, TaggedTensor<B>) -> TaggedTensor<B>;
 
 fn binop<B: Backend>(
@@ -195,6 +199,17 @@ fn binop<B: Backend>(
     callback: Binop<B>,
 ) -> ResultValues<B> {
     let args = try_into_tagged_ndarrays::<B, 2>(args, ssa)?;
+    let result = callback(backend, args);
+    Ok(vec![Value::Tensor(result)])
+}
+
+fn ternary_op<B: Backend>(
+    backend: &B,
+    args: Vec<Value<B>>,
+    ssa: &CoreSSA,
+    callback: Ternaryop<B>,
+) -> ResultValues<B> {
+    let args = try_into_tagged_ndarrays::<B, 3>(args, ssa)?;
     let result = callback(backend, args);
     Ok(vec![Value::Tensor(result)])
 }
