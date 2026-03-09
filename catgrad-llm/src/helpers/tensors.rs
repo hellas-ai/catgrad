@@ -200,13 +200,13 @@ pub fn embeddings(builder: &Builder, p: Path, x: Var) -> Var {
 }
 
 // Select values from `x` where `mask` is 1, otherwise from `y`.
-pub fn where_cond(builder: &Builder, mask: Var, x: Var, y: Var) -> Var {
+// Wrap the where_cond op but broadcast and cast the mask to match `x`'s dtype.
+pub fn where_broadcast(builder: &Builder, mask: Var, x: Var, y: Var) -> Var {
     let sh = shape(builder, x.clone());
     let x_dtype = dtype(builder, x.clone());
-    let mask = broadcast(builder, sh.clone(), mask);
+    let mask = broadcast(builder, sh, mask);
     let mask = cast(builder, mask, x_dtype);
-    let one = constant(builder, 1.0, &sh);
-    x * mask.clone() + y * (one - mask)
+    where_cond(builder, mask, x, y)
 }
 
 // Fill `x` with `fill` where `mask` is 1, otherwise leave `x` unchanged.

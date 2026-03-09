@@ -49,6 +49,7 @@ pub trait Backend: Clone + Debug {
     fn gte(&self, lhs: TaggedTensorTuple<Self, 2>) -> TaggedTensor<Self>;
     fn lte(&self, lhs: TaggedTensorTuple<Self, 2>) -> TaggedTensor<Self>;
     fn eq(&self, lhs: TaggedTensorTuple<Self, 2>) -> TaggedTensor<Self>;
+    fn where_cond(&self, args: TaggedTensorTuple<Self, 3>) -> TaggedTensor<Self>;
     fn sin(&self, x: TaggedTensor<Self>) -> TaggedTensor<Self>;
     fn cos(&self, x: TaggedTensor<Self>) -> TaggedTensor<Self>;
     fn log(&self, x: TaggedTensor<Self>) -> TaggedTensor<Self>;

@@ -362,7 +362,7 @@ impl Lfm2Model {
         // HF decode writes a single-token `Bx` into the selected cache slot.
         let bx_decode = slice(builder, 2, 0, 1, bx);
         let bx_decode = broadcast(builder, sh_state, bx_decode);
-        let out_linear_state_decode = where_cond(builder, one_hot, bx_decode, rolled_state);
+        let out_linear_state_decode = where_broadcast(builder, one_hot, bx_decode, rolled_state);
 
         // HF decode:
         // `conv_out = torch.sum(conv_state * self.conv.weight[:, 0, :], dim=-1).unsqueeze(-1)`
@@ -378,13 +378,13 @@ impl Lfm2Model {
 
         // HF branch condition: `if cache_position[0] > 0: ... else: ...`
         let is_decode = gt(builder, nat_to_u32(builder, pos), zero_pos);
-        let conv_out = where_cond(
+        let conv_out = where_broadcast(
             builder,
             is_decode.clone(),
             conv_out_decode,
             conv_out_prefill,
         );
-        let out_linear_state = where_cond(
+        let out_linear_state = where_broadcast(
             builder,
             is_decode,
             out_linear_state_decode,

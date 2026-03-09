@@ -218,6 +218,14 @@ impl Backend for CandleBackend {
         }
     }
 
+    fn where_cond(&self, args: TaggedTensorTuple<Self, 3>) -> TaggedTensor<Self> {
+        use TaggedTensorTuple::*;
+        match args {
+            F32([mask, x, y]) => F32([Self::where_cond(mask, x, y)]),
+            U32([mask, x, y]) => U32([Self::where_cond(mask, x, y)]),
+        }
+    }
+
     fn pow(&self, lhs: TaggedTensorTuple<Self, 2>) -> TaggedTensor<Self> {
         use TaggedTensorTuple::*;
         match lhs {
@@ -526,6 +534,16 @@ impl CandleBackend {
         }
 
         CandleTensor((x.0.eq(&y.0)).unwrap())
+    }
+
+    fn where_cond(mask: CandleTensor, x: CandleTensor, y: CandleTensor) -> CandleTensor {
+        let mask = match mask.0.dtype() {
+            DType::F32 => mask.0.gt(0.).unwrap(),
+            DType::U32 => mask.0.ne(0u32).unwrap(),
+            _ => mask.0, // already U8 (boolean) or other type
+        };
+
+        CandleTensor(mask.where_cond(&x.0, &y.0).unwrap())
     }
 
     fn neg(x: CandleTensor) -> CandleTensor {
