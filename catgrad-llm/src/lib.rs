@@ -10,5 +10,5 @@ pub mod types;
 pub mod utils;
 
 pub use error::LLMError;
-pub use helpers::{Detokenizer, PreparedPrompt, detokenize_tokens};
+pub use utils::{Detokenizer, PreparedPrompt, detokenize_tokens};
 pub type Result<T, E = error::LLMError> = std::result::Result<T, E>;
