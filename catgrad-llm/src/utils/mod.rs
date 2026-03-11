@@ -14,6 +14,11 @@ use crate::helpers::{LLMModel, WeightPostProcess};
 use crate::models;
 use crate::{LLMError, Result};
 
+mod detokenize;
+pub use detokenize::{Detokenizer, detokenize_tokens};
+mod prompt;
+pub use prompt::PreparedPrompt;
+
 fn build_hf_api() -> Result<hf_hub::api::sync::Api> {
     let mut builder = ApiBuilder::from_env();
     let env_token = std::env::var("HF_TOKEN")
