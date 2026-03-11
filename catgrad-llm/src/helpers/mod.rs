@@ -1,4 +1,8 @@
+mod detokenize;
+mod prompt;
 mod tensors;
+pub use detokenize::{Detokenizer, detokenize_tokens};
+pub use prompt::PreparedPrompt;
 pub use tensors::*;
 
 use crate::config::{LLMConfig, Llama3RopeScaling, RopeScaling, YarnRopeScaling};

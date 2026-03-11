@@ -1,33 +1,20 @@
-use catgrad_llm::run::*;
-use catgrad_llm::serve::*;
+use catgrad_llm::run::ModelEngine;
+use catgrad_llm::types::Message;
+use catgrad_llm::types::openai::ChatMessage;
 use std::io::Write;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // The Loader trait splits models into the core "tensor" loop (Runner) and decoding/chatML
-    // formatting (Tokenizer).
-    let loader = ModelLoader::new("Qwen/Qwen3-0.6B", true).unwrap();
-    let mut runner = loader.load_runner()?;
-    let tokenizer = loader.load_tokenizer()?;
+    let engine = ModelEngine::new("Qwen/Qwen3-0.6B", true)?;
 
     // Make some message context
-    let system_message = Message {
-        role: "system".to_string(),
-        content: "You are a helpful chat assistant".to_string(),
-    };
-
-    let user_message = Message {
-        role: "user".to_string(),
-        content: "What is 2+2?".to_string(),
-    };
-    let messages = vec![system_message.clone(), user_message];
-
-    // Use runner to generate new tokens after given context.
-    // This handles ChatML transparently via tokenizer.encode_messages
-    let context = tokenizer.encode_messages(messages)?;
-    for token in runner.complete(context) {
-        print!("{}", tokenizer.decode(vec![token])?);
+    let system_message = Message::openai(ChatMessage::system("You are a helpful chat assistant"));
+    let user_message = Message::openai(ChatMessage::user("What is 2+2?"));
+    let prompt = engine.prepare_messages(&[system_message.clone(), user_message])?;
+    engine.generate_from_prepared(&prompt, 128, |delta| {
+        print!("{delta}");
         let _ = std::io::stdout().flush();
-    }
+        Ok(())
+    })?;
 
     ////////////////////////////////////////////////////////////////////////////
     // Change user_message to modify context history
@@ -35,19 +22,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("\nresetting context...");
 
     // Change the context history and
-    let user_message = Message {
-        role: "user".to_string(),
-        content: "What is 4+4?".to_string(),
-    };
-    let messages = vec![system_message, user_message];
-
-    // Use runner to generate new tokens after given context.
-    // This handles ChatML transparently via tokenizer.encode_messages
-    let context = tokenizer.encode_messages(messages)?;
-    for token in runner.complete(context) {
-        print!("{}", tokenizer.decode(vec![token])?);
+    let user_message = Message::openai(ChatMessage::user("What is 4+4?"));
+    let prompt = engine.prepare_messages(&[system_message, user_message])?;
+    engine.generate_from_prepared(&prompt, 128, |delta| {
+        print!("{delta}");
         let _ = std::io::stdout().flush();
-    }
+        Ok(())
+    })?;
 
     Ok(())
 }
