@@ -356,7 +356,7 @@ pub trait IntoDtypeVar {
 
 impl IntoDtypeVar for crate::category::core::Dtype {
     fn to_dtype(&self, builder: &Builder) -> Var {
-        dtype_constant(builder, crate::category::core::Dtype::F32)
+        dtype_constant(builder, self.clone())
     }
 }
 
