@@ -102,6 +102,8 @@ fn to_statements(ssa: &SSA<Type, lang::Operation>) -> Vec<grammar::Statement> {
         lang::Operation::Literal(lit) => literal_to_statements(ssa.edge_id, lit, result),
         // Do not emit probes
         lang::Operation::Probe(_label) => vec![],
+
+        lang::Operation::If(_, _) => todo!("If op not supported in MLIR yet"),
     });
 
     statements

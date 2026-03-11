@@ -62,6 +62,14 @@ pub trait Interpreter: Clone + Debug {
     // TODO: rename handle_tensor_op
     fn tensor_op(&self, ssa: &CoreSSA, args: Vec<Value<Self>>, op: &TensorOp)
     -> ResultValues<Self>;
+
+    fn handle_if(
+        &self,
+        ssa: &CoreSSA,
+        args: Vec<Value<Self>>,
+        then_branch: &core::Term,
+        else_branch: &core::Term,
+    ) -> ResultValues<Self>;
 }
 
 /// Tagged value types for a given [`Interpreter`] type

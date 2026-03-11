@@ -102,6 +102,14 @@ impl Backend for NdArrayBackend {
         self.cast(result, Dtype::U32)
     }
 
+    fn to_bool(&self, x: TaggedTensor<Self>) -> bool {
+        match x {
+            TaggedTensor::F32([TaggedArrayD::F32(arr)]) => arr.iter().any(|&v| v > 0.0),
+            TaggedTensor::U32([TaggedArrayD::U32(arr)]) => arr.iter().any(|&v| v != 0),
+            _ => unreachable!(),
+        }
+    }
+
     fn cast(&self, x: TaggedTensor<Self>, target_dtype: Dtype) -> TaggedTensor<Self> {
         match (x, target_dtype) {
             (TaggedTensor::F32([arr]), Dtype::U32) => {

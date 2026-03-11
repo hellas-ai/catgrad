@@ -1,10 +1,10 @@
 use super::Parameters;
 use super::value_types::*;
 
-use crate::category::{core, core::TensorOp, lang};
+use crate::category::{core, lang};
 use crate::{
     abstract_interpreter,
-    abstract_interpreter::{CoreSSA, eval},
+    abstract_interpreter::{CoreSSA, InterpreterError, eval},
 };
 
 use crate::pass::to_core::Environment;
@@ -119,8 +119,35 @@ impl abstract_interpreter::Interpreter for Interpreter {
         &self,
         ssa: &CoreSSA,
         args: Vec<Value>,
-        op: &TensorOp,
+        op: &core::TensorOp,
     ) -> abstract_interpreter::ResultValues<Self> {
         tensor_op(ssa, args, op)
+    }
+
+    fn handle_if(
+        &self,
+        ssa: &CoreSSA,
+        args: Vec<Value>,
+        then_branch: &core::Term,
+        else_branch: &core::Term,
+    ) -> abstract_interpreter::ResultValues<Self> {
+        let (_cond, branch_args) = args
+            .split_first()
+            .ok_or(InterpreterError::ArityError(ssa.edge_id))?;
+
+        // check both branches
+        let branch_args_vec: Vec<Value> = branch_args.to_vec();
+        let then_res = self.check_with(then_branch.clone(), branch_args_vec.clone())?;
+        let else_res = self.check_with(else_branch.clone(), branch_args_vec)?;
+
+        // normalize and compare
+        let then_norm: Vec<_> = then_res.into_iter().map(normalize).collect();
+        let else_norm: Vec<_> = else_res.into_iter().map(normalize).collect();
+
+        if then_norm == else_norm {
+            Ok(then_norm)
+        } else {
+            Err(InterpreterError::TypeError(ssa.edge_id))
+        }
     }
 }

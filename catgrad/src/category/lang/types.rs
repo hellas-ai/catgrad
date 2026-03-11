@@ -33,6 +33,9 @@ pub enum Operation {
 
     /// Debug probe with a user label.
     Probe(String),
+
+    /// Control flow
+    If(Box<Term>, Box<Term>),
 }
 
 pub type Term = OpenHypergraph<Object, Operation>;
@@ -72,6 +75,7 @@ impl fmt::Display for Operation {
             Operation::Definition(path) => write!(f, "{path}"),
             Operation::Literal(literal) => write!(f, "{literal}"),
             Operation::Probe(label) => write!(f, "probe({label})"),
+            Operation::If(_, _) => write!(f, "if(...)"),
         }
     }
 }
