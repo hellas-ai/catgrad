@@ -128,9 +128,10 @@ pub fn rope_tables_llama3(
 
 fn rope_yarn_get_mscale(scale: f32, mscale: f32) -> f32 {
     if scale <= 1.0 {
-        return 1.0;
+        1.0
+    } else {
+        0.1 * mscale * scale.ln() + 1.0
     }
-    0.1 * mscale * scale.ln() + 1.0
 }
 
 fn find_correction_dim(

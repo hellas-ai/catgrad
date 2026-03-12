@@ -8,7 +8,7 @@ use serde::Deserialize;
 
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct Qwen3_5Config {
-    pub text_config: Qwen3_5TextConfig,
+    text_config: Qwen3_5TextConfig,
     pub vision_config: Qwen3_5VisionConfig,
 }
 
@@ -30,27 +30,27 @@ pub struct Qwen3_5RopeParameters {
 
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
-pub struct Qwen3_5TextConfig {
-    pub hidden_size: usize,
-    pub intermediate_size: usize,
-    pub num_hidden_layers: usize,
-    pub num_attention_heads: usize,
-    pub num_key_value_heads: usize,
-    pub head_dim: usize,
+struct Qwen3_5TextConfig {
+    hidden_size: usize,
+    intermediate_size: usize,
+    num_hidden_layers: usize,
+    num_attention_heads: usize,
+    num_key_value_heads: usize,
+    head_dim: usize,
     #[serde(default = "default_full_attention_interval")]
-    pub full_attention_interval: usize,
-    pub layer_types: Vec<String>,
-    pub linear_conv_kernel_dim: usize,
-    pub linear_key_head_dim: usize,
-    pub linear_num_key_heads: usize,
-    pub linear_num_value_heads: usize,
-    pub linear_value_head_dim: usize,
+    full_attention_interval: usize,
+    layer_types: Vec<String>,
+    linear_conv_kernel_dim: usize,
+    linear_key_head_dim: usize,
+    linear_num_key_heads: usize,
+    linear_value_head_dim: usize,
+    linear_num_value_heads: usize,
     #[serde(default)]
-    pub rope_parameters: Qwen3_5RopeParameters,
-    pub rms_norm_eps: f32,
-    pub tie_word_embeddings: bool,
-    pub eos_token_id: Option<EosTokenId>,
-    pub vocab_size: usize,
+    rope_parameters: Qwen3_5RopeParameters,
+    rms_norm_eps: f32,
+    tie_word_embeddings: bool,
+    eos_token_id: Option<EosTokenId>,
+    vocab_size: usize,
 }
 
 impl Qwen3_5TextConfig {
