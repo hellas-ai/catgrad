@@ -244,37 +244,6 @@ impl Lfm2Model {
         linear_no_bias(builder, dim, dim, p.extend(["out_proj"]).unwrap(), attn)
     }
 
-    fn depthwise_conv1d(&self, builder: &Builder, p: &Path, x_padded: Var, s: Var) -> Var {
-        let k = self.config.conv_l_cache;
-
-        let conv_weight = param(builder, &p.extend(["conv", "weight"]).unwrap());
-        let conv_weight = squeeze::<3, 2>(builder, 1, conv_weight);
-
-        let mut conv_out: Option<Var> = None;
-        for offset in 0..k {
-            let x_slice = slice(builder, 2, offset, s.clone(), x_padded.clone());
-            let w_slice = slice(builder, 1, offset, 1, conv_weight.clone());
-            let w_slice = unsqueeze::<2, 3>(builder, 0, w_slice);
-            let w_slice = broadcast(builder, shape(builder, x_slice.clone()), w_slice);
-            let term = x_slice * w_slice;
-            conv_out = Some(match conv_out {
-                Some(acc) => acc + term,
-                None => term,
-            });
-        }
-        let mut conv_out = conv_out.expect("conv_l_cache must be positive");
-
-        if self.config.conv_bias {
-            let conv_bias = param(builder, &p.extend(["conv", "bias"]).unwrap());
-            let conv_bias = unsqueeze::<1, 2>(builder, 0, conv_bias);
-            let conv_bias = unsqueeze::<2, 3>(builder, 2, conv_bias);
-            let conv_bias = broadcast(builder, shape(builder, conv_out.clone()), conv_bias);
-            conv_out = conv_out + conv_bias;
-        }
-
-        conv_out
-    }
-
     fn short_conv(
         &self,
         builder: &Builder,
@@ -326,7 +295,7 @@ impl Lfm2Model {
             builder,
             is_decode,
             |b, args: Vec<Var>| {
-                let [bx, s, batch_size, hidden_dim, conv_state, pos_clamped_u32] =
+                let [bx, s, _batch_size, _hidden_dim, conv_state, pos_clamped_u32] =
                     args.try_into().unwrap();
 
                 // `conv_state = conv_state.roll(shifts=-1, dims=-1)`
@@ -349,11 +318,14 @@ impl Lfm2Model {
                 let bx_decode = broadcast(b, sh_state, bx_decode);
                 let out_linear_state_decode = where_broadcast(b, one_hot, bx_decode, rolled_state);
 
-                // `conv_out = torch.sum(conv_state * self.conv.weight[:, 0, :], dim=-1).unsqueeze(-1)`
-                let zeros_decode_tail = zeros(b, shape!(b, batch_size, hidden_dim, s));
-                let x_padded_decode =
-                    concat(b, 2, out_linear_state_decode.clone(), zeros_decode_tail);
-                let conv_out_decode = self.depthwise_conv1d(b, &p, x_padded_decode, s);
+                // Use the helper for decoding: pass out_linear_state_decode with 0 padding.
+                let conv_out_decode = padded_depthwise_conv1d_no_bias(
+                    b,
+                    p.extend(["conv"]).unwrap(),
+                    cache_len,
+                    out_linear_state_decode.clone(),
+                    s,
+                );
 
                 vec![conv_out_decode, out_linear_state_decode]
             },
@@ -361,14 +333,17 @@ impl Lfm2Model {
                 let [bx, s, batch_size, hidden_dim, _conv_state, _pos_clamped_u32] =
                     args.try_into().unwrap();
 
-                // `conv_out = self.conv(Bx)[..., :seqlen]`
-                let zeros_prefill_conv = zeros(b, shape!(b, batch_size, hidden_dim, cache_len - 1));
-                let x_padded_prefill_conv = concat(b, 2, zeros_prefill_conv, bx.clone());
-                let conv_out_prefill =
-                    self.depthwise_conv1d(b, &p, x_padded_prefill_conv, s.clone());
+                // Use the helper for prefill: pass bx with causal padding.
+                let conv_out_prefill = depthwise_conv1d_no_bias(
+                    b,
+                    p.extend(["conv"]).unwrap(),
+                    cache_len,
+                    bx.clone(),
+                    cache_len - 1,
+                );
 
                 // `conv_state = nn.functional.pad(Bx, (self.L_cache - Bx.shape[-1], 0))`
-                let zeros_prefill_state = zeros(b, shape!(b, batch_size, hidden_dim, cache_len));
+                let zeros_prefill_state = zeros(b, &shape!(b, batch_size, hidden_dim, cache_len));
                 let x_padded_prefill_state = concat(b, 2, zeros_prefill_state, bx);
                 let out_linear_state_prefill = slice(b, 2, s, cache_len, x_padded_prefill_state);
 
