@@ -278,6 +278,6 @@ pub fn cumsum<const N: usize>(builder: &Builder, x: Var) -> Var {
     matmul(builder, x, lower)
 }
 
-pub fn zeros(builder: &Builder, shape: Var) -> Var {
-    constant(builder, 0.0, &shape)
+pub fn zeros(builder: &Builder, shape: &Var) -> Var {
+    constant(builder, 0.0, shape)
 }

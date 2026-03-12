@@ -1,4 +1,7 @@
+mod conv;
 mod tensors;
+
+pub use conv::*;
 pub use tensors::*;
 
 mod rope;
@@ -17,6 +20,7 @@ pub struct Cache {
     pub in_kv_cache: Vec<(Var, Var)>,
     pub out_kv_cache: Vec<(Var, Var)>,
     pub linear_state: Option<Vec<Var>>,
+    pub recurrent_state: Option<Vec<Var>>,
 }
 
 impl Cache {
@@ -69,6 +73,7 @@ impl Cache {
             in_kv_cache,
             out_kv_cache,
             linear_state: None,
+            recurrent_state: None,
         }
     }
 
