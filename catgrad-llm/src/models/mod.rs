@@ -9,4 +9,5 @@ pub mod mistral3;
 pub mod olmo;
 pub mod phi3;
 pub mod qwen3;
+pub mod qwen3_5;
 pub mod siglip;
