@@ -488,7 +488,7 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
         &args.image,
         config.vision_config.image_size,
         config.vision_config.patch_size,
-    );
+    )?;
 
     let image_tensor = interpreter::tensor(&backend, Shape(image_shape), image_data)
         .map_err(|e| anyhow::anyhow!("BackendError: {:?}", e))?;

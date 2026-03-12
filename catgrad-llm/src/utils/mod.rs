@@ -238,8 +238,8 @@ pub fn render_chat_template(
     let mut env = Environment::new();
     env.set_unknown_method_callback(unknown_method_callback);
     env.add_function("strftime_now", strftime_now);
-    env.add_template("chat", chat_template).unwrap();
-    let tmpl = env.get_template("chat").unwrap();
+    env.add_template("chat", chat_template)?;
+    let tmpl = env.get_template("chat")?;
     let messages = if has_image {
         let content = vec![
             context!(type => "text", text => prompt),
@@ -492,14 +492,18 @@ pub fn load_model_weights<B: interpreter::Backend>(
                     .map(|b| half::bf16::from_le_bytes(b.try_into().unwrap()).to_f32())
                     .collect(),
                 _ => {
-                    panic!("Unsupported dtype: {:?}", view.dtype());
+                    return Err(LLMError::UnsupportedDtype(format!("{:?}", view.dtype())));
                 }
             };
             total_params += data.len();
 
             let tensor = interpreter::tensor(backend, interpreter::Shape(shape.clone()), data)
-                .expect("failed to create tensor");
-            let key = path(name.split(".").collect()).expect("invalid param path");
+                .map_err(|err| {
+                    LLMError::InvalidModelConfig(format!("failed to create tensor {name}: {err:?}"))
+                })?;
+            let key = path(name.split(".").collect()).map_err(|err| {
+                LLMError::InvalidModelConfig(format!("invalid param path {name}: {}", err.0))
+            })?;
             data_map.insert(key.clone(), tensor);
 
             let vne = shape.into_iter().map(NatExpr::Constant).collect();
@@ -547,13 +551,14 @@ pub fn load_model<B: interpreter::Backend>(
 
 // Loads the image and returns flattened data + shape
 pub fn load_and_preprocess_image(
-    image_path: &PathBuf,
+    image_path: &Path,
     image_size: usize,
     patch_size: usize,
-) -> (Vec<f32>, Vec<usize>) {
+) -> Result<(Vec<f32>, Vec<usize>)> {
     let num_channels = 3;
 
-    let img = image::open(image_path).unwrap();
+    let img =
+        image::open(image_path).map_err(|err| LLMError::IoError(std::io::Error::other(err)))?;
     let resized_img = img.resize_to_fill(
         image_size as u32,
         image_size as u32,
@@ -575,10 +580,10 @@ pub fn load_and_preprocess_image(
             }
         }
     }
-    (
+    Ok((
         patches,
         vec![1, num_channels, aligned_image_size, aligned_image_size],
-    )
+    ))
 }
 
 #[allow(clippy::too_many_arguments)]

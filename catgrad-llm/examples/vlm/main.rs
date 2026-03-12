@@ -382,7 +382,7 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
         &args.image,
         config.vision_config.image_size,
         config.vision_config.patch_size,
-    );
+    )?;
 
     let cache_path =
         cache_path_for_embeddings(&args.model_name, args.image.to_str().unwrap(), &image_data);
