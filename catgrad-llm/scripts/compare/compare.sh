@@ -37,8 +37,12 @@ for model in "${MODELS[@]}"; do
 
     TYPECHECK="-t"
 
-    ./target/release/examples/llama -m "$model" -p 'Category theory is' -s 40 --raw -k $TYPECHECK > "$OUTPUT_DIR/$filename" 2>/dev/null
+    ./target/release/examples/llama -m "$model" -p 'Category theory is' -s 40 --raw -k $TYPECHECK > "$OUTPUT_DIR/$filename" 2>/dev/null &
+
+    [[ -z "${GITHUB_ACTIONS:-}" ]] || wait
 done
+
+wait
 
 echo "Comparing $OUTPUT_DIR with $REFERENCE_DIR..."
 
