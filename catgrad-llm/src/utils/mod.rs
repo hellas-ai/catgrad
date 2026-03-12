@@ -295,6 +295,10 @@ pub fn get_model(
             config_json,
             max_sequence_length,
         )?),
+        "Qwen3_5ForConditionalGeneration" => Box::new(models::qwen3_5::Qwen3_5Model::new(
+            config_json,
+            max_sequence_length,
+        )?),
         "GraniteForCausalLM" | "GraniteMoeForCausalLM" | "GraniteMoeHybridForCausalLM" => Box::new(
             models::granite::GraniteModel::new(config_json, max_sequence_length)?,
         ),
