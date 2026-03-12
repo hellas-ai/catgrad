@@ -310,37 +310,6 @@ impl Lfm2Model {
             .expect("lfm2 short_conv requires linear state")[linear_layer_id]
             .clone();
 
-        // HF prefill:
-        // `conv_out = self.conv(Bx)[..., :seqlen]`
-        let zeros_prefill_conv = constant(
-            builder,
-            0.0,
-            &shape!(builder, batch_size, hidden_dim, cache_len - 1),
-        );
-        let x_padded_prefill_conv = concat(builder, 2, zeros_prefill_conv, bx.clone());
-        let conv_out_prefill = self.depthwise_conv1d(builder, &p, x_padded_prefill_conv, s.clone());
-        // HF prefill:
-        // `conv_state = nn.functional.pad(Bx, (self.L_cache - Bx.shape[-1], 0))`
-        let zeros_prefill_state = constant(
-            builder,
-            0.0,
-            &shape!(builder, batch_size, hidden_dim, cache_len),
-        );
-        let x_padded_prefill_state = concat(builder, 2, zeros_prefill_state, bx.clone());
-        let out_linear_state_prefill =
-            slice(builder, 2, s.clone(), cache_len, x_padded_prefill_state);
-        // HF prefill cache write:
-        // `past_key_values.conv_cache[self.layer_idx].copy_(conv_state)`
-        // where `conv_state` is exactly the padded/truncated `Bx`.
-
-        // HF decode:
-        // `conv_state = conv_state.roll(shifts=-1, dims=-1)`
-        let rolled_state = {
-            let tail = slice(builder, 2, 1, cache_len - 1, conv_state.clone());
-            let head = slice(builder, 2, 0, 1, conv_state);
-            concat(builder, 2, tail, head)
-        };
-
         // HF: `cache_position = cache_position.clamp(0, self.L_cache - 1)`
         let sh_pos = shape(builder, nat_to_u32(builder, pos.clone()));
         let pos_u32 = nat_to_u32(builder, pos.clone());
@@ -350,46 +319,66 @@ impl Lfm2Model {
         let u32_dtype = dtype_constant(builder, Dtype::U32);
         let pos_clamped_u32 = cast(builder, pos_f32, u32_dtype);
 
-        // HF equivalent of indexing at `cache_position`: build one-hot over cache axis.
-        // `conv_state[:, :, cache_position] = Bx`
-        let sh_k = shape!(builder, cache_len.to_nat(builder));
-        let positions = arange(builder, cache_len);
-        let pos_vec = broadcast(builder, sh_k, pos_clamped_u32);
-        let one_hot = eq(builder, positions, pos_vec);
-
-        let sh_state = shape(builder, rolled_state.clone());
-
-        // HF decode writes a single-token `Bx` into the selected cache slot.
-        let bx_decode = slice(builder, 2, 0, 1, bx);
-        let bx_decode = broadcast(builder, sh_state, bx_decode);
-        let out_linear_state_decode = where_broadcast(builder, one_hot, bx_decode, rolled_state);
-
-        // HF decode:
-        // `conv_out = torch.sum(conv_state * self.conv.weight[:, 0, :], dim=-1).unsqueeze(-1)`
-        // Build a padded decode input with output length `s` so both branches have identical shape.
-        let zeros_decode_tail = constant(builder, 0.0, &shape!(builder, batch_size, hidden_dim, s));
-        let x_padded_decode = concat(
-            builder,
-            2,
-            out_linear_state_decode.clone(),
-            zeros_decode_tail,
-        );
-        let conv_out_decode = self.depthwise_conv1d(builder, &p, x_padded_decode, s);
-
-        // HF branch condition: `if cache_position[0] > 0: ... else: ...`
+        // HF `if cache_position[0] > 0: ... else: ...`
         let is_decode = gt(builder, nat_to_u32(builder, pos), zero_pos);
-        let conv_out = where_broadcast(
-            builder,
-            is_decode.clone(),
-            conv_out_decode,
-            conv_out_prefill,
-        );
-        let out_linear_state = where_broadcast(
+
+        let results = cond(
             builder,
             is_decode,
-            out_linear_state_decode,
-            out_linear_state_prefill,
+            |b, args: Vec<Var>| {
+                let [bx, s, batch_size, hidden_dim, conv_state, pos_clamped_u32] =
+                    args.try_into().unwrap();
+
+                // `conv_state = conv_state.roll(shifts=-1, dims=-1)`
+                let rolled_state = {
+                    let tail = slice(b, 2, 1, cache_len - 1, conv_state.clone());
+                    let head = slice(b, 2, 0, 1, conv_state);
+                    concat(b, 2, tail, head)
+                };
+
+                // HF equivalent of indexing at `cache_position`: build one-hot over cache axis.
+                // `conv_state[:, :, cache_position] = Bx`
+                let sh_k = shape!(b, cache_len);
+                let positions = arange(b, cache_len);
+                let pos_vec = broadcast(b, sh_k, pos_clamped_u32);
+                let one_hot = eq(b, positions, pos_vec);
+
+                let sh_state = shape(b, rolled_state.clone());
+
+                let bx_decode = slice(b, 2, 0, 1, bx);
+                let bx_decode = broadcast(b, sh_state, bx_decode);
+                let out_linear_state_decode = where_broadcast(b, one_hot, bx_decode, rolled_state);
+
+                // `conv_out = torch.sum(conv_state * self.conv.weight[:, 0, :], dim=-1).unsqueeze(-1)`
+                let zeros_decode_tail = zeros(b, shape!(b, batch_size, hidden_dim, s));
+                let x_padded_decode =
+                    concat(b, 2, out_linear_state_decode.clone(), zeros_decode_tail);
+                let conv_out_decode = self.depthwise_conv1d(b, &p, x_padded_decode, s);
+
+                vec![conv_out_decode, out_linear_state_decode]
+            },
+            |b, args: Vec<Var>| {
+                let [bx, s, batch_size, hidden_dim, _conv_state, _pos_clamped_u32] =
+                    args.try_into().unwrap();
+
+                // `conv_out = self.conv(Bx)[..., :seqlen]`
+                let zeros_prefill_conv = zeros(b, shape!(b, batch_size, hidden_dim, cache_len - 1));
+                let x_padded_prefill_conv = concat(b, 2, zeros_prefill_conv, bx.clone());
+                let conv_out_prefill =
+                    self.depthwise_conv1d(b, &p, x_padded_prefill_conv, s.clone());
+
+                // `conv_state = nn.functional.pad(Bx, (self.L_cache - Bx.shape[-1], 0))`
+                let zeros_prefill_state = zeros(b, shape!(b, batch_size, hidden_dim, cache_len));
+                let x_padded_prefill_state = concat(b, 2, zeros_prefill_state, bx);
+                let out_linear_state_prefill = slice(b, 2, s, cache_len, x_padded_prefill_state);
+
+                vec![conv_out_prefill, out_linear_state_prefill]
+            },
+            vec![bx, s, batch_size, hidden_dim, conv_state, pos_clamped_u32],
         );
+
+        let conv_out = results[0].clone();
+        let out_linear_state = results[1].clone();
 
         cache
             .linear_state
@@ -397,7 +386,6 @@ impl Lfm2Model {
             .expect("lfm2 short_conv requires mutable linear state")[linear_layer_id] =
             out_linear_state;
 
-        // HF: `y = C * conv_out; y = y.transpose(-1, -2).contiguous(); y = self.out_proj(y)`
         let y = c * conv_out;
         let y = transpose(builder, 1, 2, y);
 

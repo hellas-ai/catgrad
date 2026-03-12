@@ -213,6 +213,10 @@ impl Backend for ShapeOnlyBackend {
         U32([ShapeOnly(Shape(vec![end]))])
     }
 
+    fn to_bool(&self, _x: TaggedTensor<Self>) -> bool {
+        true
+    }
+
     fn concat(
         &self,
         x: TaggedTensor<Self>,

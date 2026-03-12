@@ -365,3 +365,56 @@ impl IntoDtypeVar for Var {
         self.clone()
     }
 }
+
+pub fn cond<F1, F2>(
+    builder: &Builder,
+    condition: Var,
+    then_fn: F1,
+    else_fn: F2,
+    args: Vec<Var>,
+) -> Vec<Var>
+where
+    F1: Fn(&Builder, Vec<Var>) -> Vec<Var>,
+    F2: Fn(&Builder, Vec<Var>) -> Vec<Var>,
+{
+    let sorts: Vec<Object> = args.iter().map(|v| v.label.clone()).collect();
+
+    let then_term = var::build(|b| {
+        let inner_args: Vec<Var> = sorts
+            .iter()
+            .cloned()
+            .map(|o| Var::new(b.clone(), o))
+            .collect();
+        let sources = inner_args.clone();
+        let targets = then_fn(b, inner_args);
+        (sources, targets)
+    })
+    .expect("failed to build then branch");
+
+    let else_term = var::build(|b| {
+        let inner_args: Vec<Var> = sorts
+            .iter()
+            .cloned()
+            .map(|o| Var::new(b.clone(), o))
+            .collect();
+        let sources = inner_args.clone();
+        let targets = else_fn(b, inner_args);
+        (sources, targets)
+    })
+    .expect("failed to build else branch");
+
+    // The operation inputs are [condition, ...args]
+    let mut inputs = vec![condition];
+    inputs.extend(args);
+
+    // Output sorts are inferred from the then_term (assuming else_term matches)
+    use open_hypergraphs::category::Arrow;
+    let output_sorts = then_term.target();
+
+    var::operation(
+        builder,
+        &inputs,
+        output_sorts,
+        Operation::If(Box::new(then_term), Box::new(else_term)),
+    )
+}

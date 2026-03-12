@@ -4,9 +4,9 @@ use crate::prelude::{Builder, Var};
 
 // re-export lang ops
 pub use ops::{
-    arange, argmax, broadcast, cast, concat, cos, dtype, dtype_constant, eq, floor, gt, gte, index,
-    log, lt, lte, matmul, max, nat, nat_to_u32, pack, param, pow, probe, reshape, shape, sin,
-    slice, sum, topk, transpose, unpack, where_cond,
+    arange, argmax, broadcast, cast, concat, cond, cos, dtype, dtype_constant, eq, floor, gt, gte,
+    index, log, lt, lte, matmul, max, nat, nat_to_u32, pack, param, pow, probe, reshape, shape,
+    sin, slice, sum, topk, transpose, unpack, where_cond,
 };
 
 pub fn get(builder: &Builder, dim: impl IntoNatVar, start: impl IntoNatVar, x: Var) -> Var {

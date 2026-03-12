@@ -84,6 +84,8 @@ pub trait Backend: Clone + Debug {
     ) -> TaggedTensor<Self>;
     fn arange(&self, end: usize) -> TaggedTensor<Self>;
 
+    fn to_bool(&self, x: TaggedTensor<Self>) -> bool;
+
     fn to_vec(&self, vec: TaggedTensor<Self>) -> TaggedVec;
 
     fn format_tensor(&self, tensor: &TaggedTensor<Self>) -> String {

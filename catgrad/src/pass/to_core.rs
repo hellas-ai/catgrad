@@ -66,6 +66,10 @@ fn op_to_core(
         lang::Operation::Probe(label) => {
             Def::Arr(core::Operation::Tensor(core::TensorOp::Probe(label)))
         }
+        lang::Operation::If(then_branch, else_branch) => Def::Arr(core::Operation::If(
+            Box::new(to_core(*then_branch, core_ops)),
+            Box::new(to_core(*else_branch, core_ops)),
+        )),
     }
 }
 

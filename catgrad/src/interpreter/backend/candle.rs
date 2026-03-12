@@ -338,6 +338,27 @@ impl Backend for CandleBackend {
         U32([CandleTensor(r)])
     }
 
+    fn to_bool(&self, x: TaggedTensor<Self>) -> bool {
+        match x {
+            TaggedTensor::F32([x]) => {
+                x.0.gt(0.0)
+                    .ok()
+                    .and_then(|t| t.max_all().ok())
+                    .and_then(|m| m.to_scalar::<u8>().ok())
+                    .map(|s| s == 1)
+                    .unwrap_or(false)
+            }
+            TaggedTensor::U32([x]) => {
+                x.0.ne(0u32)
+                    .ok()
+                    .and_then(|t| t.max_all().ok())
+                    .and_then(|m| m.to_scalar::<u8>().ok())
+                    .map(|s| s == 1)
+                    .unwrap_or(false)
+            }
+        }
+    }
+
     fn index(
         &self,
         x: TaggedTensor<Self>,

@@ -7,7 +7,7 @@ use crate::category::{core, lang};
 use crate::pass::to_core::Environment;
 use crate::{
     abstract_interpreter,
-    abstract_interpreter::{CoreSSA, eval},
+    abstract_interpreter::{CoreSSA, InterpreterError, eval},
 };
 
 #[derive(Clone, std::fmt::Debug)]
@@ -80,5 +80,29 @@ impl<B: Backend> abstract_interpreter::Interpreter for Interpreter<B> {
         op: &TensorOp,
     ) -> abstract_interpreter::ResultValues<Self> {
         tensor_op(&self.backend, ssa, args, op)
+    }
+
+    fn handle_if(
+        &self,
+        ssa: &CoreSSA,
+        args: Vec<Value<B>>,
+        then_branch: &core::Term,
+        else_branch: &core::Term,
+    ) -> abstract_interpreter::ResultValues<Self> {
+        let (cond_val, branch_args) = args
+            .split_first()
+            .ok_or(InterpreterError::ArityError(ssa.edge_id))?;
+        let cond_tensor = match cond_val {
+            Value::Tensor(t) => t.clone(),
+            _ => return Err(InterpreterError::TypeError(ssa.edge_id)),
+        };
+
+        let branch_args_vec: Vec<Value<B>> = branch_args.to_vec();
+
+        if self.backend.to_bool(cond_tensor) {
+            self.eval(then_branch.clone(), branch_args_vec)
+        } else {
+            self.eval(else_branch.clone(), branch_args_vec)
+        }
     }
 }

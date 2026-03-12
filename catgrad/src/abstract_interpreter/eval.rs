@@ -88,6 +88,9 @@ fn apply_op<I: Interpreter>(
         Operation::DtypeConstant(dtype) => Ok(vec![Value::Dtype(I::dtype_constant(dtype.clone()))]),
         Operation::Tensor(tensor_op) => interpreter.tensor_op(ssa, args, tensor_op),
         Operation::Copy => apply_copy(ssa, args),
+        Operation::If(then_branch, else_branch) => {
+            interpreter.handle_if(ssa, args, then_branch, else_branch)
+        }
         Operation::Load(path) => interpreter
             .handle_load(ssa, path)
             .ok_or(InterpreterError::Load(ssa.edge_id, path.clone())),

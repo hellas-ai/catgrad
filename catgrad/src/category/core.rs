@@ -98,6 +98,7 @@ pub enum Operation {
     Nat(NatOp),
     DtypeConstant(Dtype),
     Tensor(TensorOp),
+    If(Box<Term>, Box<Term>),
     Copy,
 
     /// Load a tensor from the environment.

@@ -10,6 +10,7 @@
 
 /// A set of operations Arr extended with some additional operations in the set K.
 /// `Def<K, Arr> ~= Σ₁ + K`
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, PartialEq, Debug)]
 pub enum Def<K, Arr> {
     Def(K),
