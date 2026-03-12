@@ -10,6 +10,9 @@ pub use rope::*;
 mod module;
 pub use module::*;
 
+#[cfg(test)]
+mod tests;
+
 use crate::config::{LLMConfig, RopeScaling};
 use catgrad::prelude::ops::*;
 use catgrad::prelude::*;
