@@ -114,20 +114,31 @@ pub fn rmsnorm_gemma<const N: usize>(builder: &Builder, eps: f32, p: Path, x: Va
     lr * (gamma + one)
 }
 
-pub fn repeat_kv(builder: &Builder, rep: usize, x: Var) -> Var {
+// Repeat elements along a dimension
+// for now fixed rank (4) suitable for repeat_kv(), may need a more generic version
+pub fn repeat_interleave(builder: &Builder, dim: usize, rep: usize, x: Var) -> Var {
+    // insert a new dimension at `dim`
+    let x = unsqueeze::<4, 5>(builder, dim + 1, x);
+
+    // change the new dim to rep and broadcast along it
     let shape = shape(builder, x.clone());
-    let [b, num_kv_heads, s, head_dim] = unpack::<4>(builder, shape);
+    let mut sh = unpack::<5>(builder, shape).to_vec();
+    sh[dim + 1] = rep.to_nat(builder);
+    let orig_size = sh[dim].clone();
+    let shape = pack::<5>(builder, sh.clone().try_into().unwrap());
 
-    let sh = shape!(builder, b, num_kv_heads, 1, s, head_dim);
-    // equivalent of torch.repeat_interleave across dim 1
-    let x = reshape(builder, sh, x);
-    let sh = shape!(builder, b, num_kv_heads, rep, s, head_dim);
+    let x = broadcast(builder, shape, x);
 
-    let x = broadcast(builder, sh, x);
+    sh.remove(dim + 1);
+    sh[dim] = orig_size * rep.to_nat(builder);
 
-    let rnkv = num_kv_heads * rep.to_nat(builder);
-    let sh = shape!(builder, b, rnkv, s, head_dim);
+    // reshape to remove the extra dimension
+    let sh = pack::<4>(builder, sh.try_into().unwrap());
     reshape(builder, sh, x)
+}
+
+pub fn repeat_kv(builder: &Builder, rep: usize, x: Var) -> Var {
+    repeat_interleave(builder, 1, rep, x)
 }
 
 /// Average pooling over a square 2D grid.
