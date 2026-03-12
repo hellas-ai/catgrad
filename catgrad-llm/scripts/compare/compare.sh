@@ -6,6 +6,7 @@ MODELS=(
     "HuggingFaceTB/SmolLM2-135M-Instruct"
     "openai-community/gpt2"
     "Qwen/Qwen3-0.6B"
+    "Qwen/Qwen3.5-0.8B"
     "ibm-granite/granite-3.1-1b-a400m-instruct"
     "LiquidAI/LFM2-350M"
 )
