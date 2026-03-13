@@ -10,6 +10,9 @@ pub use rope::*;
 mod module;
 pub use module::*;
 
+mod deltanet;
+pub use deltanet::*;
+
 #[cfg(test)]
 mod tests;
 
