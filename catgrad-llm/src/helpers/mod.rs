@@ -25,8 +25,7 @@ pub struct Cache {
     pub sin: Var,
     pub in_kv_cache: Vec<(Var, Var)>,
     pub out_kv_cache: Vec<(Var, Var)>,
-    pub linear_state: Option<Vec<Var>>,
-    pub recurrent_state: Option<Vec<Var>>,
+    pub linear_cache: Option<Vec<Vec<Var>>>,
 }
 
 impl Cache {
@@ -78,8 +77,7 @@ impl Cache {
             sin,
             in_kv_cache,
             out_kv_cache,
-            linear_state: None,
-            recurrent_state: None,
+            linear_cache: None,
         }
     }
 

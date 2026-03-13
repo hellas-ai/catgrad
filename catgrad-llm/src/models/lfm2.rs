@@ -274,9 +274,9 @@ impl Lfm2Model {
         let linear_layer_id =
             self.layer_to_linear_id[layer_id].expect("short-conv layer missing linear state index");
         let conv_state = cache
-            .linear_state
+            .linear_cache
             .as_ref()
-            .expect("lfm2 short_conv requires linear state")[linear_layer_id]
+            .expect("lfm2 short_conv requires linear cache")[linear_layer_id][0]
             .clone();
 
         // HF: `cache_position = cache_position.clamp(0, self.L_cache - 1)`
@@ -356,9 +356,9 @@ impl Lfm2Model {
         let out_linear_state = results[1].clone();
 
         cache
-            .linear_state
+            .linear_cache
             .as_mut()
-            .expect("lfm2 short_conv requires mutable linear state")[linear_layer_id] =
+            .expect("lfm2 short_conv requires mutable linear cache")[linear_layer_id][0] =
             out_linear_state;
 
         let y = c * conv_out;
@@ -479,12 +479,13 @@ impl DynModule for Lfm2Model {
             in_v,
         );
 
-        // initialize linear state
-        cache.linear_state = Some(
+        // initialize linear cache (slot 0 = conv state)
+        cache.linear_cache = Some(
             (0..self.num_linear_layers)
                 .map(|layer_id| {
                     let layer = slice(builder, 0, layer_id, 1, in_conv.clone());
-                    squeeze::<4, 3>(builder, 0, layer)
+                    let conv_state = squeeze::<4, 3>(builder, 0, layer);
+                    vec![conv_state]
                 })
                 .collect(),
         );
@@ -525,17 +526,14 @@ impl DynModule for Lfm2Model {
         let (out_k, out_v) = cache.get_kv_cache(builder);
         let out_conv = {
             let states = cache
-                .linear_state
+                .linear_cache
                 .as_ref()
-                .expect("lfm2 cache missing output linear state");
+                .expect("lfm2 cache missing output linear cache");
             let mut iter = states.iter();
-            let first = iter
-                .next()
-                .expect("lfm2 cache linear state missing")
-                .clone();
+            let first = iter.next().expect("lfm2 cache linear cache missing")[0].clone();
             let mut out = unsqueeze::<3, 4>(builder, 0, first);
             for state in iter {
-                let state = unsqueeze::<3, 4>(builder, 0, state.clone());
+                let state = unsqueeze::<3, 4>(builder, 0, state[0].clone());
                 out = concat(builder, 0, out, state);
             }
             out

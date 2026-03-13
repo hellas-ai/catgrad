@@ -423,14 +423,14 @@ impl Qwen3_5Model {
         let linear_layer_id =
             self.layer_to_linear_id[layer_id].expect("linear-attention layer missing state index");
         let conv_state = cache
-            .linear_state
+            .linear_cache
             .as_ref()
-            .expect("qwen3_5 linear attention requires conv state")[linear_layer_id]
+            .expect("qwen3_5 linear attention requires linear cache")[linear_layer_id][0]
             .clone();
         let recurrent_state = cache
-            .recurrent_state
+            .linear_cache
             .as_ref()
-            .expect("qwen3_5 linear attention requires recurrent state")[linear_layer_id]
+            .expect("qwen3_5 linear attention requires linear cache")[linear_layer_id][1]
             .clone();
 
         let mixed_qkv = linear_no_bias(
@@ -492,9 +492,9 @@ impl Qwen3_5Model {
         let out_conv_state = results[1].clone();
 
         cache
-            .linear_state
+            .linear_cache
             .as_mut()
-            .expect("qwen3_5 linear attention requires mutable conv state")[linear_layer_id] =
+            .expect("qwen3_5 linear attention requires mutable linear cache")[linear_layer_id][0] =
             out_conv_state;
 
         let mixed_qkv = transpose(builder, 1, 2, mixed_qkv);
@@ -589,9 +589,9 @@ impl Qwen3_5Model {
         let out_recurrent_state = results[1].clone();
 
         cache
-            .recurrent_state
+            .linear_cache
             .as_mut()
-            .expect("qwen3_5 linear attention requires mutable recurrent state")[linear_layer_id] =
+            .expect("qwen3_5 linear attention requires mutable linear cache")[linear_layer_id][1] =
             out_recurrent_state;
 
         let flat = shape!(
@@ -692,19 +692,14 @@ impl DynModule for Qwen3_5Model {
             in_k.clone(),
             in_v,
         );
-        cache.linear_state = Some(
+        cache.linear_cache = Some(
             (0..self.num_linear_layers)
                 .map(|layer_id| {
-                    let layer = slice(builder, 0, layer_id, 1, in_conv.clone());
-                    squeeze::<4, 3>(builder, 0, layer)
-                })
-                .collect(),
-        );
-        cache.recurrent_state = Some(
-            (0..self.num_linear_layers)
-                .map(|layer_id| {
-                    let layer = slice(builder, 0, layer_id, 1, in_recurrent.clone());
-                    squeeze::<5, 4>(builder, 0, layer)
+                    let conv_layer = slice(builder, 0, layer_id, 1, in_conv.clone());
+                    let conv_state = squeeze::<4, 3>(builder, 0, conv_layer);
+                    let recurrent_layer = slice(builder, 0, layer_id, 1, in_recurrent.clone());
+                    let recurrent_state = squeeze::<5, 4>(builder, 0, recurrent_layer);
+                    vec![conv_state, recurrent_state]
                 })
                 .collect(),
         );
@@ -755,14 +750,14 @@ impl DynModule for Qwen3_5Model {
             in_conv
         } else {
             let states = cache
-                .linear_state
+                .linear_cache
                 .as_ref()
-                .expect("qwen3_5 cache missing conv state");
+                .expect("qwen3_5 cache missing linear cache");
             let mut iter = states.iter();
-            let first = iter.next().expect("qwen3_5 conv state missing").clone();
+            let first = iter.next().expect("qwen3_5 conv state missing")[0].clone();
             let mut out = unsqueeze::<3, 4>(builder, 0, first);
             for state in iter {
-                let state = unsqueeze::<3, 4>(builder, 0, state.clone());
+                let state = unsqueeze::<3, 4>(builder, 0, state[0].clone());
                 out = concat(builder, 0, out, state);
             }
             out
@@ -771,17 +766,14 @@ impl DynModule for Qwen3_5Model {
             in_recurrent
         } else {
             let states = cache
-                .recurrent_state
+                .linear_cache
                 .as_ref()
-                .expect("qwen3_5 cache missing recurrent state");
+                .expect("qwen3_5 cache missing linear cache");
             let mut iter = states.iter();
-            let first = iter
-                .next()
-                .expect("qwen3_5 recurrent state missing")
-                .clone();
+            let first = iter.next().expect("qwen3_5 recurrent state missing")[1].clone();
             let mut out = unsqueeze::<4, 5>(builder, 0, first);
             for state in iter {
-                let state = unsqueeze::<4, 5>(builder, 0, state.clone());
+                let state = unsqueeze::<4, 5>(builder, 0, state[1].clone());
                 out = concat(builder, 0, out, state);
             }
             out
