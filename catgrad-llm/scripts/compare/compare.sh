@@ -27,7 +27,26 @@ OUTPUT_DIR="$DIR/outputs"
 mkdir -p "$OUTPUT_DIR"
 rm -rf "$OUTPUT_DIR"/*
 
-echo "Generating outputs for ${#MODELS[@]} models..."
+MAXLEN="${CATGRAD_COMPARE_MAXLEN:-40}"
+
+echo "Generating outputs of ${MAXLEN} tokens for ${#MODELS[@]} models..."
+
+if [[ "${CATGRAD_COMPARE_HF_RUN:-}" ]]; then
+    REFERENCE_DIR=$DIR/expected/$MAXLEN
+    mkdir -p $REFERENCE_DIR
+
+    for model in "${MODELS[@]}"; do
+        # Replace slashes with dashes for the filename
+        filename="${model//\//-}"
+
+        echo "Running HF Transformers for $model -> $REFERENCE_DIR/$filename"
+
+        uv run catgrad-llm/scripts/llm.py -m "$model" -p 'Category theory is' -s $MAXLEN -r > "$REFERENCE_DIR/$filename" 2>/dev/null &
+    done
+
+    wait
+fi
+
 
 for model in "${MODELS[@]}"; do
     # Replace slashes with dashes for the filename
@@ -37,7 +56,7 @@ for model in "${MODELS[@]}"; do
 
     TYPECHECK="-t"
 
-    ./target/release/examples/llama -m "$model" -p 'Category theory is' -s 40 --raw -k $TYPECHECK > "$OUTPUT_DIR/$filename" 2>/dev/null &
+    ./target/release/examples/llama -m "$model" -p 'Category theory is' -s $MAXLEN --raw -k $TYPECHECK > "$OUTPUT_DIR/$filename" 2>/dev/null &
 
     [[ -z "${GITHUB_ACTIONS:-}" ]] || wait
 done
