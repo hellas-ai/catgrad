@@ -23,7 +23,7 @@ if __name__ == "__main__":
     parser.add_argument("--revision", type=str, default="main")
     parser.add_argument("-p", "--prompt", type=str, default="Category theory is")
     parser.add_argument("-s", "--seq-len", type=int, default=10)
-    parser.add_argument("-r", "--raw-prompt", action="store_true")
+    parser.add_argument("-r", "--raw", action="store_true")
     parser.add_argument("-t", "--thinking", action="store_true")
     parser.add_argument("--cache", dest="use_cache", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("-d", "--dtype", type=str, default="float32")
@@ -42,7 +42,7 @@ if __name__ == "__main__":
     print(f"Loaded model {args.model}, dtype:{model.dtype} on device {model.device}", file=sys.stderr)
     prompt = args.prompt
 
-    if not args.raw_prompt and tokenizer.chat_template is not None:
+    if not args.raw and tokenizer.chat_template is not None:
         chat = [
             {"role": "user", "content": prompt},
         ]
@@ -60,6 +60,6 @@ if __name__ == "__main__":
 
     inputs = tokenizer(prompt, return_token_type_ids=False, return_tensors="pt")
     logits = model.generate(**inputs, max_new_tokens=args.seq_len, do_sample=False, use_cache=args.use_cache)
-    output = tokenizer.decode(logits[0])
+    output = tokenizer.decode(logits[0], skip_special_tokens=True)
 
     print(output)
