@@ -287,10 +287,9 @@ pub fn get_model(
             config_json,
             max_sequence_length,
         )?),
-        "Olmo2ForCausalLM" | "Olmo3ForCausalLM" => Box::new(models::olmo::OlmoModel::new(
-            config_json,
-            max_sequence_length,
-        )?),
+        "Olmo2ForCausalLM" | "Olmo3ForCausalLM" | "OlmoHybridForCausalLM" => Box::new(
+            models::olmo::OlmoModel::new(config_json, max_sequence_length)?,
+        ),
         "Qwen3ForCausalLM" | "Qwen3MoeForCausalLM" => Box::new(models::qwen3::Qwen3Model::new(
             config_json,
             max_sequence_length,
