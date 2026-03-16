@@ -85,6 +85,73 @@ impl LlamaModel {
         })
     }
 
+    pub fn forward(&self, builder: &Builder, p: Path, x: Var, in_k: Var, in_v: Var) -> Vec<Var> {
+        let x = embeddings(builder, p.extend(["model", "embed_tokens"]).unwrap(), x);
+        let [_b, s, _] = unpack::<3>(builder, shape(builder, x.clone()));
+        let [_, _, _, pos, _] = unpack::<5>(builder, shape(builder, in_k.clone()));
+        let attention_mask = causal_mask(builder, s, pos);
+
+        self.forward_embeddings(builder, p, attention_mask, x, in_k, in_v)
+    }
+
+    pub fn forward_embeddings(
+        &self,
+        builder: &Builder,
+        p: Path,
+        attention_mask: Var,
+        x: Var,
+        in_k: Var,
+        in_v: Var,
+    ) -> Vec<Var> {
+        let mut cache = Cache::init(
+            builder,
+            &self.config,
+            self.max_sequence_length,
+            in_k.clone(),
+            in_v,
+        );
+        let [_, _, _, pos, _] = unpack::<5>(builder, shape(builder, in_k));
+
+        let mut x = x;
+
+        for i in 0..self.config.num_hidden_layers {
+            x = self.layer(
+                builder,
+                i,
+                attention_mask.clone(),
+                &mut cache,
+                pos.clone(),
+                p.extend(["model", "layers", &i.to_string()]).unwrap(),
+                x,
+            );
+        }
+
+        x = rmsnorm::<3>(
+            builder,
+            self.config.rms_norm_eps,
+            p.extend(["model", "norm"]).unwrap(),
+            x,
+        );
+
+        let lm_head_weights = if self.config.tie_word_embeddings {
+            vec!["model", "embed_tokens"]
+        } else {
+            vec!["lm_head"]
+        };
+
+        x = linear_no_bias(
+            builder,
+            self.config.hidden_size,
+            self.config.vocab_size,
+            p.extend(lm_head_weights).unwrap(),
+            x,
+        );
+
+        x = argmax(builder, x);
+        let (out_k, out_v) = cache.get_kv_cache(builder);
+        vec![x, out_k, out_v]
+    }
+
     fn mlp(&self, builder: &Builder, p: Path, x: Var) -> Var {
         let gate = linear_no_bias(
             builder,
@@ -253,56 +320,7 @@ impl DynModule for LlamaModel {
             root = root.extend(self.root.split('.')).unwrap();
         }
 
-        let mut cache = Cache::init(
-            builder,
-            &self.config,
-            self.max_sequence_length,
-            in_k.clone(),
-            in_v,
-        );
-        let [_, _, _, pos, _] = unpack::<5>(builder, shape(builder, in_k));
-
-        let mut x = embeddings(builder, root.extend(["model", "embed_tokens"]).unwrap(), x);
-
-        let [_b, s, _] = unpack::<3>(builder, shape(builder, x.clone()));
-        let attention_mask = causal_mask(builder, s, pos.clone());
-
-        for i in 0..self.config.num_hidden_layers {
-            x = self.layer(
-                builder,
-                i,
-                attention_mask.clone(),
-                &mut cache,
-                pos.clone(),
-                root.extend(["model", "layers", &i.to_string()]).unwrap(),
-                x,
-            );
-        }
-
-        x = rmsnorm::<3>(
-            builder,
-            self.config.rms_norm_eps,
-            root.extend(["model", "norm"]).unwrap(),
-            x,
-        );
-
-        let lm_head_weights = if self.config.tie_word_embeddings {
-            vec!["model", "embed_tokens"]
-        } else {
-            vec!["lm_head"]
-        };
-
-        x = linear_no_bias(
-            builder,
-            self.config.hidden_size,
-            self.config.vocab_size,
-            root.extend(lm_head_weights).unwrap(),
-            x,
-        );
-
-        x = argmax(builder, x);
-        let (out_k, out_v) = cache.get_kv_cache(builder);
-        vec![x, out_k, out_v]
+        self.forward(builder, root, x, in_k, in_v)
     }
 
     // This should return the *detailed* type of the model
