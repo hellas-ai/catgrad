@@ -46,6 +46,7 @@ pub struct GemmaTextConfig {
     #[serde(default = "default_sliding_window_pattern")]
     #[serde(alias = "_sliding_window_pattern")]
     pub sliding_window_pattern: usize,
+    pub sliding_window: usize,
     #[serde(default = "default_rope_local_base_freq")]
     pub rope_local_base_freq: f32,
 
@@ -195,6 +196,10 @@ impl Gemma3Model {
         self.config.model_type == "gemma3_text"
     }
 
+    fn is_local_attention_layer(&self, layer_id: usize) -> bool {
+        self.is_gemma3() && !(layer_id + 1).is_multiple_of(self.config.sliding_window_pattern)
+    }
+
     fn normalize(&self, builder: &Builder, x: Var) -> Var {
         let sh = shape(builder, x.clone());
         let normalizer = constant(builder, f32::sqrt(self.config.hidden_size as f32), &sh);
@@ -322,9 +327,8 @@ impl Gemma3Model {
         let sh = shape!(builder, b, num_kv_heads, s, head_dim);
         let k = reshape(builder, sh, k);
 
-        // Every 6th layer of Gemma3 uses global attention, otherwise local attention, with different rope frequencies
-        let is_local_attention =
-            self.is_gemma3() && !(layer_id + 1).is_multiple_of(self.config.sliding_window_pattern);
+        // Every Nth layer of Gemma3 uses global attention, otherwise local attention.
+        let is_local_attention = self.is_local_attention_layer(layer_id);
 
         let theta = if is_local_attention {
             self.config.rope_local_base_freq
@@ -471,6 +475,9 @@ impl Gemma3Model {
             in_v,
         );
         let [_, _, _, pos, _] = unpack::<5>(builder, shape(builder, in_k));
+        let [_b, s, _] = unpack::<3>(builder, shape(builder, x.clone()));
+        let sliding_attention_mask =
+            sliding_window_mask(builder, s, pos.clone(), self.config.sliding_window);
 
         let mut x = if self.is_gemma3() {
             x
@@ -479,10 +486,15 @@ impl Gemma3Model {
         };
 
         for i in 0..self.config.num_hidden_layers {
+            let layer_mask = if self.is_local_attention_layer(i) {
+                sliding_attention_mask.clone()
+            } else {
+                attention_mask.clone()
+            };
             x = self.layer(
                 builder,
                 i,
-                attention_mask.clone(),
+                layer_mask,
                 &mut cache,
                 pos.clone(),
                 p.extend(["layers", &i.to_string()]).unwrap(),
