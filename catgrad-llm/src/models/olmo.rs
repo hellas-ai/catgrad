@@ -328,14 +328,14 @@ impl OlmoModel {
         let cache_len = self.config.linear_conv_kernel_dim;
 
         let conv_state = cache
-            .linear_state
+            .linear_cache
             .as_ref()
-            .expect("olmo linear attention requires conv state")[linear_layer_id]
+            .expect("olmo linear attention requires linear cache")[linear_layer_id][0]
             .clone();
         let recurrent_state = cache
-            .recurrent_state
+            .linear_cache
             .as_ref()
-            .expect("olmo linear attention requires recurrent state")[linear_layer_id]
+            .expect("olmo linear attention requires linear cache")[linear_layer_id][1]
             .clone();
 
         let q = linear_no_bias(
@@ -501,9 +501,9 @@ impl OlmoModel {
         let out_conv_state = concat(builder, 1, out_conv_state, v_state_out);
 
         cache
-            .linear_state
+            .linear_cache
             .as_mut()
-            .expect("olmo linear attention requires mutable conv state")[linear_layer_id] =
+            .expect("olmo linear attention requires mutable linear cache")[linear_layer_id][0] =
             out_conv_state;
 
         let q = transpose(builder, 1, 2, q);
@@ -590,9 +590,9 @@ impl OlmoModel {
         let out_recurrent_state = results[1].clone();
 
         cache
-            .recurrent_state
+            .linear_cache
             .as_mut()
-            .expect("olmo linear attention requires mutable recurrent state")[linear_layer_id] =
+            .expect("olmo linear attention requires mutable linear cache")[linear_layer_id][1] =
             out_recurrent_state;
 
         let flat = shape!(
@@ -717,19 +717,14 @@ impl DynModule for OlmoModel {
             in_k.clone(),
             in_v,
         );
-        cache.linear_state = Some(
+        cache.linear_cache = Some(
             (0..self.num_linear_layers)
                 .map(|layer_id| {
-                    let layer = slice(builder, 0, layer_id, 1, in_conv.clone());
-                    squeeze::<4, 3>(builder, 0, layer)
-                })
-                .collect(),
-        );
-        cache.recurrent_state = Some(
-            (0..self.num_linear_layers)
-                .map(|layer_id| {
-                    let layer = slice(builder, 0, layer_id, 1, in_recurrent.clone());
-                    squeeze::<5, 4>(builder, 0, layer)
+                    let conv_layer = slice(builder, 0, layer_id, 1, in_conv.clone());
+                    let conv_state = squeeze::<4, 3>(builder, 0, conv_layer);
+                    let recurrent_layer = slice(builder, 0, layer_id, 1, in_recurrent.clone());
+                    let recurrent_state = squeeze::<5, 4>(builder, 0, recurrent_layer);
+                    vec![conv_state, recurrent_state]
                 })
                 .collect(),
         );
@@ -778,14 +773,14 @@ impl DynModule for OlmoModel {
             in_conv
         } else {
             let states = cache
-                .linear_state
+                .linear_cache
                 .as_ref()
-                .expect("olmo cache missing conv state");
+                .expect("olmo cache missing linear cache");
             let mut iter = states.iter();
-            let first = iter.next().expect("olmo conv state missing").clone();
+            let first = iter.next().expect("olmo conv state missing")[0].clone();
             let mut out = unsqueeze::<3, 4>(builder, 0, first);
             for state in iter {
-                let state = unsqueeze::<3, 4>(builder, 0, state.clone());
+                let state = unsqueeze::<3, 4>(builder, 0, state[0].clone());
                 out = concat(builder, 0, out, state);
             }
             out
@@ -794,14 +789,14 @@ impl DynModule for OlmoModel {
             in_recurrent
         } else {
             let states = cache
-                .recurrent_state
+                .linear_cache
                 .as_ref()
-                .expect("olmo cache missing recurrent state");
+                .expect("olmo cache missing linear cache");
             let mut iter = states.iter();
-            let first = iter.next().expect("olmo recurrent state missing").clone();
+            let first = iter.next().expect("olmo recurrent state missing")[1].clone();
             let mut out = unsqueeze::<4, 5>(builder, 0, first);
             for state in iter {
-                let state = unsqueeze::<4, 5>(builder, 0, state.clone());
+                let state = unsqueeze::<4, 5>(builder, 0, state[1].clone());
                 out = concat(builder, 0, out, state);
             }
             out
