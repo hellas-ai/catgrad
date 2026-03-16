@@ -1,10 +1,40 @@
-use crate::config::{Llama3RopeScaling, YarnRopeScaling};
+use crate::config::{LLMConfig, Llama3RopeScaling, RopeScaling, YarnRopeScaling};
 use crate::helpers::tensors::*;
 use catgrad::prelude::ops::*;
 use catgrad::prelude::*;
 
+pub fn init_rope_tables(
+    builder: &Builder,
+    config: &dyn LLMConfig,
+    positions: impl IntoNatVar,
+) -> (Var, Var) {
+    match config.rope_scaling() {
+        Some(RopeScaling::Yarn(params)) => rope_tables_yarn(
+            builder,
+            config.rope_theta(),
+            &params,
+            positions,
+            config.get_head_dim(),
+        ),
+        Some(RopeScaling::Llama3(params)) => rope_tables_llama3(
+            builder,
+            config.rope_theta(),
+            &params,
+            positions,
+            config.get_head_dim(),
+        ),
+        _ => rope_tables_default(
+            builder,
+            config.rope_theta(),
+            positions,
+            ((config.get_head_dim() as f32) * config.partial_rotary_factor()) as usize,
+            1.0,
+        ),
+    }
+}
+
 // Generate rope tables. This part is usually precomputed
-pub fn rope_tables(
+pub fn rope_tables_default(
     builder: &Builder,
     theta: f32,
     seq_len: impl IntoNatVar,
@@ -277,7 +307,7 @@ pub fn rope(
 ) -> Var {
     let pos = pos.to_nat(builder);
     let seq_len = seq_len.to_nat(builder);
-    let (cos, sin) = rope_tables(builder, theta, pos.clone() + seq_len, head_dim, factor);
+    let (cos, sin) = rope_tables_default(builder, theta, pos.clone() + seq_len, head_dim, factor);
 
     apply_rope_embedding(builder, pos, head_dim, cos, sin, x)
 }
