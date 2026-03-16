@@ -19,6 +19,7 @@ struct GPTOssConfig {
     num_local_experts: usize,
     rope_theta: f32,
     rope_scaling: Option<RopeScaling>,
+    layer_types: Vec<String>,
     sliding_window: usize,
     rms_norm_eps: f32,
     swiglu_limit: f32,
@@ -79,6 +80,16 @@ impl GPTOssModel {
             config,
             max_sequence_length,
         })
+    }
+
+    fn is_sliding_attention_layer(&self, layer_id: usize) -> bool {
+        if self.config.layer_types.is_empty() {
+            return self.config.sliding_window > 0;
+        }
+        matches!(
+            self.config.layer_types.get(layer_id).map(|ty| ty.as_str()),
+            Some("sliding_attention")
+        )
     }
 
     fn gptoss_swiglu(&self, builder: &Builder, gate_up: Var) -> Var {
@@ -324,13 +335,20 @@ impl DynModule for GPTOssModel {
 
         let mut x = embeddings(builder, root.extend(["model", "embed_tokens"]).unwrap(), x);
         let [_b, s, _] = unpack::<3>(builder, shape(builder, x.clone()));
-        let attention_mask = causal_mask(builder, s, pos.clone());
+        let full_attention_mask = causal_mask(builder, s.clone(), pos.clone());
+        let sliding_attention_mask =
+            sliding_window_mask(builder, s, pos.clone(), self.config.sliding_window);
 
         for i in 0..self.config.num_hidden_layers {
+            let attention_mask = if self.is_sliding_attention_layer(i) {
+                sliding_attention_mask.clone()
+            } else {
+                full_attention_mask.clone()
+            };
             x = self.layer(
                 builder,
                 i,
-                attention_mask.clone(),
+                attention_mask,
                 &mut cache,
                 pos.clone(),
                 root.extend(["model", "layers", &i.to_string()]).unwrap(),

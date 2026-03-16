@@ -22,12 +22,11 @@ fi
 
 DIR=$(dirname "$0")
 REFERENCE_DIR="$DIR/expected"
-OUTPUT_DIR="$DIR/outputs"
-
-mkdir -p "$OUTPUT_DIR"
-rm -rf "$OUTPUT_DIR"/*
 
 MAXLEN="${CATGRAD_COMPARE_MAXLEN:-40}"
+OUTPUT_DIR=$DIR/outputs/$MAXLEN
+mkdir -p "$OUTPUT_DIR"
+rm -rf "$OUTPUT_DIR"/*
 
 echo "Generating outputs of ${MAXLEN} tokens for ${#MODELS[@]} models..."
 

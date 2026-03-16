@@ -191,6 +191,35 @@ pub fn causal_mask(builder: &Builder, seq_len: Var, pos: Var) -> Var {
     slice(builder, 0, pos, seq_len, mask)
 }
 
+// Causal mask with a sliding window over the past `window` positions.
+// Positions more than `window - 1` tokens behind the query are masked out.
+pub fn sliding_window_mask(builder: &Builder, seq_len: Var, pos: Var, window: usize) -> Var {
+    if window == 0 {
+        return causal_mask(builder, seq_len, pos);
+    }
+
+    let size = seq_len.clone() + pos.clone();
+    let idx = arange(builder, size.clone());
+    let sh = shape!(builder, size, size);
+
+    let col = broadcast(builder, sh.clone(), idx.clone());
+    let row = reshape(builder, shape!(builder, size, 1), idx);
+    let row = broadcast(builder, sh.clone(), row);
+
+    let future = lt(builder, row.clone(), col.clone());
+    let future = cast(builder, future, Dtype::F32);
+
+    let window = constant(builder, window as u32, &sh);
+    let too_old = lte(builder, col + window, row);
+    let too_old = cast(builder, too_old, Dtype::F32);
+
+    let mask = clamp(builder, future + too_old, 0.0, 1.0);
+    let ninf = constant(builder, f32::MIN, &sh);
+    let mask = mask * ninf;
+
+    slice(builder, 0, pos, seq_len, mask)
+}
+
 pub fn embeddings(builder: &Builder, p: Path, x: Var) -> Var {
     let wte = param(builder, &p.extend(["weight"]).unwrap());
 
