@@ -16,7 +16,7 @@ catgrad = { version = "0.2.1", path = "../catgrad" }
 derive_more = { version = "2.0.1", features = ["from"] }
 libc = "0.2.177"
 libffi = "5.0.0"
-open-hypergraphs = "0.2.8"
+open-hypergraphs.workspace = true
 tempdir = "0.3.7"
 tempfile = "3.23.0"
 
