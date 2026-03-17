@@ -2348,9 +2348,9 @@ dependencies = [
 
 [[package]]
 name = "open-hypergraphs"
-version = "0.2.8"
+version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2cee45ff51782ae067b2ddf577403edd2ebc203786668cdb352e8cfa56e9b5d8"
+checksum = "35368b8ccf2a61fdb493242cb5b0420d6c46f0e285d1f5ab14dbd2f94e7e4f6a"
 dependencies = [
  "num-traits",
  "serde",
@@ -2358,9 +2358,9 @@ dependencies = [
 
 [[package]]
 name = "open-hypergraphs-dot"
-version = "0.2.3"
+version = "0.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a1e5243a8e432adf2eeb12b0b24c7d40d565bfcbad9f465edd6efa5df4a47e83"
+checksum = "cf800a0036834718dcd70c606745afdaa93e8fb80828806341bbf8454cc76c0f"
 dependencies = [
  "dot-structures",
  "open-hypergraphs",

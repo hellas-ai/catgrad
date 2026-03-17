@@ -5,6 +5,7 @@ use Operation::*;
 use TaggedNdArray::*;
 use half::f16;
 use open_hypergraphs::lax::functor::Functor;
+use open_hypergraphs::strict::relation::converse;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;

@@ -1,8 +1,5 @@
-use open_hypergraphs::strict::*;
-
-use crate::backend::cpu::ndarray::TaggedNdArray;
-
 use super::object::*;
+use crate::backend::cpu::ndarray::TaggedNdArray;
 
 /// Wrapper for a callback function that takes a `TaggedNdArray` as input.
 /// Declared as a separate type to avoid having to manually implement the below traits

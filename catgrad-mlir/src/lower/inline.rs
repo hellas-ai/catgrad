@@ -3,7 +3,7 @@ use catgrad::prelude::*;
 
 use open_hypergraphs::lax::{
     OpenHypergraph,
-    functor::{Functor, define_map_arrow},
+    functor::{Functor, dyn_functor::define_map_arrow},
 };
 
 use std::collections::HashMap;

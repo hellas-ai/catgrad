@@ -42,6 +42,6 @@ impl Functor<Type, Operation, Type, Operation> for ForgetIdentityCasts {
     }
 
     fn map_arrow(&self, f: &OpenHypergraph<Type, Operation>) -> OpenHypergraph<Type, Operation> {
-        define_map_arrow(self, f)
+        dyn_functor::define_map_arrow(self, f)
     }
 }

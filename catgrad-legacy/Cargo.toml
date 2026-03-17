@@ -9,7 +9,7 @@ repository.workspace = true
 documentation.workspace = true
 
 [dependencies]
-open-hypergraphs = { workspace = true }
+open-hypergraphs.workspace = true
 num-traits = "0.2.19"
 gemm = "0.18.2"
 half = { workspace = true }
