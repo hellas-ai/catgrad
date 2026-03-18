@@ -1,5 +1,6 @@
 use crate::{LLMError, Result};
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::{fs::File, io::Read};
 
 // Loads the image and returns flattened data + shape
 pub fn load_and_preprocess_image(
@@ -36,4 +37,58 @@ pub fn load_and_preprocess_image(
         patches,
         vec![1, num_channels, aligned_image_size, aligned_image_size],
     ))
+}
+
+// Sanitize the model name to use in cache file names.
+fn sanitize(model_name: &str) -> String {
+    model_name
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || matches!(ch, '.' | '-' | '_') {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect()
+}
+
+// Make a cache file name based on the model name, image name, and a simple image data checksum.
+pub fn cache_path_for_embeddings(
+    model_name: &str,
+    image_name: &str,
+    image_data: &[f32],
+) -> PathBuf {
+    let cache_dir = std::env::var("CATGRAD_CACHE").unwrap_or_else(|_| ".cache".to_string());
+    let checksum: u32 = image_data.iter().map(|x| x.to_bits()).sum();
+    let filename = format!(
+        "{}-{}-{:08x}.bin",
+        sanitize(model_name),
+        sanitize(image_name),
+        checksum
+    );
+    PathBuf::from(cache_dir).join(filename)
+}
+
+pub fn load_cached_embeddings(path: &Path) -> Result<Vec<f32>> {
+    let mut bytes = Vec::new();
+    File::open(path)?.read_to_end(&mut bytes)?;
+
+    assert!(bytes.len() % 4 == 0);
+
+    Ok(bytes
+        .chunks_exact(4)
+        .map(|c| f32::from_le_bytes(c.try_into().unwrap()))
+        .collect())
+}
+
+pub fn save_cached_embeddings(path: &Path, data: &[f32]) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let mut bytes = Vec::with_capacity(data.len() * 4);
+    for &value in data {
+        bytes.extend_from_slice(&value.to_le_bytes());
+    }
+    std::fs::write(path, bytes).map_err(|err| LLMError::IoError(std::io::Error::other(err)))
 }
