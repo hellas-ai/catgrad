@@ -9,7 +9,7 @@ use catgrad_llm::helpers::*;
 
 use catgrad::typecheck::TypeExpr;
 use catgrad_llm::models::gemma3::{Gemma3Model, GemmaTextConfig, multi_modal_projector};
-use catgrad_llm::models::siglip::{SiglipVisionBackbone, VisionConfig};
+use catgrad_llm::models::siglip::{SiglipVisionBackbone, SiglipVisionConfig};
 use catgrad_llm::utils::{
     cache_path_for_embeddings, get_model_chat_template, get_model_files, load_and_preprocess_image,
     load_cached_embeddings, load_model_weights, render_chat_template, save_cached_embeddings,
@@ -44,7 +44,7 @@ struct Args {
 #[derive(Debug, Clone, serde::Deserialize)]
 pub(crate) struct VLMConfig {
     text_config: GemmaTextConfig,
-    vision_config: VisionConfig,
+    vision_config: SiglipVisionConfig,
     #[serde(default = "default_mm_tokens_per_image")]
     mm_tokens_per_image: usize,
     image_token_index: usize,
@@ -195,12 +195,12 @@ impl DynModule for VLMModel {
 
 pub struct VisionEmbeddings {
     paligemma: bool,
-    pub config: VisionConfig,
+    pub config: SiglipVisionConfig,
     pub vision_tower: SiglipVisionBackbone,
 }
 
 impl VisionEmbeddings {
-    pub fn new(paligemma: bool, config: VisionConfig) -> Self {
+    pub fn new(paligemma: bool, config: SiglipVisionConfig) -> Self {
         Self {
             paligemma,
             config,

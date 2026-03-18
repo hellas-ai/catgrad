@@ -4,7 +4,7 @@ use catgrad::prelude::*;
 use catgrad::stdlib::nn::*;
 
 #[derive(Debug, Clone, serde::Deserialize)]
-pub struct VisionConfig {
+pub struct SiglipVisionConfig {
     pub hidden_size: usize,
     pub intermediate_size: usize,
     pub num_hidden_layers: usize,
@@ -36,7 +36,7 @@ fn default_layer_norm_eps() -> f32 {
 pub struct SiglipVisionBackbone {}
 
 impl SiglipVisionBackbone {
-    fn attention(builder: &Builder, config: &VisionConfig, p: Path, x: Var) -> Var {
+    fn attention(builder: &Builder, config: &SiglipVisionConfig, p: Path, x: Var) -> Var {
         let dim = config.hidden_size;
         let num_heads = config.num_attention_heads;
         let head_dim = config.hidden_size / config.num_attention_heads;
@@ -73,7 +73,7 @@ impl SiglipVisionBackbone {
         linear(builder, dim, dim, p.extend(["out_proj"]).unwrap(), x)
     }
 
-    pub fn mlp(&self, builder: &Builder, config: &VisionConfig, p: Path, x: Var) -> Var {
+    pub fn mlp(&self, builder: &Builder, config: &SiglipVisionConfig, p: Path, x: Var) -> Var {
         let x = linear(
             builder,
             config.hidden_size,
@@ -91,7 +91,13 @@ impl SiglipVisionBackbone {
         )
     }
 
-    pub fn encoder_layer(&self, builder: &Builder, config: &VisionConfig, p: Path, x: Var) -> Var {
+    pub fn encoder_layer(
+        &self,
+        builder: &Builder,
+        config: &SiglipVisionConfig,
+        p: Path,
+        x: Var,
+    ) -> Var {
         let res = x.clone();
         let x = layernorm(
             builder,
@@ -113,7 +119,7 @@ impl SiglipVisionBackbone {
         x + res
     }
 
-    fn vision_embeddings(builder: &Builder, config: &VisionConfig, p: Path, x: Var) -> Var {
+    fn vision_embeddings(builder: &Builder, config: &SiglipVisionConfig, p: Path, x: Var) -> Var {
         let patch_size = config.patch_size;
         let image_size = config.image_size;
         let num_patches = image_size / patch_size;
@@ -170,7 +176,13 @@ impl SiglipVisionBackbone {
         emb + pe
     }
 
-    pub fn vision_model(&self, builder: &Builder, config: &VisionConfig, p: Path, x: Var) -> Var {
+    pub fn vision_model(
+        &self,
+        builder: &Builder,
+        config: &SiglipVisionConfig,
+        p: Path,
+        x: Var,
+    ) -> Var {
         let mut x = Self::vision_embeddings(builder, config, p.extend(["embeddings"]).unwrap(), x);
         for i in 0..config.num_hidden_layers {
             x = self.encoder_layer(

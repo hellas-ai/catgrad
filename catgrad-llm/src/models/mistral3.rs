@@ -1,7 +1,7 @@
 #![allow(clippy::too_many_arguments)]
 use crate::config::{EosTokenId, LLMConfig, RopeScaling, YarnRopeScaling};
 use crate::helpers::*;
-use crate::models::siglip::VisionConfig;
+use crate::models::siglip::SiglipVisionConfig;
 use catgrad::prelude::ops::*;
 use catgrad::prelude::*;
 use nn::*;
@@ -10,7 +10,7 @@ use serde::Deserialize;
 #[derive(Debug, Clone, Deserialize)]
 pub struct Mistral3Config {
     pub text_config: Mistral3TextConfig,
-    pub vision_config: Option<VisionConfig>,
+    pub vision_config: Option<SiglipVisionConfig>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
