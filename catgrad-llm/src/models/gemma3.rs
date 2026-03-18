@@ -1,6 +1,7 @@
 #![allow(clippy::too_many_arguments)]
 use crate::config::{EosTokenId, LLMConfig};
 use crate::helpers::*;
+use crate::models::siglip::{SiglipVisionBackbone, SiglipVisionConfig};
 use catgrad::prelude::ops::*;
 use catgrad::prelude::*;
 use catgrad::stdlib::nn::*;
@@ -11,12 +12,17 @@ pub enum GemmaConfig {
     #[serde(untagged)]
     VLM {
         text_config: GemmaTextConfig,
+        vision_config: SiglipVisionConfig,
         image_token_index: usize,
-        #[serde(default)]
+        #[serde(default = "default_mm_tokens_per_image")]
         mm_tokens_per_image: usize,
     },
     #[serde(untagged)]
     Text(GemmaTextConfig),
+}
+
+fn default_mm_tokens_per_image() -> usize {
+    256
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -173,6 +179,63 @@ pub fn multi_modal_projector(builder: &Builder, p: Path, x: Var) -> Var {
     let proj = param(builder, &p.extend(["mm_input_projection_weight"]).unwrap());
     let proj = unsqueeze::<2, 3>(builder, 0, proj);
     matmul(builder, x, proj)
+}
+
+pub struct VisionEmbeddings {
+    paligemma: bool,
+    pub config: SiglipVisionConfig,
+    pub vision_tower: SiglipVisionBackbone,
+}
+
+impl VisionEmbeddings {
+    pub fn new(paligemma: bool, config: SiglipVisionConfig) -> Self {
+        Self {
+            paligemma,
+            config,
+            vision_tower: SiglipVisionBackbone {},
+        }
+    }
+}
+
+impl Module<1, 1> for VisionEmbeddings {
+    fn path(&self) -> Path {
+        path(vec!["VisionEmbeddings"]).unwrap()
+    }
+
+    fn ty(&self) -> ([Type; 1], [Type; 1]) {
+        use catgrad::typecheck::TypeExpr;
+
+        let t = Type::Tensor(TypeExpr::Var(0));
+        ([t.clone()], [t])
+    }
+
+    fn def(&self, builder: &Builder, [pixels]: [Var; 1]) -> [Var; 1] {
+        let x = self.vision_tower.vision_model(
+            builder,
+            &self.config,
+            path(vec!["vision_tower", "vision_model"]).unwrap(),
+            pixels,
+        );
+
+        // Gemma3 case.
+        if !self.paligemma {
+            let x = multi_modal_projector(builder, path(vec!["multi_modal_projector"]).unwrap(), x);
+            return [x];
+        }
+
+        let x = linear(
+            builder,
+            self.config.hidden_size,
+            self.config.hidden_size * 2,
+            path(vec!["multi_modal_projector", "linear"]).unwrap(),
+            x,
+        );
+        let scale = (self.config.projection_dim as f32).sqrt();
+        let sh = shape(builder, x.clone());
+        let scale = constant(builder, scale, &sh);
+        let x = x / scale;
+        [x]
+    }
 }
 
 impl Gemma3Model {

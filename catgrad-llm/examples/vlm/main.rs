@@ -3,13 +3,11 @@ use catgrad::interpreter::backend::candle::CandleBackend;
 use catgrad::interpreter::{self, Backend, Interpreter};
 use catgrad::prelude::ops::*;
 use catgrad::prelude::*;
-use catgrad::stdlib::nn::*;
 use catgrad_llm::config::LLMConfig;
 use catgrad_llm::helpers::*;
 
 use catgrad::typecheck::TypeExpr;
-use catgrad_llm::models::gemma3::{Gemma3Model, GemmaTextConfig, multi_modal_projector};
-use catgrad_llm::models::siglip::{SiglipVisionBackbone, SiglipVisionConfig};
+use catgrad_llm::models::gemma3::{Gemma3Model, GemmaConfig, GemmaTextConfig, VisionEmbeddings};
 use catgrad_llm::utils::{
     cache_path_for_embeddings, get_model_chat_template, get_model_files, load_and_preprocess_image,
     load_cached_embeddings, load_model_weights, render_chat_template, save_cached_embeddings,
@@ -39,19 +37,6 @@ struct Args {
     /// Tokens to generate
     #[arg(short = 's', long, default_value_t = 1)]
     max_seq_len: usize,
-}
-
-#[derive(Debug, Clone, serde::Deserialize)]
-pub(crate) struct VLMConfig {
-    text_config: GemmaTextConfig,
-    vision_config: SiglipVisionConfig,
-    #[serde(default = "default_mm_tokens_per_image")]
-    mm_tokens_per_image: usize,
-    image_token_index: usize,
-}
-
-fn default_mm_tokens_per_image() -> usize {
-    256
 }
 
 type KvCache<B> = (interpreter::Value<B>, interpreter::Value<B>);
@@ -193,62 +178,6 @@ impl DynModule for VLMModel {
     }
 }
 
-pub struct VisionEmbeddings {
-    paligemma: bool,
-    pub config: SiglipVisionConfig,
-    pub vision_tower: SiglipVisionBackbone,
-}
-
-impl VisionEmbeddings {
-    pub fn new(paligemma: bool, config: SiglipVisionConfig) -> Self {
-        Self {
-            paligemma,
-            config,
-            vision_tower: SiglipVisionBackbone {},
-        }
-    }
-}
-
-// VisionEmbeddings model generating embeddings from an image
-impl Module<1, 1> for VisionEmbeddings {
-    fn path(&self) -> Path {
-        path(vec!["VisionEmbeddings"]).unwrap()
-    }
-
-    fn ty(&self) -> ([Type; 1], [Type; 1]) {
-        let t = Type::Tensor(TypeExpr::Var(0));
-        ([t.clone()], [t])
-    }
-
-    fn def(&self, builder: &Builder, [pixels]: [Var; 1]) -> [Var; 1] {
-        let x = self.vision_tower.vision_model(
-            builder,
-            &self.config,
-            path(vec!["vision_tower", "vision_model"]).unwrap(),
-            pixels,
-        );
-
-        // Gemma3 case
-        if !self.paligemma {
-            let x = multi_modal_projector(builder, path(vec!["multi_modal_projector"]).unwrap(), x);
-            return [x];
-        }
-
-        let x = linear(
-            builder,
-            self.config.hidden_size,
-            self.config.hidden_size * 2,
-            path(vec!["multi_modal_projector", "linear"]).unwrap(),
-            x,
-        );
-        let scale = (self.config.projection_dim as f32).sqrt();
-        let sh = shape(builder, x.clone());
-        let scale = constant(builder, scale, &sh);
-        let x = x / scale;
-        [x]
-    }
-}
-
 fn to_f32_vec(
     backend: &CandleBackend,
     value: &interpreter::Value<CandleBackend>,
@@ -268,14 +197,32 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let (model_paths, config_path, tokenizer_path, _) = get_model_files(&args.model_name, "main")?;
 
-    let mut config: VLMConfig = serde_json::from_str(&std::fs::read_to_string(config_path)?)?;
+    let config_json = std::fs::read_to_string(config_path)?;
+    let config: GemmaConfig = serde_json::from_str(&config_json)?;
+    let (mut text_config, vision_config, image_token_index, mut mm_tokens_per_image) = match config
+    {
+        GemmaConfig::VLM {
+            text_config,
+            vision_config,
+            image_token_index,
+            mm_tokens_per_image,
+        } => (
+            text_config,
+            vision_config,
+            image_token_index,
+            mm_tokens_per_image,
+        ),
+        GemmaConfig::Text(_) => {
+            return Err(anyhow::anyhow!("Expected Gemma VLM config, got text-only config").into());
+        }
+    };
 
-    let is_paligemma = config.text_config.model_type == "gemma2";
+    let is_paligemma = text_config.model_type == "gemma2";
 
     if is_paligemma {
-        config.text_config.max_position_embeddings = 8192;
-        config.text_config.rope_theta = 10000.0;
-        config.mm_tokens_per_image = config.vision_config.num_image_tokens;
+        text_config.max_position_embeddings = 8192;
+        text_config.rope_theta = 10000.0;
+        mm_tokens_per_image = vision_config.num_image_tokens;
     }
 
     // println!("config: {:?}", config);
@@ -331,8 +278,8 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let (image_data, image_shape) = load_and_preprocess_image(
         &args.image,
-        config.vision_config.image_size,
-        config.vision_config.patch_size,
+        vision_config.image_size,
+        vision_config.patch_size,
     )?;
 
     let cache_path =
@@ -344,11 +291,7 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("Loading cached image features from: {:?}", cache_path);
             interpreter::tensor(
                 &backend,
-                Shape(vec![
-                    1,
-                    config.mm_tokens_per_image,
-                    config.text_config.hidden_size,
-                ]),
+                Shape(vec![1, mm_tokens_per_image, text_config.hidden_size]),
                 visual_embeddings,
             )
             .unwrap()
@@ -357,7 +300,7 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .map_err(|e| anyhow::anyhow!("BackendError: {:?}", e))?;
 
             // Get embeddings from the image
-            let vision_model = VisionEmbeddings::new(is_paligemma, config.vision_config.clone());
+            let vision_model = VisionEmbeddings::new(is_paligemma, vision_config);
             let vision_term = vision_model
                 .term()
                 .expect("failed to build vision model term");
@@ -372,7 +315,7 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
     let vlm_model = VLMModel {
         language_model: Box::new(Gemma3Model {
             root: "language_model.model".to_string(),
-            config: config.text_config.clone(),
+            config: text_config.clone(),
             max_sequence_length: 1000, //TODO
         }),
     };
@@ -382,7 +325,7 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
         .expect("failed to build language model term");
 
     let max_seq_len = args.max_seq_len;
-    let empty_cache = empty_kv_cache(&interpreter.backend, &config.text_config)?;
+    let empty_cache = empty_kv_cache(&interpreter.backend, &text_config)?;
     let mut kv_cache = empty_cache;
     let mut use_image_embeddings = true;
 
@@ -392,14 +335,13 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
             &language_term,
             &interpreter,
             &token_ids,
-            &config,
+            &text_config,
+            image_token_index,
             &visual_embeddings_tensor,
             &kv_cache,
             use_image_embeddings,
         )?;
-        if config
-            .text_config
-            .clone()
+        if text_config
             .get_eos_token_ids()
             .contains(&(next_token_id as i32))
         {
@@ -416,18 +358,20 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_interpreter(
     typed_term: &TypedTerm,
     interpreter: &interpreter::Interpreter<CandleBackend>,
     text_tokens: &[u32],
-    config: &VLMConfig,
+    text_config: &GemmaTextConfig,
+    image_token_index: usize,
     visual_embeddings_tensor: &interpreter::Value<CandleBackend>,
     kv_cache: &KvCache<CandleBackend>,
     use_image_embeddings: bool,
 ) -> Result<(u32, KvCache<CandleBackend>)> {
     let empty_image_embeddings = interpreter::tensor(
         &interpreter.backend,
-        Shape(vec![1, 0, config.text_config.hidden_size]),
+        Shape(vec![1, 0, text_config.hidden_size]),
         Vec::<f32>::new(),
     )
     .expect("Failed to create empty image embeddings");
@@ -435,12 +379,12 @@ fn run_interpreter(
     let (text_before_tokens, text_after_tokens, image_embeddings) = if use_image_embeddings {
         let first_image_token_index = text_tokens
             .iter()
-            .position(|&x| x == config.image_token_index as u32)
+            .position(|&x| x == image_token_index as u32)
             .unwrap_or(0);
 
         let last_image_token_index = text_tokens
             .iter()
-            .rposition(|&x| x == config.image_token_index as u32)
+            .rposition(|&x| x == image_token_index as u32)
             .unwrap_or(0);
 
         (
