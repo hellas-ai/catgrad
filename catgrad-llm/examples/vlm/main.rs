@@ -11,12 +11,12 @@ use catgrad::typecheck::TypeExpr;
 use catgrad_llm::models::gemma3::{Gemma3Model, GemmaTextConfig, multi_modal_projector};
 use catgrad_llm::models::siglip::{SiglipVisionBackbone, VisionConfig};
 use catgrad_llm::utils::{
-    get_model_chat_template, get_model_files, load_and_preprocess_image, load_model_weights,
-    render_chat_template,
+    cache_path_for_embeddings, get_model_chat_template, get_model_files, load_and_preprocess_image,
+    load_cached_embeddings, load_model_weights, render_chat_template, save_cached_embeddings,
 };
 use clap::Parser;
+use std::io::Write;
 use std::path::PathBuf;
-use std::{fs::File, io::Read, io::Write};
 use tokenizers::Tokenizer;
 
 #[derive(Parser, Debug)]
@@ -247,55 +247,6 @@ impl Module<1, 1> for VisionEmbeddings {
         let x = x / scale;
         [x]
     }
-}
-
-fn sanitize(model_name: &str) -> String {
-    model_name
-        .chars()
-        .map(|ch| {
-            if ch.is_ascii_alphanumeric() || matches!(ch, '.' | '-' | '_') {
-                ch
-            } else {
-                '_'
-            }
-        })
-        .collect()
-}
-
-// Make a cache file name based on the model name, image name, and a simple image data checksum.
-fn cache_path_for_embeddings(model_name: &str, image_name: &str, image_data: &[f32]) -> PathBuf {
-    let cache_dir = std::env::var("CATGRAD_CACHE").unwrap_or_else(|_| ".cache".to_string());
-    let checksum: u32 = image_data.iter().map(|x| x.to_bits()).sum();
-    let filename = format!(
-        "{}-{}-{:08x}.bin",
-        sanitize(model_name),
-        sanitize(image_name),
-        checksum
-    );
-    PathBuf::from(cache_dir).join(filename)
-}
-
-fn load_cached_embeddings(path: &std::path::Path) -> Result<Vec<f32>> {
-    let mut bytes = Vec::new();
-    File::open(path)?.read_to_end(&mut bytes)?;
-
-    assert!(bytes.len() % 4 == 0);
-
-    Ok(bytes
-        .chunks_exact(4)
-        .map(|c| f32::from_le_bytes(c.try_into().unwrap()))
-        .collect())
-}
-
-fn save_cached_embeddings(path: &std::path::Path, data: &[f32]) -> Result<()> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    let mut bytes = Vec::with_capacity(data.len() * 4);
-    for &value in data {
-        bytes.extend_from_slice(&value.to_le_bytes());
-    }
-    std::fs::write(path, bytes).map_err(|err| anyhow::anyhow!("check error {:?}", err))
 }
 
 fn to_f32_vec(
