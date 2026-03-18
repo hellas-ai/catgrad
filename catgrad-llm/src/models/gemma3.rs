@@ -143,15 +143,68 @@ impl LLMConfig for GemmaTextConfig {
     }
 }
 
+#[derive(Debug, Clone)]
+struct GemmaMultimodalConfig {
+    vision_config: SiglipVisionConfig,
+    image_token_index: usize,
+    mm_tokens_per_image: usize,
+    is_paligemma: bool,
+}
+
+#[derive(Debug, Clone)]
 pub struct Gemma3Model {
     pub root: String,
     pub config: GemmaTextConfig,
     pub max_sequence_length: usize,
+    multimodal: Option<GemmaMultimodalConfig>,
 }
 
 impl LLMModel for Gemma3Model {
     fn config(&self) -> &dyn LLMConfig {
         &self.config
+    }
+
+    fn multimodal_metadata(&self) -> Option<MultimodalMetadata> {
+        let mm = self.multimodal.as_ref()?;
+        Some(MultimodalMetadata {
+            image_token_index: mm.image_token_index,
+            mm_tokens_per_image: mm.mm_tokens_per_image,
+            hidden_size: self.config.hidden_size,
+            image_size: mm.vision_config.image_size,
+            patch_size: mm.vision_config.patch_size,
+        })
+    }
+
+    fn multimodal_vision_module(&self) -> Option<Box<dyn DynModule>> {
+        let mm = self.multimodal.as_ref()?;
+        Some(Box::new(VisionEmbeddings::new(
+            mm.is_paligemma,
+            mm.vision_config.clone(),
+        )))
+    }
+
+    fn multimodal_language_module(&self) -> Option<Box<dyn DynModule>> {
+        let mm = self.multimodal.as_ref()?;
+        Some(Box::new(Gemma3MultimodalModel {
+            language_model: self.clone(),
+            mm_tokens_per_image: mm.mm_tokens_per_image,
+            is_paligemma: mm.is_paligemma,
+        }))
+    }
+
+    fn multimodal_interpolate_prompt(&self, prompt: &str) -> Option<String> {
+        let mm = self.multimodal.as_ref()?;
+        if mm.is_paligemma {
+            let img_seq = format!("{}<bos>", "<image>".repeat(mm.mm_tokens_per_image));
+            let p = prompt.replace("<image>", &img_seq);
+            Some(format!("{}\n", p))
+        } else {
+            let img_seq = format!(
+                "\n\n<start_of_image>{}<end_of_image>\n\n",
+                "<image_soft_token>".repeat(mm.mm_tokens_per_image)
+            );
+            Some(prompt.replace("<start_of_image>", &img_seq))
+        }
     }
 }
 
@@ -197,19 +250,20 @@ impl VisionEmbeddings {
     }
 }
 
-impl Module<1, 1> for VisionEmbeddings {
+impl DynModule for VisionEmbeddings {
     fn path(&self) -> Path {
         path(vec!["VisionEmbeddings"]).unwrap()
     }
 
-    fn ty(&self) -> ([Type; 1], [Type; 1]) {
+    fn ty(&self) -> (Vec<Type>, Vec<Type>) {
         use catgrad::typecheck::TypeExpr;
 
         let t = Type::Tensor(TypeExpr::Var(0));
-        ([t.clone()], [t])
+        (vec![t.clone()], vec![t])
     }
 
-    fn def(&self, builder: &Builder, [pixels]: [Var; 1]) -> [Var; 1] {
+    fn def(&self, builder: &Builder, args: Vec<Var>) -> Vec<Var> {
+        let [pixels]: [Var; 1] = args.try_into().expect("expected 1 input");
         let x = self.vision_tower.vision_model(
             builder,
             &self.config,
@@ -220,7 +274,7 @@ impl Module<1, 1> for VisionEmbeddings {
         // Gemma3 case.
         if !self.paligemma {
             let x = multi_modal_projector(builder, path(vec!["multi_modal_projector"]).unwrap(), x);
-            return [x];
+            return vec![x];
         }
 
         let x = linear(
@@ -234,7 +288,118 @@ impl Module<1, 1> for VisionEmbeddings {
         let sh = shape(builder, x.clone());
         let scale = constant(builder, scale, &sh);
         let x = x / scale;
-        [x]
+        vec![x]
+    }
+}
+
+pub struct Gemma3MultimodalModel {
+    language_model: Gemma3Model,
+    mm_tokens_per_image: usize,
+    is_paligemma: bool,
+}
+
+impl Gemma3MultimodalModel {
+    fn bidirectional_mask(
+        &self,
+        builder: &Builder,
+        size: Var,
+        img_start: Var,
+        img_size: Var,
+    ) -> Var {
+        let row = arange(builder, size.clone());
+        let sh = shape(builder, row.clone());
+
+        let img_end = img_start.clone() + img_size.to_nat(builder);
+
+        let img_start = nat_to_u32(builder, img_start);
+        let img_start = broadcast(builder, sh.clone(), img_start);
+
+        let img_end = nat_to_u32(builder, img_end);
+        let img_end = broadcast(builder, sh, img_end);
+
+        let img_mask_1 = gte(builder, row.clone(), img_start);
+        let img_mask_2 = lt(builder, row, img_end);
+        let row = img_mask_1 * img_mask_2;
+
+        let sh = pack::<2>(builder, [size.clone(), size]);
+        let row = broadcast(builder, sh.clone(), row);
+        let col = transpose(builder, 0, 1, row.clone());
+        let mask = row * col;
+        let mask = cast(builder, mask, Dtype::F32);
+        let one = constant(builder, 1.0, &sh);
+        one - mask
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn forward_image_and_texts(
+        &self,
+        builder: &Builder,
+        p: Path,
+        text1: Var,
+        image: Var,
+        text2: Var,
+        in_k: Var,
+        in_v: Var,
+    ) -> Vec<Var> {
+        let text1 = self.language_model.scaled_embeddings(
+            builder,
+            p.extend(["embed_tokens"]).unwrap(),
+            text1,
+        );
+        let text2 = self.language_model.scaled_embeddings(
+            builder,
+            p.extend(["embed_tokens"]).unwrap(),
+            text2,
+        );
+
+        let [_b, img_start, _] = unpack::<3>(builder, shape(builder, text1.clone()));
+        let embeddings = concat(builder, 1, text1, image);
+        let embeddings = concat(builder, 1, embeddings, text2);
+
+        let [_b, s, _] = unpack::<3>(builder, shape(builder, embeddings.clone()));
+
+        let attention_mask = if self.is_paligemma {
+            let sh = shape!(builder, s.clone(), s);
+            constant(builder, 0.0, &sh)
+        } else {
+            let attention_mask = causal_mask(builder, s.clone(), 0.to_nat(builder));
+            let image_mask = self.bidirectional_mask(
+                builder,
+                s,
+                img_start,
+                self.mm_tokens_per_image.to_nat(builder),
+            );
+            attention_mask * image_mask
+        };
+
+        self.language_model
+            .forward_embeddings(builder, p, attention_mask, embeddings, in_k, in_v)
+    }
+}
+
+impl DynModule for Gemma3MultimodalModel {
+    fn path(&self) -> Path {
+        path(vec!["VLM"]).unwrap()
+    }
+
+    fn ty(&self) -> (Vec<Type>, Vec<Type>) {
+        use catgrad::typecheck::TypeExpr;
+        let t = Type::Tensor(TypeExpr::Var(0));
+        (
+            vec![t.clone(), t.clone(), t.clone(), t.clone(), t.clone()],
+            vec![t.clone(), t.clone(), t],
+        )
+    }
+
+    fn def(&self, builder: &Builder, args: Vec<Var>) -> Vec<Var> {
+        let [text1, image, text2, in_k, in_v]: [Var; 5] =
+            args.try_into().expect("expected 5 inputs");
+
+        let mut root = Path::empty();
+        if !self.language_model.root.is_empty() {
+            root = root.extend(self.language_model.root.split('.')).unwrap();
+        }
+        self.forward_image_and_texts(builder, root, text1, image, text2, in_k, in_v)
     }
 }
 
@@ -244,14 +409,36 @@ impl Gemma3Model {
         config_json: &serde_json::Value,
         max_sequence_length: usize,
     ) -> crate::Result<Self> {
-        let config = match serde_json::from_value(config_json.clone())? {
-            GemmaConfig::Text(config) => config,
-            GemmaConfig::VLM { text_config, .. } => text_config,
+        let (config, multimodal) = match serde_json::from_value(config_json.clone())? {
+            GemmaConfig::Text(config) => (config, None),
+            GemmaConfig::VLM {
+                mut text_config,
+                vision_config,
+                image_token_index,
+                mut mm_tokens_per_image,
+            } => {
+                let is_paligemma = text_config.model_type == "gemma2";
+                if is_paligemma {
+                    text_config.max_position_embeddings = 8192;
+                    text_config.rope_theta = 10000.0;
+                    mm_tokens_per_image = vision_config.num_image_tokens;
+                }
+                (
+                    text_config,
+                    Some(GemmaMultimodalConfig {
+                        vision_config,
+                        image_token_index,
+                        mm_tokens_per_image,
+                        is_paligemma,
+                    }),
+                )
+            }
         };
         Ok(Gemma3Model {
             root: root.to_string(),
             config,
             max_sequence_length,
+            multimodal,
         })
     }
 

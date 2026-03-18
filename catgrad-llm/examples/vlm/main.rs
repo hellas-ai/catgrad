@@ -1,21 +1,16 @@
 use anyhow::Result;
 use catgrad::interpreter::backend::candle::CandleBackend;
 use catgrad::interpreter::{self, Backend, Interpreter};
-use catgrad::prelude::ops::*;
 use catgrad::prelude::*;
 use catgrad_llm::config::LLMConfig;
-use catgrad_llm::helpers::*;
-
-use catgrad::typecheck::TypeExpr;
-use catgrad_llm::models::gemma3::{Gemma3Model, GemmaConfig, GemmaTextConfig, VisionEmbeddings};
 use catgrad_llm::utils::{
-    cache_path_for_embeddings, get_model_chat_template, get_model_files, load_and_preprocess_image,
-    load_cached_embeddings, load_model_weights, render_chat_template, save_cached_embeddings,
+    cache_path_for_embeddings, get_model, get_model_chat_template, load_and_preprocess_image,
+    load_cached_embeddings, load_model, post_process_model_weights, render_chat_template,
+    save_cached_embeddings,
 };
 use clap::Parser;
 use std::io::Write;
 use std::path::PathBuf;
-use tokenizers::Tokenizer;
 
 #[derive(Parser, Debug)]
 struct Args {
@@ -66,118 +61,6 @@ fn empty_kv_cache<B: interpreter::Backend>(
     Ok((k, v))
 }
 
-struct VLMModel {
-    language_model: Box<Gemma3Model>,
-}
-impl VLMModel {
-    pub fn bidirectional_mask(
-        &self,
-        builder: &Builder,
-        size: Var,
-        img_start: Var,
-        img_size: Var,
-    ) -> Var {
-        let row = arange(builder, size.clone());
-        let sh = shape(builder, row.clone());
-
-        let img_end = img_start.clone() + img_size.to_nat(builder);
-
-        let img_start = nat_to_u32(builder, img_start);
-        let img_start = broadcast(builder, sh.clone(), img_start);
-
-        let img_end = nat_to_u32(builder, img_end);
-        let img_end = broadcast(builder, sh, img_end);
-
-        let img_mask_1 = gte(builder, row.clone(), img_start);
-        let img_mask_2 = lt(builder, row, img_end);
-        let row = img_mask_1 * img_mask_2;
-
-        let sh = pack::<2>(builder, [size.clone(), size]);
-        let row = broadcast(builder, sh.clone(), row);
-        let col = transpose(builder, 0, 1, row.clone());
-        let mask = row * col;
-        let mask = cast(builder, mask, Dtype::F32);
-        let one = constant(builder, 1.0, &sh);
-        one - mask
-    }
-
-    // Forward pass with image embeddings and text tokens as input
-    #[allow(clippy::too_many_arguments)]
-    pub fn forward_image_and_texts(
-        &self,
-        builder: &Builder,
-        p: Path,
-        text1: Var,
-        image: Var,
-        text2: Var,
-        in_k: Var,
-        in_v: Var,
-    ) -> Vec<Var> {
-        let text1 = self.language_model.scaled_embeddings(
-            builder,
-            p.extend(["embed_tokens"]).unwrap(),
-            text1,
-        );
-        let text2 = self.language_model.scaled_embeddings(
-            builder,
-            p.extend(["embed_tokens"]).unwrap(),
-            text2,
-        );
-
-        let [_b, img_start, _] = unpack::<3>(builder, shape(builder, text1.clone()));
-        let embeddings = concat(builder, 1, text1, image);
-        let embeddings = concat(builder, 1, embeddings, text2);
-
-        let [_b, s, _] = unpack::<3>(builder, shape(builder, embeddings.clone()));
-
-        let is_paligemma = self.language_model.config.model_type == "gemma2";
-
-        let attention_mask = if is_paligemma {
-            let sh = shape!(builder, s.clone(), s);
-            constant(builder, 0.0, &sh)
-        } else {
-            let attention_mask = causal_mask(builder, s.clone(), 0.to_nat(builder));
-
-            // hardcoded 256 tokens per image
-            let image_mask = self.bidirectional_mask(builder, s, img_start, 256.to_nat(builder));
-
-            attention_mask * image_mask
-        };
-
-        self.language_model
-            .forward_embeddings(builder, p, attention_mask, embeddings, in_k, in_v)
-    }
-}
-
-// VLM model taking an image and a prompt, generating text
-impl DynModule for VLMModel {
-    fn path(&self) -> Path {
-        path(vec!["VLM"]).unwrap()
-    }
-
-    fn ty(&self) -> (Vec<Type>, Vec<Type>) {
-        let t = Type::Tensor(TypeExpr::Var(0));
-        (
-            vec![t.clone(), t.clone(), t.clone(), t.clone(), t.clone()],
-            vec![t.clone(), t.clone(), t],
-        )
-    }
-
-    fn def(&self, builder: &Builder, args: Vec<Var>) -> Vec<Var> {
-        let [text1, image, text2, in_k, in_v]: [Var; 5] =
-            args.try_into().expect("expected 5 inputs");
-        self.forward_image_and_texts(
-            builder,
-            path(vec!["language_model", "model"]).unwrap(),
-            text1,
-            image,
-            text2,
-            in_k,
-            in_v,
-        )
-    }
-}
-
 fn to_f32_vec(
     backend: &CandleBackend,
     value: &interpreter::Value<CandleBackend>,
@@ -195,43 +78,11 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::init();
     let args = Args::parse();
 
-    let (model_paths, config_path, tokenizer_path, _) = get_model_files(&args.model_name, "main")?;
-
-    let config_json = std::fs::read_to_string(config_path)?;
-    let config: GemmaConfig = serde_json::from_str(&config_json)?;
-    let (mut text_config, vision_config, image_token_index, mut mm_tokens_per_image) = match config
-    {
-        GemmaConfig::VLM {
-            text_config,
-            vision_config,
-            image_token_index,
-            mm_tokens_per_image,
-        } => (
-            text_config,
-            vision_config,
-            image_token_index,
-            mm_tokens_per_image,
-        ),
-        GemmaConfig::Text(_) => {
-            return Err(anyhow::anyhow!("Expected Gemma VLM config, got text-only config").into());
-        }
-    };
-
-    let is_paligemma = text_config.model_type == "gemma2";
-
-    if is_paligemma {
-        text_config.max_position_embeddings = 8192;
-        text_config.rope_theta = 10000.0;
-        mm_tokens_per_image = vision_config.num_image_tokens;
-    }
-
-    // println!("config: {:?}", config);
+    let backend = CandleBackend::new();
+    let (mut parameter_values, mut parameter_types, config_json, tokenizer, _) =
+        load_model(&args.model_name, "main", &backend)?;
 
     let chat_template = get_model_chat_template(&args.model_name, "main").unwrap_or_default();
-
-    // println!("chat_template: {}", chat_template);
-    let tokenizer = Tokenizer::from_file(tokenizer_path)
-        .map_err(|e| format!("Failed to load tokenizer: {e}"))?;
 
     let prompt = if chat_template.is_empty() || args.raw {
         args.prompt.clone()
@@ -239,48 +90,48 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
         render_chat_template(&chat_template, &args.prompt, true, false).unwrap()
     };
 
-    // We insert 256 image tokens to mirror what the HF Transformers processor does
-    // even though we replace them with image features later (so a single sentinel token would be enough)
-    // What must be kept in the token stream are the start/end/bos/eol tokens.
-    let prompt = if is_paligemma {
-        let img_seq = format!("{}<bos>", "<image>".repeat(256));
-        let p = prompt.replace("<image>", &img_seq);
-        format!("{}\n", p)
-    } else {
-        // Gemma3 special image token sequence
-        let img_seq = format!(
-            "\n\n<start_of_image>{}<end_of_image>\n\n",
-            "<image_soft_token>".repeat(256)
-        );
-        prompt.replace("<start_of_image>", &img_seq)
-    };
+    let bootstrap_model = get_model(&config_json, 1)?;
+    let prompt = bootstrap_model
+        .multimodal_interpolate_prompt(&prompt)
+        .ok_or_else(|| anyhow::anyhow!("Model does not provide multimodal prompt interpolation"))?;
 
-    // println!("prompt: {}", prompt);
     let encoding = tokenizer
         .encode(prompt, true)
         .map_err(|err| anyhow::anyhow!("check error {:?}", err))?;
-
     let mut token_ids = encoding.get_ids().to_vec();
-
     println!("token_ids: {:?}", token_ids);
 
-    let backend = CandleBackend::new();
-    let (parameters, _, _) = load_model_weights(model_paths, &backend)?;
-    println!("VLM model {} loaded successfully.", args.model_name);
+    let max_sequence_length = args.max_seq_len + token_ids.len();
+    let model = get_model(&config_json, max_sequence_length)?;
+    let mm = model
+        .multimodal_metadata()
+        .ok_or_else(|| anyhow::anyhow!("Model is not multimodal"))?;
+
+    let vision_model = model
+        .multimodal_vision_module()
+        .ok_or_else(|| anyhow::anyhow!("Model does not provide a multimodal vision module"))?;
+    let language_model = model
+        .multimodal_language_module()
+        .ok_or_else(|| anyhow::anyhow!("Model does not provide a multimodal language module"))?;
+
+    post_process_model_weights(
+        model.as_ref(),
+        &backend,
+        &mut parameter_values,
+        &mut parameter_types,
+    )?;
 
     // Initialize interpreter
     let mut env = catgrad::stdlib::stdlib();
-    let param_keys: Vec<Path> = parameters.0.keys().cloned().collect();
-    env.declarations
-        .extend(catgrad::stdlib::to_load_ops(Path::empty(), &param_keys));
+    env.declarations.extend(catgrad::stdlib::to_load_ops(
+        Path::empty(),
+        parameter_types.keys(),
+    ));
 
-    let interpreter = Interpreter::new(backend.clone(), env, parameters);
+    let interpreter = Interpreter::new(backend.clone(), env, parameter_values);
 
-    let (image_data, image_shape) = load_and_preprocess_image(
-        &args.image,
-        vision_config.image_size,
-        vision_config.patch_size,
-    )?;
+    let (image_data, image_shape) =
+        load_and_preprocess_image(&args.image, mm.image_size, mm.patch_size)?;
 
     let cache_path =
         cache_path_for_embeddings(&args.model_name, args.image.to_str().unwrap(), &image_data);
@@ -291,7 +142,7 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("Loading cached image features from: {:?}", cache_path);
             interpreter::tensor(
                 &backend,
-                Shape(vec![1, mm_tokens_per_image, text_config.hidden_size]),
+                Shape(vec![1, mm.mm_tokens_per_image, mm.hidden_size]),
                 visual_embeddings,
             )
             .unwrap()
@@ -300,7 +151,6 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .map_err(|e| anyhow::anyhow!("BackendError: {:?}", e))?;
 
             // Get embeddings from the image
-            let vision_model = VisionEmbeddings::new(is_paligemma, vision_config);
             let vision_term = vision_model
                 .term()
                 .expect("failed to build vision model term");
@@ -312,22 +162,15 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
         };
 
     println!("Visual embeddings shape: {:?}", visual_embeddings_tensor);
-    let vlm_model = VLMModel {
-        language_model: Box::new(Gemma3Model {
-            root: "language_model.model".to_string(),
-            config: text_config.clone(),
-            max_sequence_length: 1000, //TODO
-        }),
-    };
-
-    let language_term = vlm_model
+    let language_term = language_model
         .term()
         .expect("failed to build language model term");
 
     let max_seq_len = args.max_seq_len;
-    let empty_cache = empty_kv_cache(&interpreter.backend, &text_config)?;
+    let empty_cache = empty_kv_cache(&interpreter.backend, model.config())?;
     let mut kv_cache = empty_cache;
     let mut use_image_embeddings = true;
+    let eos_token_ids = model.config().get_eos_token_ids();
 
     // Run text generation loop
     for _i in 0..max_seq_len {
@@ -335,16 +178,13 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
             &language_term,
             &interpreter,
             &token_ids,
-            &text_config,
-            image_token_index,
+            mm.hidden_size,
+            mm.image_token_index,
             &visual_embeddings_tensor,
             &kv_cache,
             use_image_embeddings,
         )?;
-        if text_config
-            .get_eos_token_ids()
-            .contains(&(next_token_id as i32))
-        {
+        if eos_token_ids.contains(&(next_token_id as i32)) {
             break;
         }
         kv_cache = new_cache;
@@ -363,7 +203,7 @@ fn run_interpreter(
     typed_term: &TypedTerm,
     interpreter: &interpreter::Interpreter<CandleBackend>,
     text_tokens: &[u32],
-    text_config: &GemmaTextConfig,
+    hidden_size: usize,
     image_token_index: usize,
     visual_embeddings_tensor: &interpreter::Value<CandleBackend>,
     kv_cache: &KvCache<CandleBackend>,
@@ -371,7 +211,7 @@ fn run_interpreter(
 ) -> Result<(u32, KvCache<CandleBackend>)> {
     let empty_image_embeddings = interpreter::tensor(
         &interpreter.backend,
-        Shape(vec![1, 0, text_config.hidden_size]),
+        Shape(vec![1, 0, hidden_size]),
         Vec::<f32>::new(),
     )
     .expect("Failed to create empty image embeddings");
