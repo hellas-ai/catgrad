@@ -79,6 +79,15 @@ pub enum WeightPostProcess {
     ConcatMoeExperts { num_local_experts: usize },
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MultimodalMetadata {
+    pub image_token_index: usize,
+    pub mm_tokens_per_image: usize,
+    pub hidden_size: usize,
+    pub image_size: usize,
+    pub patch_size: usize,
+}
+
 pub trait LLMModel: DynModule {
     fn config(&self) -> &dyn LLMConfig;
 
@@ -104,5 +113,25 @@ pub trait LLMModel: DynModule {
 
     fn weight_post_process(&self) -> WeightPostProcess {
         WeightPostProcess::None
+    }
+
+    fn is_multimodal(&self) -> bool {
+        self.multimodal_metadata().is_some()
+    }
+
+    fn multimodal_metadata(&self) -> Option<MultimodalMetadata> {
+        None
+    }
+
+    fn multimodal_vision_module(&self) -> Option<Box<dyn DynModule>> {
+        None
+    }
+
+    fn multimodal_language_module(&self) -> Option<Box<dyn DynModule>> {
+        None
+    }
+
+    fn multimodal_interpolate_prompt(&self, _prompt: &str) -> Option<String> {
+        None
     }
 }

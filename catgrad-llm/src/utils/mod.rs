@@ -273,11 +273,13 @@ pub fn get_model(
             config_json,
             max_sequence_length,
         )?),
-        "Gemma3ForConditionalGeneration" => Box::new(models::gemma3::Gemma3Model::new(
-            "language_model.model",
-            config_json,
-            max_sequence_length,
-        )?),
+        "Gemma3ForConditionalGeneration" | "PaliGemmaForConditionalGeneration" => {
+            Box::new(models::gemma3::Gemma3Model::new(
+                "language_model.model",
+                config_json,
+                max_sequence_length,
+            )?)
+        }
         "Mistral3ForConditionalGeneration" => Box::new(models::mistral3::Mistral3Model::new(
             "language_model",
             config_json,
