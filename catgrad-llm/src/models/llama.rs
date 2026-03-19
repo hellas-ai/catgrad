@@ -8,7 +8,7 @@ use serde::Deserialize;
 
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
-struct LlamaConfig {
+pub(crate) struct LlamaConfig {
     hidden_size: usize,
     intermediate_size: usize,
     num_hidden_layers: usize,
@@ -55,12 +55,22 @@ impl LLMConfig for LlamaConfig {
     }
 
     fn eos_token_id(&self) -> Option<EosTokenId> {
-        self.eos_token_id.clone()
+        self.eos_token_id
+            .clone()
+            .or(Some(EosTokenId::Single(49279))) // SmolVLM2 uses 49279 (<end_of_utterance>) as the EOS token but does not set it in the config.json
     }
 }
 
+impl LlamaConfig {
+    pub(crate) fn hidden_size(&self) -> usize {
+        self.hidden_size
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct LlamaModel {
     pub root: String,
+    model_root: String,
     config: LlamaConfig,
     pub max_sequence_length: usize,
 }
@@ -72,6 +82,19 @@ impl LLMModel for LlamaModel {
 }
 
 impl LlamaModel {
+    pub(crate) fn from_config_with_roots(
+        config: LlamaConfig,
+        max_sequence_length: usize,
+        model_root: &str,
+    ) -> Self {
+        Self {
+            root: String::new(),
+            model_root: model_root.to_string(),
+            config,
+            max_sequence_length,
+        }
+    }
+
     pub fn new(
         root: &str,
         config_json: &serde_json::Value,
@@ -80,13 +103,19 @@ impl LlamaModel {
         let config: LlamaConfig = serde_json::from_value(config_json.clone())?;
         Ok(Self {
             root: root.to_string(),
+            model_root: "model".to_string(),
             config,
             max_sequence_length,
         })
     }
 
     pub fn forward(&self, builder: &Builder, p: Path, x: Var, in_k: Var, in_v: Var) -> Vec<Var> {
-        let x = embeddings(builder, p.extend(["model", "embed_tokens"]).unwrap(), x);
+        let transformer_root = p.extend(self.model_root.split('.')).unwrap();
+        let x = embeddings(
+            builder,
+            transformer_root.extend(["embed_tokens"]).unwrap(),
+            x,
+        );
         let [_b, s, _] = unpack::<3>(builder, shape(builder, x.clone()));
         let [_, _, _, pos, _] = unpack::<5>(builder, shape(builder, in_k.clone()));
         let attention_mask = causal_mask(builder, s, pos);
@@ -103,6 +132,7 @@ impl LlamaModel {
         in_k: Var,
         in_v: Var,
     ) -> Vec<Var> {
+        let transformer_root = p.extend(self.model_root.split('.')).unwrap();
         let mut cache = Cache::init(
             builder,
             &self.config,
@@ -121,7 +151,10 @@ impl LlamaModel {
                 attention_mask.clone(),
                 &mut cache,
                 pos.clone(),
-                p.extend(["model", "layers", &i.to_string()]).unwrap(),
+                transformer_root
+                    .clone()
+                    .extend(["layers", &i.to_string()])
+                    .unwrap(),
                 x,
             );
         }
@@ -129,21 +162,21 @@ impl LlamaModel {
         x = rmsnorm::<3>(
             builder,
             self.config.rms_norm_eps,
-            p.extend(["model", "norm"]).unwrap(),
+            transformer_root.extend(["norm"]).unwrap(),
             x,
         );
 
         let lm_head_weights = if self.config.tie_word_embeddings {
-            vec!["model", "embed_tokens"]
+            transformer_root.extend(["embed_tokens"]).unwrap()
         } else {
-            vec!["lm_head"]
+            p.extend(["lm_head"]).unwrap()
         };
 
         x = linear_no_bias(
             builder,
             self.config.hidden_size,
             self.config.vocab_size,
-            p.extend(lm_head_weights).unwrap(),
+            lm_head_weights,
             x,
         );
 
