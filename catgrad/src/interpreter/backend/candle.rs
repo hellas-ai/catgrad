@@ -630,82 +630,8 @@ impl CandleBackend {
         (topk_values, topk_indices)
     }
 
-    fn matmul_generic(lhs: Tensor, rhs: Tensor) -> Tensor {
-        // For now, only handle rank 2 case
-        assert_eq!(lhs.dims().len(), 2, "matmul: lhs must be rank 2");
-        assert_eq!(rhs.dims().len(), 2, "matmul: rhs must be rank 2");
-
-        lhs.matmul(&rhs).unwrap()
-    }
-
     pub fn batched_matmul(lhs: Tensor, rhs: Tensor) -> Tensor {
-        // For now, handle the simple 2D case
-        if lhs.dims().len() == 2 && rhs.dims().len() == 2 {
-            return Self::matmul_generic(lhs, rhs);
-        }
-
-        // Same as ndarray: require exact batch dimension match, panic if not
-        let lhs_dims = lhs.dims();
-        let rhs_dims = rhs.dims();
-
-        if lhs_dims.len() >= 2 && rhs_dims.len() >= 2 {
-            // Get batch dimensions and matrix dimensions
-            let lhs_batch_dims = &lhs_dims[..lhs_dims.len() - 2];
-            let rhs_batch_dims = &rhs_dims[..rhs_dims.len() - 2];
-            let lhs_matrix_dims = &lhs_dims[lhs_dims.len() - 2..];
-            let rhs_matrix_dims = &rhs_dims[rhs_dims.len() - 2..];
-
-            // Check matrix dimensions compatibility
-            assert_eq!(
-                lhs_matrix_dims[1], rhs_matrix_dims[0],
-                "batched_matmul: incompatible matrix dimensions"
-            );
-
-            // Require batch dimensions to match exactly (same as ndarray)
-            assert_eq!(
-                lhs_batch_dims, rhs_batch_dims,
-                "batched_matmul: batch dimensions must match exactly"
-            );
-
-            let batch_size: usize = lhs_batch_dims.iter().product();
-            let lhs_m = lhs_matrix_dims[0];
-            let lhs_k = lhs_matrix_dims[1];
-            let rhs_k = rhs_matrix_dims[0];
-            let rhs_n = rhs_matrix_dims[1];
-
-            // Reshape to (batch_size, m, k) and (batch_size, k, n)
-            // Avoid unnecessary reshaping if already batched
-            let (lhs_reshaped, rhs_reshaped) = if lhs_dims.len() > 3 {
-                (
-                    lhs.reshape(&[batch_size, lhs_m, lhs_k]).unwrap(),
-                    rhs.reshape(&[batch_size, rhs_k, rhs_n]).unwrap(),
-                )
-            } else {
-                (lhs.clone(), rhs)
-            };
-
-            // Perform batched matrix multiplication
-            let mut results = Vec::new();
-            for b in 0..batch_size {
-                let lhs_batch = lhs_reshaped.narrow(0, b, 1).unwrap();
-                let rhs_batch = rhs_reshaped.narrow(0, b, 1).unwrap();
-                let batch_result = lhs_batch.matmul(&rhs_batch).unwrap();
-                results.push(batch_result);
-            }
-
-            // Concatenate results and reshape back to proper batch shape
-            let mut result_shape = lhs_batch_dims.to_vec();
-            result_shape.push(lhs_m);
-            result_shape.push(rhs_n);
-
-            Tensor::cat(&results, 0)
-                .unwrap()
-                .reshape(&*result_shape)
-                .unwrap()
-        } else {
-            // Fallback to regular matmul
-            lhs.matmul(&rhs).unwrap()
-        }
+        lhs.matmul(&rhs).unwrap()
     }
 }
 
