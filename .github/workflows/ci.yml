@@ -10,30 +10,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: Swatinem/rust-cache@v2
-
-      - name: Install MLIR/LLVM
-        # Disable MLIR installation and tests for now.
-        if: false
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y wget gnupg
-
-          # Add LLVM apt repo + install
-          wget https://apt.llvm.org/llvm.sh
-          chmod +x llvm.sh
-          sudo ./llvm.sh 21
-
-          # Install MLIR
-          sudo apt-get install -y mlir-21-tools libmlir-21-dev
-
-          echo "/usr/lib/llvm-21/bin" >> $GITHUB_PATH
       - name: Run tests
         env:
           LIBRARY_PATH: /usr/lib/llvm-21/lib
           LD_LIBRARY_PATH: /usr/lib/llvm-21/lib
         run: |
-          cargo test --all-targets --features ndarray-backend,candle-backend --workspace --exclude catgrad-mlir
-          # RUST_BACKTRACE=full cargo test --examples --features ndarray-backend,candle-backend
+          cargo test --all-targets --features ndarray-backend,candle-backend --workspace
   # Check formatting with rustfmt
   formatting:
     name: cargo fmt
