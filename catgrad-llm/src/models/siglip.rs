@@ -125,13 +125,14 @@ impl SiglipVisionBackbone {
         let num_patches = image_size / patch_size;
         let num_channels = 3;
         let hidden_size = config.hidden_size;
+        let [b, _, _, _] = unpack::<4>(builder, shape(builder, x.clone()));
 
         let dim = num_channels * patch_size * patch_size;
         let x = reshape(
             builder,
             shape!(
                 builder,
-                1,
+                b,
                 num_channels,
                 num_patches,
                 patch_size,
@@ -147,7 +148,7 @@ impl SiglipVisionBackbone {
 
         let x = reshape(
             builder,
-            shape!(builder, 1, num_patches * num_patches, dim),
+            shape!(builder, b, num_patches * num_patches, dim),
             x,
         );
 
@@ -156,7 +157,7 @@ impl SiglipVisionBackbone {
         let weight = reshape(builder, shape!(builder, hidden_size, dim), weight);
         let weight = transpose(builder, 0, 1, weight);
 
-        let sh = shape!(builder, 1, dim, hidden_size);
+        let sh = shape!(builder, b, dim, hidden_size);
         let weight = broadcast(builder, sh, weight);
 
         let emb = matmul(builder, x, weight);
