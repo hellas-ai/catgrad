@@ -76,8 +76,8 @@ if __name__ == "__main__":
             {
                 "role": "user",
                 "content": [
-                    {"type": "image", "path": args.image},
                     {"type": "text", "text": prompt},
+                    {"type": "image", "path": args.image},
                 ],
             }
         ]
@@ -86,6 +86,7 @@ if __name__ == "__main__":
                 messages,
                 tokenize=True,
                 return_dict=True,
+                do_image_splitting=False,
                 return_tensors="pt",
                 add_generation_prompt=True,
             )

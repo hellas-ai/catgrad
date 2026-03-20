@@ -60,7 +60,9 @@ pub fn cache_path_for_embeddings(
     image_data: &[f32],
 ) -> PathBuf {
     let cache_dir = std::env::var("CATGRAD_CACHE").unwrap_or_else(|_| ".cache".to_string());
-    let checksum: u32 = image_data.iter().map(|x| x.to_bits()).sum();
+    let checksum = image_data
+        .iter()
+        .fold(0u32, |acc, x| acc.wrapping_add(x.to_bits()));
     let filename = format!(
         "{}-{}-{:08x}.bin",
         sanitize(model_name),
