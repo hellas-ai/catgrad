@@ -8,3 +8,4 @@
 .zed
 mise.toml
 .gdbinit
+**/__pycache__
