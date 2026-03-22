@@ -26,25 +26,30 @@
       };
       manifest = (pkgs.lib.importTOML ./Cargo.toml).workspace.package;
 
-      cudaPackages = defaultCudaPackages pkgs;
-      cudaInputs = with cudaPackages; [
-        cuda_cccl
-        cuda_cudart
-        cuda_nvrtc
-        libcublas
-        libcurand
-      ];
-      cudaEnv = {
+      mkCudaEnv = {
+        cudaPackages ? defaultCudaPackages pkgs,
+        cudaCapability ? defaultCudaCapability,
+      }: let
+        cudaInputs = with cudaPackages; [
+          cuda_cccl
+          cuda_cudart
+          cuda_nvrtc
+          libcublas
+          libcurand
+        ];
+      in {
         nativeBuildInputs = [
           pkgs.autoAddDriverRunpath
           cudaPackages.cuda_nvcc
         ];
         buildInputs = cudaInputs;
-        CUDA_COMPUTE_CAP = defaultCudaCapability;
+        CUDA_COMPUTE_CAP = cudaCapability;
         CUDA_TOOLKIT_ROOT_DIR = pkgs.lib.getDev cudaPackages.cuda_cudart;
         runtimeLibraryPath = pkgs.lib.makeLibraryPath cudaInputs;
         driverLink = pkgs.addDriverRunpath.driverLink;
       };
+
+      cudaEnv = mkCudaEnv {};
 
       mkCatgrad = {
         withExamples ? true,
@@ -104,7 +109,9 @@
           };
         };
     in {
-      lib.cudaEnv = cudaEnv;
+      lib = {
+        inherit mkCudaEnv cudaEnv;
+      };
 
       packages = {
         default = mkCatgrad {};
@@ -114,7 +121,8 @@
 
       devShells.cuda = pkgs.mkShell {
         inputsFrom = [(mkCatgrad {withCuda = true;})];
-        inherit (cudaEnv)
+        inherit
+          (cudaEnv)
           CUDA_COMPUTE_CAP
           CUDA_TOOLKIT_ROOT_DIR
           ;
