@@ -48,13 +48,8 @@
 
       mkCatgrad = {
         withExamples ? true,
-        withMlir ? false,
         withCuda ? false,
-        llvmPackages ? pkgs.llvmPackages_21,
-      }: let
-        # todo: reduce closure size by using clang/llvm from rust toolchain?
-        mlirInputs = with llvmPackages; [mlir llvm clang];
-      in
+      }:
         pkgs.rustPlatform.buildRustPackage {
           pname = "catgrad";
           version = manifest.version;
@@ -72,12 +67,10 @@
             ++ pkgs.lib.optionals withCuda ["--features" "catgrad/cuda"];
 
           nativeBuildInputs =
-            pkgs.lib.optionals (withMlir || withCuda) [pkgs.makeWrapper]
-            ++ pkgs.lib.optionals withCuda cudaEnv.nativeBuildInputs;
+            pkgs.lib.optionals withCuda ([pkgs.makeWrapper] ++ cudaEnv.nativeBuildInputs);
 
           buildInputs =
-            pkgs.lib.optionals withMlir mlirInputs
-            ++ pkgs.lib.optionals withCuda cudaEnv.buildInputs;
+            pkgs.lib.optionals withCuda cudaEnv.buildInputs;
 
           CUDA_COMPUTE_CAP = pkgs.lib.optionalString withCuda cudaEnv.CUDA_COMPUTE_CAP;
           CUDA_TOOLKIT_ROOT_DIR = pkgs.lib.optionalString withCuda cudaEnv.CUDA_TOOLKIT_ROOT_DIR;
@@ -95,19 +88,6 @@
                 ! -name '*-????????????????' \
                 -exec install -Dm755 {} $out/bin/ \;
             ''
-            # mlir-llm needs mlir toolchain + libs: for builds/tests/devshell they come from buildInputs
-            # at runtime: we need to wrap the executable in a script that appends the necessary environment variables
-            # the rust code uses e.g `-lmlir_c_runner_utils`- we need to set NIX_LDFLAGS so linker knows where to look
-            + pkgs.lib.optionalString withMlir ''
-              if [ -x "$out/bin/mlir-llm" ]; then
-                wrapProgram "$out/bin/mlir-llm" \
-                  --prefix PATH : "${pkgs.lib.makeBinPath mlirInputs}" \
-                  --prefix LIBRARY_PATH : "${pkgs.lib.makeLibraryPath mlirInputs}" \
-                  --prefix LD_LIBRARY_PATH : "${pkgs.lib.makeLibraryPath mlirInputs}" \
-                  --prefix DYLD_LIBRARY_PATH : "${pkgs.lib.makeLibraryPath mlirInputs}" \
-                  --prefix NIX_LDFLAGS " " "-L${pkgs.lib.makeLibraryPath mlirInputs}"
-              fi
-            ''
             + pkgs.lib.optionalString withCuda ''
               for bin in $out/bin/*; do
                 if [ -x "$bin" ] && [ ! -L "$bin" ]; then
@@ -120,10 +100,7 @@
           meta = with pkgs.lib; {
             description = manifest.description;
             license = licenses.mit;
-            mainProgram =
-              if withMlir
-              then "mlir-llm"
-              else "llama";
+            mainProgram = "llama";
           };
         };
     in {
@@ -132,7 +109,6 @@
       packages = {
         default = mkCatgrad {};
         minimal = mkCatgrad {withExamples = false;};
-        withMlir = mkCatgrad {withMlir = true;};
         withCuda = mkCatgrad {withCuda = true;};
       };
 
