@@ -192,7 +192,7 @@ fn run_with_backend<B: interpreter::Backend>(
         render_chat_template(&chat_template, &args.prompt, use_image, false)?
     };
 
-    if !benchmarking {
+    if !benchmarking && !use_image {
         print!("{}", prompt);
     }
     let prompt = if use_image {
