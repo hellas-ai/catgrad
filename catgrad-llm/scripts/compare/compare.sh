@@ -11,6 +11,10 @@ MODELS=(
     "LiquidAI/LFM2-350M"
 )
 
+MULTIMODAL_MODELS=(
+        "HuggingFaceTB/SmolVLM2-256M-Video-Instruct"
+)
+
 # Add more models if not in GitHub CI (they are larger and/or need a user agreement to download from HF)
 if [[ -z "${GITHUB_ACTIONS:-}" ]]; then
     MODELS+=(
@@ -28,6 +32,8 @@ OUTPUT_DIR=$DIR/outputs/$MAXLEN
 mkdir -p "$OUTPUT_DIR"
 rm -rf "$OUTPUT_DIR"/*
 
+IMAGE=catgrad-llm/scripts/compare/images/cats.png
+
 echo "Generating outputs of ${MAXLEN} tokens for ${#MODELS[@]} models..."
 
 if [[ "${CATGRAD_COMPARE_HF_RUN:-}" ]]; then
@@ -41,6 +47,15 @@ if [[ "${CATGRAD_COMPARE_HF_RUN:-}" ]]; then
         echo "Running HF Transformers for $model -> $REFERENCE_DIR/$filename"
 
         uv run catgrad-llm/scripts/llm.py -m "$model" -p 'Category theory is' -s $MAXLEN -r > "$REFERENCE_DIR/$filename" 2>/dev/null &
+    done
+
+    for model in "${MULTIMODAL_MODELS[@]}"; do
+        # Replace slashes with dashes for the filename
+        filename="${model//\//-}"
+
+        echo "Running HF Transformers for $model -> $REFERENCE_DIR/$filename"
+
+        uv run catgrad-llm/scripts/llm.py -m "$model" -p 'describe the image' -s $MAXLEN -i $IMAGE > "$REFERENCE_DIR/$filename" 2>/dev/null &
     done
 
     wait
@@ -60,11 +75,22 @@ for model in "${MODELS[@]}"; do
     [[ -z "${GITHUB_ACTIONS:-}" ]] || wait
 done
 
+for model in "${MULTIMODAL_MODELS[@]}"; do
+    # Replace slashes with dashes for the filename
+    filename="${model//\//-}"
+
+    echo "Running for $model -> $OUTPUT_DIR/$filename"
+
+    ./target/release/examples/llama -m "$model" -p 'describe the image' -s $MAXLEN -i $IMAGE > "$OUTPUT_DIR/$filename" 2>/dev/null &
+
+    [[ -z "${GITHUB_ACTIONS:-}" ]] || wait
+done
+
 wait
 
-echo "Comparing $OUTPUT_DIR with $REFERENCE_DIR..."
+echo "Comparing $REFERENCE_DIR with $OUTPUT_DIR..."
 
-if diff -ur "$OUTPUT_DIR" "$REFERENCE_DIR"; then
+if diff -ur "$REFERENCE_DIR" "$OUTPUT_DIR"; then
     echo "Success: All model outputs match."
     exit 0
 else
