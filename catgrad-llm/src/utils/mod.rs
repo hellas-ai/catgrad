@@ -288,6 +288,10 @@ pub fn get_model(
         "MistralForCausalLM" | "LlamaForCausalLM" | "SmolLM3ForCausalLM" => Box::new(
             models::llama::LlamaModel::new("", config_json, max_sequence_length)?,
         ),
+        "SmolVLMForConditionalGeneration" => Box::new(models::smolvlm2::SmolVLM2Model::new(
+            config_json,
+            max_sequence_length,
+        )?),
         "Phi3ForCausalLM" | "Phi4MMForCausalLM" => Box::new(models::phi3::Phi3Model::new(
             config_json,
             max_sequence_length,

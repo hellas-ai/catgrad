@@ -5,9 +5,13 @@ use catgrad::stdlib::nn::*;
 
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct SiglipVisionConfig {
+    #[serde(default = "default_vision_hidden_size")]
     pub hidden_size: usize,
+    #[serde(default = "default_vision_intermediate_size")]
     pub intermediate_size: usize,
+    #[serde(default = "default_vision_hidden_layers")]
     pub num_hidden_layers: usize,
+    #[serde(default = "default_vision_num_attention_heads")]
     pub num_attention_heads: usize,
     #[serde(default = "default_layer_norm_eps")]
     pub layer_norm_eps: f32,
@@ -19,6 +23,21 @@ pub struct SiglipVisionConfig {
     pub projection_dim: usize,
     #[serde(default)]
     pub num_image_tokens: usize,
+}
+
+fn default_vision_hidden_size() -> usize {
+    1152
+}
+fn default_vision_intermediate_size() -> usize {
+    3072
+}
+
+fn default_vision_hidden_layers() -> usize {
+    12
+}
+
+fn default_vision_num_attention_heads() -> usize {
+    16
 }
 
 fn default_patch_size() -> usize {
