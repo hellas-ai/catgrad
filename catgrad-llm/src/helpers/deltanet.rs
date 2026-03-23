@@ -40,6 +40,7 @@ pub fn chunk_gated_delta_rule(
     beta: Var,
     head_k_dim: usize,
     chunk_size: usize,
+    _num_chunks: Var,
 ) -> (Var, Var) {
     let query = l2norm(builder, query, 1e-6);
     let key = l2norm(builder, key, 1e-6);

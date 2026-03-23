@@ -91,6 +91,10 @@ pub struct MultimodalMetadata {
 pub trait LLMModel: DynModule {
     fn config(&self) -> &dyn LLMConfig;
 
+    fn extra_nat_input(&self, _seq_len: usize) -> Option<usize> {
+        None
+    }
+
     // Return empty KV-cache shape by default
     fn empty_state_type(&self) -> Vec<(Dtype, Shape)> {
         let config = self.config();

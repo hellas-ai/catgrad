@@ -90,6 +90,10 @@ impl LLMModel for OlmoModel {
         &self.config
     }
 
+    fn extra_nat_input(&self, seq_len: usize) -> Option<usize> {
+        Some(seq_len.div_ceil(GATED_DELTA_CHUNK_SIZE))
+    }
+
     fn empty_state_type(&self) -> Vec<(Dtype, Shape)> {
         vec![
             (
@@ -311,6 +315,7 @@ impl OlmoModel {
         builder: &Builder,
         layer_id: usize,
         cache: &mut Cache,
+        num_chunks: Var,
         pos: Var,
         p: Path,
         hidden_states: Var,
@@ -580,6 +585,7 @@ impl OlmoModel {
                     beta,
                     head_k_dim,
                     GATED_DELTA_CHUNK_SIZE,
+                    num_chunks.clone(),
                 );
                 vec![core_attn_out_prefill, out_recurrent_state_prefill]
             },
@@ -633,6 +639,7 @@ impl OlmoModel {
         layer_id: usize,
         attention_mask: Var,
         cache: &mut Cache,
+        num_chunks: Var,
         pos: Var,
         p: Path,
         x: Var,
@@ -681,6 +688,7 @@ impl OlmoModel {
                 builder,
                 layer_id,
                 cache,
+                num_chunks,
                 pos,
                 p.extend(["linear_attn"]).unwrap(),
                 x,
@@ -706,8 +714,8 @@ impl DynModule for OlmoModel {
     }
 
     fn def(&self, builder: &Builder, args: Vec<Var>) -> Vec<Var> {
-        let [x, in_k, in_v, in_conv, in_recurrent]: [Var; 5] =
-            args.try_into().expect("expected 5 inputs");
+        let [x, in_k, in_v, in_conv, in_recurrent, num_chunks]: [Var; 6] =
+            args.try_into().expect("expected 6 inputs");
         let root = self.path();
 
         let mut cache = Cache::init(
@@ -740,6 +748,7 @@ impl DynModule for OlmoModel {
                 i,
                 attention_mask.clone(),
                 &mut cache,
+                num_chunks.clone(),
                 pos.clone(),
                 root.extend(["model", "layers", &i.to_string()]).unwrap(),
                 x,
@@ -839,6 +848,7 @@ impl DynModule for OlmoModel {
 
         source.push(t_conv.clone());
         source.push(t_recurrent.clone());
+        source.push(Type::Nat(NatExpr::Var(3)));
         target.push(t_conv);
         target.push(t_recurrent);
         (source, target)
