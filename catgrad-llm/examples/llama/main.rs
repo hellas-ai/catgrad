@@ -4,9 +4,9 @@ use catgrad::interpreter::backend::ndarray::NdArrayBackend;
 use catgrad::prelude::*;
 use catgrad_llm::helpers::LLMModel;
 use catgrad_llm::utils::{
-    cache_path_for_embeddings, get_model, get_model_chat_template, load_and_preprocess_image,
-    load_cached_embeddings, load_model, post_process_model_weights, print_bench_table,
-    render_chat_template, save_cached_embeddings,
+    cache_path_for_embeddings, empty_state_cache, get_model, get_model_chat_template,
+    load_and_preprocess_image, load_cached_embeddings, load_model, post_process_model_weights,
+    print_bench_table, render_chat_template, save_cached_embeddings,
 };
 use clap::{Parser, ValueEnum};
 use serde::Deserialize;
@@ -418,30 +418,6 @@ fn run_with_backend<B: interpreter::Backend>(
         );
     }
     Ok(())
-}
-
-// Model-specific empty state cache.
-// Usually just KV-cache but for hybrid models it can include additional state from the linear layers.
-fn empty_state_cache<B: interpreter::Backend>(
-    backend: &B,
-    model: &dyn LLMModel,
-) -> Result<Vec<interpreter::Value<B>>> {
-    let typ = model.empty_state_type();
-
-    typ.iter()
-        .map(|(dtype, shape)| match dtype {
-            Dtype::F32 => {
-                let data = vec![0.0f32; shape.0.iter().product()];
-                interpreter::tensor(backend, shape.clone(), data)
-                    .map_err(|err| anyhow::anyhow!("state tensor error: {:?}", err))
-            }
-            Dtype::U32 => {
-                let data = vec![0u32; shape.0.iter().product()];
-                interpreter::tensor(backend, shape.clone(), data)
-                    .map_err(|err| anyhow::anyhow!("state tensor error: {:?}", err))
-            }
-        })
-        .collect()
 }
 
 fn to_f32_vec<B: interpreter::Backend>(

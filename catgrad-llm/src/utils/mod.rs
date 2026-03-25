@@ -597,3 +597,29 @@ pub fn print_bench_table(
         tps_tg
     );
 }
+
+// Model-specific empty state cache.
+// Usually just KV-cache but for hybrid models it can include additional state from the linear layers.
+pub fn empty_state_cache<B: interpreter::Backend>(
+    backend: &B,
+    model: &dyn LLMModel,
+) -> Result<Vec<interpreter::Value<B>>> {
+    let typ = model.empty_state_type();
+
+    typ.iter()
+        .map(|(dtype, shape)| match dtype {
+            Dtype::F32 => {
+                let data = vec![0.0f32; shape.0.iter().product()];
+                interpreter::tensor(backend, shape.clone(), data).map_err(|err| {
+                    LLMError::InvalidModelConfig(format!("state tensor error: {:?}", err))
+                })
+            }
+            Dtype::U32 => {
+                let data = vec![0u32; shape.0.iter().product()];
+                interpreter::tensor(backend, shape.clone(), data).map_err(|err| {
+                    LLMError::InvalidModelConfig(format!("state tensor error: {:?}", err))
+                })
+            }
+        })
+        .collect()
+}
