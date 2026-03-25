@@ -421,6 +421,7 @@ impl Qwen3_5Model {
         let num_v_heads = self.config.linear_num_value_heads;
         let head_k_dim = self.config.linear_key_head_dim;
         let head_v_dim = self.config.linear_value_head_dim;
+        let max_num_chunks = self.max_sequence_length.div_ceil(GATED_DELTA_CHUNK_SIZE);
         let key_dim = num_k_heads * head_k_dim;
         let value_dim = num_v_heads * head_v_dim;
         let conv_dim = key_dim * 2 + value_dim;
@@ -560,7 +561,8 @@ impl Qwen3_5Model {
             builder,
             is_decode,
             |b, args: Vec<Var>| {
-                let [query, key, value, g, beta, recurrent_state] = args.try_into().unwrap();
+                let [query, key, value, g, beta, recurrent_state, _num_chunks] =
+                    args.try_into().unwrap();
                 let (core_attn_out_decode, out_recurrent_state_decode) = recurrent_gated_delta_rule(
                     b,
                     query,
@@ -574,7 +576,8 @@ impl Qwen3_5Model {
                 vec![core_attn_out_decode, out_recurrent_state_decode]
             },
             |b, args: Vec<Var>| {
-                let [query, key, value, g, beta, _recurrent_state] = args.try_into().unwrap();
+                let [query, key, value, g, beta, _recurrent_state, num_chunks] =
+                    args.try_into().unwrap();
                 let (core_attn_out_prefill, out_recurrent_state_prefill) = chunk_gated_delta_rule(
                     b,
                     query,
@@ -583,12 +586,12 @@ impl Qwen3_5Model {
                     g,
                     beta,
                     head_k_dim,
-                    GATED_DELTA_CHUNK_SIZE,
-                    num_chunks.clone(),
+                    num_chunks,
+                    max_num_chunks,
                 );
                 vec![core_attn_out_prefill, out_recurrent_state_prefill]
             },
-            vec![query, key, value, g, beta, recurrent_state],
+            vec![query, key, value, g, beta, recurrent_state, num_chunks],
         );
 
         let core_attn_out = results[0].clone();
