@@ -78,6 +78,15 @@ enum BackendChoice {
     Candle,
 }
 
+impl BackendChoice {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Ndarray => "Ndarray",
+            Self::Candle => "Candle",
+        }
+    }
+}
+
 #[derive(Debug, Deserialize)]
 struct AppConfig {
     aliases: HashMap<String, String>,
@@ -133,12 +142,12 @@ fn main() -> Result<()> {
     }
 }
 
-fn get_model_name(args: &Args, app_config: &AppConfig) -> Result<String> {
-    Ok(app_config
+fn get_model_name(args: &Args, app_config: &AppConfig) -> String {
+    app_config
         .aliases
         .get(args.model_name.as_str())
         .cloned()
-        .unwrap_or_else(|| args.model_name.clone()))
+        .unwrap_or_else(|| args.model_name.clone())
 }
 
 fn get_models(app_config: &AppConfig) -> Vec<(&str, &str)> {
@@ -156,7 +165,7 @@ fn run_with_backend<B: interpreter::Backend>(
     app_config: &AppConfig,
     backend: B,
 ) -> Result<()> {
-    let model_name = get_model_name(args, app_config)?;
+    let model_name = get_model_name(args, app_config);
 
     let start_load = std::time::Instant::now();
     let (mut parameter_values, mut parameter_types, config_json, tokenizer, total_params) =
@@ -394,15 +403,11 @@ fn run_with_backend<B: interpreter::Backend>(
         // hardcode size multiplier as 4.0 since we only load in F32
         let size_gib = (total_params as f64 * 4.0) / (1024.0 * 1024.0 * 1024.0);
         let params_m = total_params as f64 / 1_000_000.0;
-        let b_str = match args.backend {
-            BackendChoice::Ndarray => "Ndarray",
-            BackendChoice::Candle => "Candle",
-        };
         print_bench_table(
             &model_name,
             size_gib,
             params_m,
-            b_str,
+            args.backend.as_str(),
             pp,
             elapsed_pp,
             tg,
@@ -452,6 +457,41 @@ enum DecodeInputs<'a, B: interpreter::Backend> {
     },
 }
 
+fn token_tensor<B: interpreter::Backend>(
+    interpreter: &interpreter::Interpreter<B>,
+    label: &str,
+    input_tokens: &[u32],
+) -> Result<interpreter::Value<B>> {
+    interpreter::tensor(
+        &interpreter.backend,
+        Shape(vec![1, input_tokens.len()]),
+        input_tokens.to_vec(),
+    )
+    .map_err(|err| anyhow::anyhow!("{label} tensor error: {:?}", err))
+}
+
+fn split_image_tokens(input_tokens: &[u32], image_token_index: usize) -> Result<(&[u32], &[u32])> {
+    let image_token = image_token_index as u32;
+    let first_image_token_index = input_tokens
+        .iter()
+        .position(|&token| token == image_token)
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "multimodal prompt is missing image token {}",
+                image_token_index
+            )
+        })?;
+    let last_image_token_index = input_tokens
+        .iter()
+        .rposition(|&token| token == image_token)
+        .expect("first image token implies last image token");
+
+    Ok((
+        &input_tokens[..first_image_token_index],
+        &input_tokens[last_image_token_index + 1..],
+    ))
+}
+
 fn run_interpreter<B: interpreter::Backend>(
     model: &dyn LLMModel,
     typed_term: &TypedTerm,
@@ -465,13 +505,7 @@ fn run_interpreter<B: interpreter::Backend>(
     match decode_inputs {
         DecodeInputs::Text { input_tokens } => {
             input_seq_len = input_tokens.len();
-            let input_tensor = interpreter::tensor(
-                &interpreter.backend,
-                Shape(vec![1, input_tokens.len()]),
-                input_tokens.to_vec(),
-            )
-            .map_err(|err| anyhow::anyhow!("input tensor error: {:?}", err))?;
-            inputs.push(input_tensor);
+            inputs.push(token_tensor(interpreter, "input", input_tokens)?);
         }
         DecodeInputs::Multimodal {
             input_tokens,
@@ -489,34 +523,13 @@ fn run_interpreter<B: interpreter::Backend>(
             .map_err(|err| anyhow::anyhow!("empty image tensor error: {:?}", err))?;
 
             let (text_before_tokens, text_after_tokens) = if use_image_embeddings {
-                let first_image_token_index = input_tokens
-                    .iter()
-                    .position(|&x| x == image_token_index as u32)
-                    .unwrap_or(0);
-                let last_image_token_index = input_tokens
-                    .iter()
-                    .rposition(|&x| x == image_token_index as u32)
-                    .unwrap_or(0);
-                (
-                    &input_tokens[..first_image_token_index],
-                    &input_tokens[last_image_token_index + 1..],
-                )
+                split_image_tokens(input_tokens, image_token_index)?
             } else {
                 (&[][..], input_tokens)
             };
 
-            let text_before = interpreter::tensor(
-                &interpreter.backend,
-                Shape(vec![1, text_before_tokens.len()]),
-                text_before_tokens.to_vec(),
-            )
-            .map_err(|err| anyhow::anyhow!("text_before tensor error: {:?}", err))?;
-            let text_after = interpreter::tensor(
-                &interpreter.backend,
-                Shape(vec![1, text_after_tokens.len()]),
-                text_after_tokens.to_vec(),
-            )
-            .map_err(|err| anyhow::anyhow!("text_after tensor error: {:?}", err))?;
+            let text_before = token_tensor(interpreter, "text_before", text_before_tokens)?;
+            let text_after = token_tensor(interpreter, "text_after", text_after_tokens)?;
             let image_embeddings = if use_image_embeddings {
                 visual_embeddings.clone()
             } else {

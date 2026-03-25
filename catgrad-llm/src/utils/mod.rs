@@ -541,7 +541,7 @@ pub fn load_model<B: interpreter::Backend>(
     usize,
 )> {
     let (model_paths, config_path, tokenizer_path, _) = get_model_files(model_name, revision)?;
-    let config_json: serde_json::Value = from_json_str(&std::fs::read_to_string(config_path)?)?;
+    let config_json: serde_json::Value = from_json_str(&std::fs::read_to_string(&config_path)?)?;
     let tokenizer = Tokenizer::from_file(tokenizer_path)
         .map_err(|err| LLMError::TokenizerError(format!("tokenizer load error {:?}", err)))?;
 
