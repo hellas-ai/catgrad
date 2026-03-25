@@ -339,7 +339,7 @@ fn run_with_backend<B: interpreter::Backend>(
 
     let eos_token_ids = model.config().get_eos_token_ids();
 
-    let mut state_cache = empty_state_cache(&interpreter.backend, model)?;
+    let mut state_cache = empty_state_cache(&interpreter.backend, model.as_ref())?;
     let use_kv_cache = args.kv_cache || use_image;
     let mut use_image_embeddings = use_image;
 
@@ -358,8 +358,13 @@ fn run_with_backend<B: interpreter::Backend>(
                 input_tokens: &token_ids,
             }
         };
-        let (next_token_id, updated_state_cache) =
-            run_interpreter(&typed_term, &interpreter, decode_inputs, &state_cache)?;
+        let (next_token_id, updated_state_cache) = run_interpreter(
+            model.as_ref(),
+            &typed_term,
+            &interpreter,
+            decode_inputs,
+            &state_cache,
+        )?;
         if i == 0 {
             elapsed_pp = start_gen.elapsed();
             start_gen = std::time::Instant::now();
@@ -419,7 +424,7 @@ fn run_with_backend<B: interpreter::Backend>(
 // Usually just KV-cache but for hybrid models it can include additional state from the linear layers.
 fn empty_state_cache<B: interpreter::Backend>(
     backend: &B,
-    model: Box<dyn LLMModel>,
+    model: &dyn LLMModel,
 ) -> Result<Vec<interpreter::Value<B>>> {
     let typ = model.empty_state_type();
 
@@ -472,15 +477,18 @@ enum DecodeInputs<'a, B: interpreter::Backend> {
 }
 
 fn run_interpreter<B: interpreter::Backend>(
+    model: &dyn LLMModel,
     typed_term: &TypedTerm,
     interpreter: &interpreter::Interpreter<B>,
     decode_inputs: DecodeInputs<'_, B>,
     state_cache: &[interpreter::Value<B>],
 ) -> Result<(u32, Vec<interpreter::Value<B>>)> {
     let mut inputs = Vec::with_capacity(state_cache.len() + 3);
+    let input_seq_len;
 
     match decode_inputs {
         DecodeInputs::Text { input_tokens } => {
+            input_seq_len = input_tokens.len();
             let input_tensor = interpreter::tensor(
                 &interpreter.backend,
                 Shape(vec![1, input_tokens.len()]),
@@ -496,6 +504,7 @@ fn run_interpreter<B: interpreter::Backend>(
             visual_embeddings,
             use_image_embeddings,
         } => {
+            input_seq_len = input_tokens.len();
             let empty_image_embeddings = interpreter::tensor(
                 &interpreter.backend,
                 Shape(vec![1, 0, hidden_size]),
@@ -545,6 +554,11 @@ fn run_interpreter<B: interpreter::Backend>(
     }
 
     inputs.extend(state_cache.iter().cloned());
+    // Workaround: push extra nat input needed for gated delta decoding, representing chunk_number.
+    // It is seq_len dependent and cannot be computed in-graph as it is seq_len % chunk_size.
+    if let Some(extra_nat) = model.extra_nat_input(input_seq_len) {
+        inputs.push(interpreter::Value::Nat(extra_nat));
+    }
 
     // Run the model
     let mut results = interpreter

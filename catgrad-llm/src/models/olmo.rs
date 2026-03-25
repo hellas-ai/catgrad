@@ -90,6 +90,10 @@ impl LLMModel for OlmoModel {
         &self.config
     }
 
+    fn extra_nat_input(&self, seq_len: usize) -> Option<usize> {
+        Some(seq_len.div_ceil(GATED_DELTA_CHUNK_SIZE))
+    }
+
     fn empty_state_type(&self) -> Vec<(Dtype, Shape)> {
         vec![
             (
@@ -311,6 +315,7 @@ impl OlmoModel {
         builder: &Builder,
         layer_id: usize,
         cache: &mut Cache,
+        num_chunks: Var,
         pos: Var,
         p: Path,
         hidden_states: Var,
@@ -323,6 +328,7 @@ impl OlmoModel {
         let num_v_heads = self.config.linear_num_value_heads;
         let head_k_dim = self.config.linear_key_head_dim;
         let head_v_dim = self.config.linear_value_head_dim;
+        let max_num_chunks = self.max_sequence_length.div_ceil(GATED_DELTA_CHUNK_SIZE);
         let key_dim = num_k_heads * head_k_dim;
         let value_dim = num_v_heads * head_v_dim;
         let cache_len = self.config.linear_conv_kernel_dim;
@@ -556,7 +562,8 @@ impl OlmoModel {
             builder,
             is_decode,
             |b, args: Vec<Var>| {
-                let [query, key, value, g, beta, recurrent_state] = args.try_into().unwrap();
+                let [query, key, value, g, beta, recurrent_state, _num_chunks] =
+                    args.try_into().unwrap();
                 let (core_attn_out_decode, out_recurrent_state_decode) = recurrent_gated_delta_rule(
                     b,
                     query,
@@ -570,7 +577,8 @@ impl OlmoModel {
                 vec![core_attn_out_decode, out_recurrent_state_decode]
             },
             |b, args: Vec<Var>| {
-                let [query, key, value, g, beta, _recurrent_state] = args.try_into().unwrap();
+                let [query, key, value, g, beta, _recurrent_state, num_chunks] =
+                    args.try_into().unwrap();
                 let (core_attn_out_prefill, out_recurrent_state_prefill) = chunk_gated_delta_rule(
                     b,
                     query,
@@ -579,11 +587,12 @@ impl OlmoModel {
                     g,
                     beta,
                     head_k_dim,
-                    GATED_DELTA_CHUNK_SIZE,
+                    num_chunks,
+                    max_num_chunks,
                 );
                 vec![core_attn_out_prefill, out_recurrent_state_prefill]
             },
-            vec![query, key, value, g, beta, recurrent_state],
+            vec![query, key, value, g, beta, recurrent_state, num_chunks],
         );
 
         let core_attn_out = results[0].clone();
@@ -633,6 +642,7 @@ impl OlmoModel {
         layer_id: usize,
         attention_mask: Var,
         cache: &mut Cache,
+        num_chunks: Var,
         pos: Var,
         p: Path,
         x: Var,
@@ -681,6 +691,7 @@ impl OlmoModel {
                 builder,
                 layer_id,
                 cache,
+                num_chunks,
                 pos,
                 p.extend(["linear_attn"]).unwrap(),
                 x,
@@ -706,8 +717,8 @@ impl DynModule for OlmoModel {
     }
 
     fn def(&self, builder: &Builder, args: Vec<Var>) -> Vec<Var> {
-        let [x, in_k, in_v, in_conv, in_recurrent]: [Var; 5] =
-            args.try_into().expect("expected 5 inputs");
+        let [x, in_k, in_v, in_conv, in_recurrent, num_chunks]: [Var; 6] =
+            args.try_into().expect("expected 6 inputs");
         let root = self.path();
 
         let mut cache = Cache::init(
@@ -740,6 +751,7 @@ impl DynModule for OlmoModel {
                 i,
                 attention_mask.clone(),
                 &mut cache,
+                num_chunks.clone(),
                 pos.clone(),
                 root.extend(["model", "layers", &i.to_string()]).unwrap(),
                 x,
@@ -839,6 +851,7 @@ impl DynModule for OlmoModel {
 
         source.push(t_conv.clone());
         source.push(t_recurrent.clone());
+        source.push(Type::Nat(NatExpr::Var(3)));
         target.push(t_conv);
         target.push(t_recurrent);
         (source, target)

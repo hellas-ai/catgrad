@@ -39,8 +39,13 @@ pub fn chunk_gated_delta_rule(
     g: Var,
     beta: Var,
     head_k_dim: usize,
-    chunk_size: usize,
+    num_chunks: Var,
+    max_num_chunks: usize,
 ) -> (Var, Var) {
+    assert!(
+        max_num_chunks > 0,
+        "chunked prefill requires at least one chunk"
+    );
     let query = l2norm(builder, query, 1e-6);
     let key = l2norm(builder, key, 1e-6);
 
@@ -51,14 +56,18 @@ pub fn chunk_gated_delta_rule(
     let g = transpose(builder, 1, 2, g);
 
     let [_, _, original_seq_len, _] = unpack::<4>(builder, shape(builder, query.clone()));
-    // Temporary prefill-only assumption: sequence length <= chunk_size (64). FIXME
-    let padded_seq_len = chunk_size;
+    let chunk_size = GATED_DELTA_CHUNK_SIZE;
+    let chunk_size_nat = chunk_size.to_nat(builder);
+    let padded_seq_len = num_chunks * chunk_size_nat.clone();
+    let max_padded_seq_len = max_num_chunks * chunk_size;
 
-    let query = pad_sequence::<4>(builder, query, padded_seq_len);
-    let key = pad_sequence::<4>(builder, key, padded_seq_len);
-    let value = pad_sequence::<4>(builder, value, padded_seq_len);
-    let beta = pad_sequence::<3>(builder, beta, padded_seq_len);
-    let g = pad_sequence::<3>(builder, g, padded_seq_len);
+    // We still pad to the model's maximum chunk multiple so the chunk recurrence can be
+    // statically unrolled. The output is sliced back to the runtime `padded_seq_len` later.
+    let query = pad_sequence::<4>(builder, query, max_padded_seq_len);
+    let key = pad_sequence::<4>(builder, key, max_padded_seq_len);
+    let value = pad_sequence::<4>(builder, value, max_padded_seq_len);
+    let beta = pad_sequence::<3>(builder, beta, max_padded_seq_len);
+    let g = pad_sequence::<3>(builder, g, max_padded_seq_len);
 
     let q_shape = shape(builder, query.clone());
     let q_scale = constant(builder, 1.0 / (head_k_dim as f32).sqrt(), &q_shape);
@@ -72,43 +81,59 @@ pub fn chunk_gated_delta_rule(
     let k_beta = broadcast(builder, shape(builder, key.clone()), beta);
     let k_beta = key.clone() * k_beta;
 
-    let [batch_size, num_heads, padded_seq_len_nat, k_head_dim] =
+    let [batch_size, num_heads, _max_padded_seq_len_nat, k_head_dim] =
         unpack::<4>(builder, shape(builder, query.clone()));
     let v_head_dim = {
-        let [_b, _h, _s, v_dim] = unpack::<4>(builder, shape(builder, value.clone()));
+        let [_b, _h, _s, v_dim] = unpack::<4>(builder, shape(builder, value));
         v_dim
     };
 
-    let sh = shape!(builder, batch_size, num_heads, 1, chunk_size, k_head_dim);
+    let sh = shape!(
+        builder,
+        batch_size,
+        num_heads,
+        max_num_chunks,
+        chunk_size,
+        k_head_dim
+    );
     let query = reshape(builder, sh.clone(), query);
     let key = reshape(builder, sh.clone(), key);
     let k_beta = reshape(builder, sh, k_beta);
-    let value = reshape(
-        builder,
-        shape!(builder, batch_size, num_heads, 1, chunk_size, v_head_dim),
-        value,
-    );
     let v_beta = reshape(
         builder,
-        shape!(builder, batch_size, num_heads, 1, chunk_size, v_head_dim),
+        shape!(
+            builder,
+            batch_size,
+            num_heads,
+            max_num_chunks,
+            chunk_size,
+            v_head_dim
+        ),
         v_beta,
     );
     let g = reshape(
         builder,
-        shape!(builder, batch_size, num_heads, 1, chunk_size,),
+        shape!(builder, batch_size, num_heads, max_num_chunks, chunk_size,),
         g,
     );
 
     let g = cumsum::<4>(builder, g);
 
-    let decay_shape = shape!(builder, batch_size, num_heads, 1, chunk_size, chunk_size);
+    let decay_shape = shape!(
+        builder,
+        batch_size,
+        num_heads,
+        max_num_chunks,
+        chunk_size,
+        chunk_size
+    );
     let g_i = unsqueeze::<4, 5>(builder, 4, g.clone());
     let g_i = broadcast(builder, decay_shape.clone(), g_i);
     let g_j = unsqueeze::<4, 5>(builder, 3, g.clone());
     let g_j = broadcast(builder, decay_shape.clone(), g_j);
 
     let decay_mask = exp(builder, g_i - g_j);
-    let lower_mask = tril_mask(builder, padded_seq_len_nat.clone(), 0);
+    let lower_mask = tril_mask(builder, chunk_size_nat.clone(), 0);
     let lower_mask = broadcast(builder, decay_shape.clone(), lower_mask);
     let decay_mask = where_cond(
         builder,
@@ -117,91 +142,160 @@ pub fn chunk_gated_delta_rule(
         zeros(builder, &decay_shape),
     );
 
-    let query = squeeze::<5, 4>(builder, 2, query);
-    let key = squeeze::<5, 4>(builder, 2, key);
-    let _value = squeeze::<5, 4>(builder, 2, value);
-    let k_beta = squeeze::<5, 4>(builder, 2, k_beta);
-    let v_beta = squeeze::<5, 4>(builder, 2, v_beta);
-    let decay_mask = squeeze::<5, 4>(builder, 2, decay_mask);
-    let padded_seq_len = padded_seq_len_nat;
+    let flat_bhc = batch_size.clone() * num_heads.clone() * max_num_chunks.to_nat(builder);
+    let qk_flat_shape = shape!(builder, flat_bhc, chunk_size, k_head_dim);
+    let kk_flat_shape = shape!(builder, flat_bhc, k_head_dim, chunk_size);
+    let attn_flat_shape = shape!(builder, flat_bhc, chunk_size, chunk_size);
+    let v_flat_shape = shape!(builder, flat_bhc, chunk_size, v_head_dim);
 
-    let tk = transpose(builder, 2, 3, key.clone());
-    let mut attn = matmul(builder, k_beta.clone(), tk.clone());
+    let tk = transpose(builder, 3, 4, key.clone());
+    let k_beta_flat = reshape(builder, qk_flat_shape.clone(), k_beta.clone());
+    let tk_flat = reshape(builder, kk_flat_shape, tk);
+    let mut attn = matmul(builder, k_beta_flat, tk_flat);
+    attn = reshape(builder, decay_shape, attn);
     attn = -(attn * decay_mask.clone());
 
-    let mask_diag0 = triu_mask(builder, padded_seq_len.clone(), 0);
+    let mask_diag0 = triu_mask(builder, chunk_size_nat.clone(), 0);
     let mask_diag0 = broadcast(builder, shape(builder, attn.clone()), mask_diag0);
     attn = masked_fill(builder, mask_diag0, 0.0, attn);
 
     for i in 1..GATED_DELTA_CHUNK_SIZE {
-        let row = slice(builder, 2, i, 1, attn.clone());
-        let row_prefix = slice(builder, 3, 0, i, row.clone());
-        let sub = slice(builder, 2, 0, i, attn.clone());
-        let sub = slice(builder, 3, 0, i, sub);
+        let row = slice(builder, 3, i, 1, attn.clone());
+        let row_prefix = slice(builder, 4, 0, i, row.clone());
+        let sub = slice(builder, 3, 0, i, attn.clone());
+        let sub = slice(builder, 4, 0, i, sub);
 
-        let update = matmul(builder, row_prefix.clone(), sub);
+        let row_prefix_flat = reshape(
+            builder,
+            shape!(builder, flat_bhc.clone(), 1, i),
+            row_prefix.clone(),
+        );
+        let sub_flat = reshape(builder, shape!(builder, flat_bhc.clone(), i, i), sub);
+        let update = matmul(builder, row_prefix_flat, sub_flat);
+        let update = reshape(builder, shape(builder, row_prefix.clone()), update);
         let new_row_prefix = row_prefix + update;
 
         let new_row = if i < GATED_DELTA_CHUNK_SIZE {
-            let row_suffix = slice(builder, 3, i, GATED_DELTA_CHUNK_SIZE - i, row);
-            concat(builder, 3, new_row_prefix, row_suffix)
+            let row_suffix = slice(builder, 4, i, GATED_DELTA_CHUNK_SIZE - i, row);
+            concat(builder, 4, new_row_prefix, row_suffix)
         } else {
             new_row_prefix
         };
 
-        let top = slice(builder, 2, 0, i, attn.clone());
-        let updated = concat(builder, 2, top, new_row);
+        let top = slice(builder, 3, 0, i, attn.clone());
+        let updated = concat(builder, 3, top, new_row);
         attn = if i + 1 < GATED_DELTA_CHUNK_SIZE {
-            let bottom = slice(builder, 2, i + 1, GATED_DELTA_CHUNK_SIZE - (i + 1), attn);
-            concat(builder, 2, updated, bottom)
+            let bottom = slice(builder, 3, i + 1, GATED_DELTA_CHUNK_SIZE - (i + 1), attn);
+            concat(builder, 3, updated, bottom)
         } else {
             updated
         };
     }
 
-    let eye = eye(builder, padded_seq_len.clone(), Dtype::F32);
+    let eye = eye(builder, chunk_size_nat.clone(), Dtype::F32);
     let eye = unsqueeze::<2, 3>(builder, 0, eye);
     let eye = unsqueeze::<3, 4>(builder, 0, eye);
+    let eye = unsqueeze::<4, 5>(builder, 0, eye);
     let eye = broadcast(builder, shape(builder, attn.clone()), eye);
     attn = attn + eye;
 
-    let value = matmul(builder, attn.clone(), v_beta);
-
-    let g_chunk = squeeze::<4, 3>(builder, 2, g);
-    let g_exp = exp(builder, g_chunk.clone());
-    let g_exp = unsqueeze::<3, 4>(builder, 3, g_exp);
-    let g_exp = broadcast(builder, shape(builder, k_beta.clone()), g_exp);
-    let _k_cumdecay = matmul(builder, attn, k_beta * g_exp);
-
-    let [_, _, _, value_head_dim] = unpack::<4>(builder, shape(builder, value.clone()));
-    let zero_recurrent_state = zeros(
+    let attn_flat = reshape(builder, attn_flat_shape, attn);
+    let v_beta_flat = reshape(builder, v_flat_shape, v_beta);
+    let value = matmul(builder, attn_flat.clone(), v_beta_flat);
+    let value = reshape(
         builder,
-        &shape!(builder, batch_size, num_heads, k_head_dim, value_head_dim),
+        shape!(
+            builder,
+            batch_size,
+            num_heads,
+            max_num_chunks,
+            chunk_size,
+            v_head_dim
+        ),
+        value,
     );
 
-    let mut attn = matmul(builder, query, tk);
-    attn = attn * decay_mask;
+    let g_exp = exp(builder, g.clone());
+    let g_exp = unsqueeze::<4, 5>(builder, 4, g_exp);
+    let g_exp = broadcast(builder, shape(builder, k_beta.clone()), g_exp);
+    let k_beta_g_flat = reshape(builder, qk_flat_shape, k_beta * g_exp);
+    let k_cumdecay = matmul(builder, attn_flat, k_beta_g_flat);
+    let k_cumdecay = reshape(
+        builder,
+        shape!(
+            builder,
+            batch_size,
+            num_heads,
+            max_num_chunks,
+            chunk_size,
+            k_head_dim
+        ),
+        k_cumdecay,
+    );
 
-    let mask_diag1 = triu_mask(builder, padded_seq_len, 1);
-    let mask_diag1 = broadcast(builder, shape(builder, attn.clone()), mask_diag1);
-    attn = masked_fill(builder, mask_diag1, 0.0, attn);
+    let [_, _, _, _, value_head_dim] = unpack::<5>(builder, shape(builder, value.clone()));
+    let state_shape = shape!(builder, batch_size, num_heads, k_head_dim, value_head_dim);
+    let mut last_recurrent_state = zeros(builder, &state_shape);
 
-    // with the current single-chunk prefill assumption, the initial recurrent state is zero,
-    // so `v_prime` and `attn_inter` vanish and the chunk update reduces to `attn @ value`.
-    let core_attn_out = matmul(builder, attn, value.clone());
+    let mask_diag1 = triu_mask(builder, chunk_size_nat, 1);
+    let mut out_chunks = Vec::with_capacity(max_num_chunks);
+    for i in 0..max_num_chunks {
+        let q_i = squeeze::<5, 4>(builder, 2, slice(builder, 2, i, 1, query.clone()));
+        let k_i = squeeze::<5, 4>(builder, 2, slice(builder, 2, i, 1, key.clone()));
+        let v_i = squeeze::<5, 4>(builder, 2, slice(builder, 2, i, 1, value.clone()));
+        let decay_mask_i = squeeze::<5, 4>(builder, 2, slice(builder, 2, i, 1, decay_mask.clone()));
+        let k_cumdecay_i = squeeze::<5, 4>(builder, 2, slice(builder, 2, i, 1, k_cumdecay.clone()));
+        let g_i = squeeze::<4, 3>(builder, 2, slice(builder, 2, i, 1, g.clone()));
 
-    // last_recurrent_state = last_recurrent_state * g[..., -1].exp()
-    //     + (k_i * (g[..., -1, None] - g_i).exp()[..., None]).transpose(-1, -2) @ v_new
-    // The first term is zero here because the prefill branch always starts from zeros.
-    let g_last = slice(builder, 2, chunk_size - 1, 1, g_chunk.clone());
-    let g_last = broadcast(builder, shape(builder, g_chunk.clone()), g_last);
-    let state_decay = exp(builder, g_last - g_chunk);
-    let state_decay = unsqueeze::<3, 4>(builder, 3, state_decay);
-    let state_decay = broadcast(builder, shape(builder, key.clone()), state_decay);
-    let weighted_key = key * state_decay;
-    let last_recurrent_state =
-        zero_recurrent_state + matmul(builder, transpose(builder, 2, 3, weighted_key), value);
+        let tk_i = transpose(builder, 2, 3, k_i.clone());
+        let mut attn_i = matmul(builder, q_i.clone(), tk_i);
+        attn_i = attn_i * decay_mask_i;
 
+        let mask_diag1_i = broadcast(builder, shape(builder, attn_i.clone()), mask_diag1.clone());
+        attn_i = masked_fill(builder, mask_diag1_i, 0.0, attn_i);
+
+        let v_prime = matmul(builder, k_cumdecay_i, last_recurrent_state.clone());
+        let v_new = v_i - v_prime;
+
+        let g_i_exp = exp(builder, g_i.clone());
+        let g_i_exp = unsqueeze::<3, 4>(builder, 3, g_i_exp);
+        let g_i_exp = broadcast(builder, shape(builder, q_i.clone()), g_i_exp);
+        let attn_inter = matmul(builder, q_i.clone() * g_i_exp, last_recurrent_state.clone());
+        let out_chunk = attn_inter + matmul(builder, attn_i, v_new.clone());
+        out_chunks.push(unsqueeze::<4, 5>(builder, 2, out_chunk));
+
+        let g_last = slice(builder, 2, chunk_size - 1, 1, g_i.clone());
+        let state_scale = exp(builder, g_last.clone());
+        let state_scale = unsqueeze::<3, 4>(builder, 2, state_scale);
+        let state_scale = broadcast(builder, state_shape.clone(), state_scale);
+
+        let g_last = broadcast(builder, shape(builder, g_i.clone()), g_last);
+        let state_decay = exp(builder, g_last - g_i);
+        let state_decay = unsqueeze::<3, 4>(builder, 3, state_decay);
+        let state_decay = broadcast(builder, shape(builder, k_i.clone()), state_decay);
+        let weighted_key = k_i * state_decay;
+        last_recurrent_state = last_recurrent_state * state_scale
+            + matmul(builder, transpose(builder, 2, 3, weighted_key), v_new);
+    }
+
+    let mut out_chunks = out_chunks.into_iter();
+    let mut core_attn_out = out_chunks.next().expect("at least one chunk");
+    for out_chunk in out_chunks {
+        core_attn_out = concat(builder, 2, core_attn_out, out_chunk);
+    }
+
+    let core_attn_out = reshape(
+        builder,
+        shape!(
+            builder,
+            batch_size,
+            num_heads,
+            max_padded_seq_len,
+            value_head_dim
+        ),
+        core_attn_out,
+    );
+    let core_attn_out = slice(builder, 2, 0, padded_seq_len, core_attn_out);
     let core_attn_out = transpose(builder, 1, 2, core_attn_out);
     let core_attn_out = slice(builder, 1, 0, original_seq_len, core_attn_out);
     (core_attn_out, last_recurrent_state)
