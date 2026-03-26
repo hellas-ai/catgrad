@@ -2,7 +2,7 @@ use super::super::types::*;
 use crate::category::core::{Dtype, Shape};
 use crate::interpreter::backend::{Backend, BackendError, BackendTensorOps};
 use candle_core::{
-    D, DType, Device, Tensor,
+    D, DType, Device, Error as CandleError, Tensor,
     utils::{cuda_is_available, metal_is_available},
 };
 
@@ -631,7 +631,16 @@ impl CandleBackend {
     }
 
     pub fn batched_matmul(lhs: Tensor, rhs: Tensor) -> Tensor {
-        lhs.matmul(&rhs).unwrap()
+        match lhs.matmul(&rhs) {
+            Ok(result) => result,
+            // Some transposed batch layouts need an explicit row-major copy first.
+            Err(CandleError::MatMulUnexpectedStriding(_)) => {
+                let lhs = lhs.contiguous().unwrap();
+                let rhs = rhs.contiguous().unwrap();
+                lhs.matmul(&rhs).unwrap()
+            }
+            Err(err) => panic!("{err}"),
+        }
     }
 }
 
