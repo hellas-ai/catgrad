@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["catgrad-legacy", "catgrad-llm", "catgrad"]
+members = ["catgrad-llm", "catgrad"]
 
 [workspace.package]
 description = "a categorical deep learning compiler"

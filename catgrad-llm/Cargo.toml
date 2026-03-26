@@ -9,7 +9,6 @@ repository.workspace = true
 documentation.workspace = true
 
 [dependencies]
-catgrad-legacy = { version = "0.1.1", path = "../catgrad-legacy" }
 catgrad = {version = "0.2.1", path = "../catgrad", features=["candle-backend"]}
 open-hypergraphs = { workspace = true }
 serde = { workspace = true }

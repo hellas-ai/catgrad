@@ -417,29 +417,11 @@ dependencies = [
 ]
 
 [[package]]
-name = "catgrad-legacy"
-version = "0.1.1"
-dependencies = [
- "gemm 0.18.2",
- "half",
- "log",
- "memmap2",
- "num-traits",
- "num_cpus",
- "open-hypergraphs",
- "rayon",
- "serde",
- "serde_json",
- "test-log",
-]
-
-[[package]]
 name = "catgrad-llm"
 version = "0.2.1"
 dependencies = [
  "anyhow",
  "catgrad",
- "catgrad-legacy",
  "chrono",
  "clap",
  "env_logger",
