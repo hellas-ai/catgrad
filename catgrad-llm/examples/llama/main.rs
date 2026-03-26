@@ -209,9 +209,8 @@ fn run_with_backend<B: interpreter::Backend>(
     };
     let runtime_context = prepared_multimodal.runtime_context.as_ref();
 
-    if !benchmarking {
-        //&& !use_image {
-        print!("{}", prompt);
+    if !benchmarking && !use_image {
+        print!("{prompt}");
     }
     let prompt = if use_image {
         interpolate_multimodal_prompt(&config_json, runtime_context, &prompt)?
@@ -392,7 +391,7 @@ fn run_with_backend<B: interpreter::Backend>(
         }
         if !benchmarking {
             let decoded_token = tokenizer.decode(&[next_token_id], false).unwrap();
-            print!("{}", decoded_token);
+            print!("{decoded_token}");
             std::io::stdout().flush()?;
         }
     }

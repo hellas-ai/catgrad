@@ -1,6 +1,4 @@
 use catgrad::prelude::Dtype;
-use catgrad_legacy::backend::cpu::ndarray::{NdArray, TaggedNdArray};
-use catgrad_legacy::core::Shape;
 use hf_hub::{Repo, RepoType, api::sync::ApiBuilder};
 use rayon::prelude::*;
 use serde::de::DeserializeOwned;
@@ -51,108 +49,6 @@ pub fn from_json_slice<T: DeserializeOwned>(json: &[u8]) -> Result<T> {
 pub fn from_json_reader<T: DeserializeOwned, R: Read>(reader: R) -> Result<T> {
     let mut deserializer = serde_json::Deserializer::from_reader(reader);
     serde_path_to_error::deserialize(&mut deserializer).map_err(LLMError::from)
-}
-
-pub fn read_safetensors_file(
-    path: impl AsRef<Path>,
-    use_fp16: bool,
-) -> Result<HashMap<String, TaggedNdArray>> {
-    let file = std::fs::File::open(path)?;
-    let data = unsafe { memmap2::Mmap::map(&file)? };
-    let tensors = safetensors::SafeTensors::deserialize(&data)?;
-
-    // Read each tensor
-    let mut map = HashMap::new();
-    for (name, view) in tensors.tensors() {
-        let shape = Shape(view.shape().to_vec());
-        let tensor_data = view.data();
-
-        // Convert dtype and load tensor data
-        match view.dtype() {
-            safetensors::Dtype::F32 => {
-                let data: Vec<f32> = tensor_data
-                    .par_chunks_exact(4)
-                    .map(|b| f32::from_le_bytes(b.try_into().unwrap()))
-                    .collect();
-                if use_fp16 {
-                    let data: Vec<half::f16> =
-                        data.iter().map(|&x| half::f16::from_f32(x)).collect();
-                    map.insert(
-                        name.to_string(),
-                        TaggedNdArray::F16(NdArray::new(data, shape)),
-                    );
-                } else {
-                    map.insert(
-                        name.to_string(),
-                        TaggedNdArray::F32(NdArray::new(data, shape)),
-                    );
-                }
-            }
-            // cast BF16 to F16 or F32
-            safetensors::Dtype::BF16 => {
-                if use_fp16 {
-                    let data: Vec<half::f16> = tensor_data
-                        .par_chunks_exact(2)
-                        .map(|b| {
-                            let f = half::bf16::from_le_bytes(b.try_into().unwrap()).to_f32();
-                            half::f16::from_f32(f)
-                        })
-                        .collect();
-                    map.insert(
-                        name.to_string(),
-                        TaggedNdArray::F16(NdArray::new(data, shape)),
-                    );
-                } else {
-                    let data: Vec<f32> = tensor_data
-                        .par_chunks_exact(2)
-                        .map(|b| half::bf16::from_le_bytes(b.try_into().unwrap()).to_f32())
-                        .collect();
-                    map.insert(
-                        name.to_string(),
-                        TaggedNdArray::F32(NdArray::new(data, shape)),
-                    );
-                }
-            }
-            safetensors::Dtype::I32 => {
-                let data: Vec<i32> = tensor_data
-                    .par_chunks_exact(4)
-                    .map(|b| i32::from_le_bytes(b.try_into().unwrap()))
-                    .collect();
-                map.insert(
-                    name.to_string(),
-                    TaggedNdArray::I32(NdArray::new(data, shape)),
-                );
-            }
-            safetensors::Dtype::I64 => {
-                let data: Vec<i32> = tensor_data
-                    .par_chunks_exact(8)
-                    .map(|b| i64::from_le_bytes(b.try_into().unwrap()) as i32)
-                    .collect();
-                map.insert(
-                    name.to_string(),
-                    TaggedNdArray::I32(NdArray::new(data, shape)),
-                );
-            }
-            // Add other dtype conversions as needed
-            _ => {
-                return Err(LLMError::UnsupportedDtype(format!("{:?}", view.dtype())));
-            }
-        }
-    }
-
-    Ok(map)
-}
-
-pub fn read_safetensors_multiple(
-    paths: impl IntoIterator<Item = impl AsRef<Path>>,
-    use_fp16: bool,
-) -> Result<HashMap<String, TaggedNdArray>> {
-    let mut map = HashMap::new();
-    for path in paths {
-        let file_map = read_safetensors_file(path, use_fp16)?;
-        map.extend(file_map);
-    }
-    Ok(map)
 }
 
 pub fn get_model_files(
