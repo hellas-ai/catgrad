@@ -8,34 +8,23 @@
 //! [`ModelEngine::generate_from_prepared`] call creates a fresh internal runner, so KV-cache state,
 //! token position, and generated text do not leak across requests. If you want prior conversation
 //! to influence generation, include that history in the prepared prompt or message list.
-use crate::legacy::models::utils::{Cache, Config, ModelBuilder, get_model};
-use crate::legacy::nn::layers::{argmax, cast, reshape};
+use crate::helpers::LLMModel;
 use crate::types;
 use crate::utils::{
-    from_json_str, get_model_chat_template, get_model_files, read_safetensors_multiple,
+    empty_state_cache, get_model, get_model_chat_template, load_model, post_process_model_weights,
 };
-use crate::{Detokenizer, PreparedPrompt, Result};
-use catgrad_legacy::{
-    backend::cpu::{
-        eval::{Builder, EvalState},
-        ndarray::{NdArray, TaggedNdArray},
-    },
-    core::{Dtype, NdArrayType, Shape, Var},
-};
-use std::collections::HashMap;
-use std::path::Path;
+use crate::{Detokenizer, LLMError, PreparedPrompt, Result};
+use catgrad::interpreter::backend::candle::CandleBackend;
+use catgrad::interpreter::{self, Backend};
+use catgrad::prelude::{Shape, TypedTerm, stdlib, to_load_ops};
 use std::rc::Rc;
 use tokenizers::tokenizer::Tokenizer;
 
-fn read_to_value<V: for<'a> serde::Deserialize<'a>>(path: impl AsRef<Path>) -> Result<V> {
-    let config_str = &std::fs::read_to_string(path)?;
-    from_json_str(config_str)
-}
-
 struct ModelEngineInner {
-    tensors: Rc<HashMap<String, TaggedNdArray>>,
-    arch: String,
-    config: Config,
+    backend: CandleBackend,
+    parameter_values: interpreter::Parameters<CandleBackend>,
+    parameter_types: catgrad::typecheck::Parameters,
+    config_json: serde_json::Value,
     tokenizer: Tokenizer,
     chat_template: String,
     eos_token_ids: Vec<i32>,
@@ -81,10 +70,12 @@ pub struct ModelEngine {
 
 // Internal per-request decode state. A fresh runner is created for each generation call.
 struct ModelRunner {
-    engine: ModelEngine,
-    model: Box<dyn ModelBuilder>,
-    kv_cache: Vec<TaggedNdArray>,
-    total_tokens: usize,
+    model: Box<dyn LLMModel>,
+    typed_term: TypedTerm,
+    interpreter: interpreter::Interpreter<CandleBackend>,
+    state_cache: Vec<interpreter::Value<CandleBackend>>,
+    use_kv_cache: bool,
+    eos_token_ids: Vec<i32>,
 }
 
 /// Final text and token counts from a local generation.
@@ -132,26 +123,22 @@ impl ModelEngine {
     /// Set `use_kv_cache` to reuse KV-cache state between decode steps within a single request.
     /// The cache does not persist across separate generation calls.
     pub fn new(model_name: &str, use_kv_cache: bool) -> Result<Self> {
-        let (model_paths, config_path, tokenizer_path, _) = get_model_files(model_name, "main")?;
+        let backend = CandleBackend::new();
+        let (parameter_values, parameter_types, config_json, tokenizer, _) =
+            load_model(model_name, "main", &backend)?;
+        let model = get_model(&config_json, 1, None)?;
         let chat_template = get_model_chat_template(model_name, "main")?;
-        let config: Config = read_to_value(config_path)?;
-        let arch = config.architectures[0].clone();
-
-        let mut model = get_model(&arch)?;
-        let mut tensors = read_safetensors_multiple(model_paths, false)?;
-        model.post_load(&mut tensors);
-
-        let tokenizer = Tokenizer::from_file(tokenizer_path)?;
         let chat_template = chat_template
             .replace("{% generation %}", "")
             .replace("{% endgeneration %}", "");
-        let eos_token_ids = config.get_eos_token_ids();
+        let eos_token_ids = model.config().get_eos_token_ids();
 
         Ok(Self {
             inner: Rc::new(ModelEngineInner {
-                tensors: Rc::new(tensors),
-                arch,
-                config,
+                backend,
+                parameter_values,
+                parameter_types,
+                config_json,
                 tokenizer,
                 chat_template,
                 eos_token_ids,
@@ -194,15 +181,17 @@ impl ModelEngine {
     where
         F: FnMut(&str) -> Result<()>,
     {
-        let mut runner = ModelRunner::new(self.clone())?;
-        let mut next_token = runner.generate_next_token(prepared.input_ids.clone());
+        let prompt_token_ids = token_ids_to_u32(&prepared.input_ids);
+        let max_sequence_length = prepared.input_ids.len() + max_tokens as usize;
+        let mut runner = ModelRunner::new(self.clone(), max_sequence_length)?;
         let mut decoder =
             Detokenizer::from_tokenizer(&self.inner.tokenizer, &prepared.stop_token_ids);
+        let mut step_tokens = prompt_token_ids;
 
         let mut completion_tokens = 0u32;
         let mut termination = GenerationTermination::MaxTokens;
         for _ in 0..max_tokens {
-            let Some(token) = next_token else {
+            let Some((token, next_input_token)) = runner.generate_next_token(&step_tokens)? else {
                 termination = GenerationTermination::Stop;
                 break;
             };
@@ -218,7 +207,12 @@ impl ModelEngine {
                 on_text_delta(&delta)?;
             }
 
-            next_token = runner.generate_next_token(vec![token]);
+            if self.use_kv_cache() {
+                step_tokens.clear();
+                step_tokens.push(next_input_token);
+            } else {
+                step_tokens.push(next_input_token);
+            }
         }
 
         Ok(GenerationOutput {
@@ -232,148 +226,113 @@ impl ModelEngine {
     fn use_kv_cache(&self) -> bool {
         self.inner.use_kv_cache
     }
-
-    fn config(&self) -> &Config {
-        &self.inner.config
-    }
-
-    fn arch(&self) -> &str {
-        &self.inner.arch
-    }
-
-    fn tensors(&self) -> Rc<HashMap<String, TaggedNdArray>> {
-        Rc::clone(&self.inner.tensors)
-    }
-
-    fn initial_kv_cache(&self) -> Vec<TaggedNdArray> {
-        let config = self.config();
-        let v = TaggedNdArray::F32(NdArray::new_empty(Shape(vec![
-            1,
-            config.get_num_kv_heads(),
-            0,
-            config.get_head_dim(),
-        ])));
-        vec![v; 2 * config.num_hidden_layers]
-    }
-
-    fn next_token(builder: &Builder, logits: Var) -> Var {
-        let batches = logits.label.shape.0[0];
-        let am = argmax(builder, logits);
-        let am = reshape(builder, Shape(vec![batches, 1]), am);
-        cast(builder, Dtype::I32, am)
-    }
-
-    fn eval_for_step(
-        &self,
-        model: &dyn ModelBuilder,
-        total_tokens: usize,
-        num_tokens: usize,
-    ) -> EvalState {
-        let config = self.config();
-        let use_kv_cache = self.use_kv_cache();
-        let batches = 1;
-        let in_type = NdArrayType::new(Shape(vec![batches, num_tokens]), Dtype::I32);
-
-        let mut state = EvalState::build(|builder| {
-            let x = Var::new(builder.clone(), in_type.clone());
-            let mut cache = Cache::init(builder, config, total_tokens + num_tokens, use_kv_cache);
-
-            if use_kv_cache {
-                let kv_cache_type = NdArrayType::new(
-                    Shape(vec![
-                        batches,
-                        config.get_num_kv_heads(),
-                        total_tokens,
-                        config.get_head_dim(),
-                    ]),
-                    Dtype::F32,
-                );
-
-                for layer_id in 0..config.num_hidden_layers {
-                    cache.in_kv_cache[layer_id] = (
-                        Var::new(builder.clone(), kv_cache_type.clone()),
-                        Var::new(builder.clone(), kv_cache_type.clone()),
-                    );
-                }
-            }
-
-            let result = model.build(builder, config, &mut cache, total_tokens, x.clone());
-
-            let mut sources_vec = vec![x];
-            if use_kv_cache {
-                for layer_id in 0..config.num_hidden_layers {
-                    sources_vec.push(cache.in_kv_cache[layer_id].0.clone());
-                    sources_vec.push(cache.in_kv_cache[layer_id].1.clone());
-                }
-            }
-
-            let next_token = Self::next_token(builder, result);
-            let mut targets_vec = vec![next_token];
-            if use_kv_cache {
-                let out_kv_cache: Vec<_> = cache
-                    .out_kv_cache
-                    .into_iter()
-                    .flat_map(|(a, b)| vec![a, b])
-                    .collect();
-                targets_vec.extend(out_kv_cache);
-            }
-
-            (sources_vec, targets_vec)
-        });
-
-        state.set_parameters(self.tensors());
-        state
-    }
 }
 
 impl ModelRunner {
-    fn new(engine: ModelEngine) -> Result<Self> {
+    fn new(engine: ModelEngine, max_sequence_length: usize) -> Result<Self> {
+        let backend = engine.inner.backend.clone();
+        let mut parameter_values = engine.inner.parameter_values.clone();
+        let mut parameter_types = engine.inner.parameter_types.clone();
+        let model = get_model(&engine.inner.config_json, max_sequence_length, None)?;
+        post_process_model_weights(
+            model.as_ref(),
+            &backend,
+            &mut parameter_values,
+            &mut parameter_types,
+        )?;
+
+        let typed_term = model.term().ok_or_else(|| {
+            LLMError::InvalidModelConfig("Failed to create typed term".to_string())
+        })?;
+        let mut env = stdlib();
+        env.declarations
+            .extend(to_load_ops(model.path(), parameter_types.keys()));
+        let interpreter = interpreter::Interpreter::new(backend.clone(), env, parameter_values);
+        let state_cache = empty_state_cache(&backend, model.as_ref())?;
+
         Ok(Self {
-            model: get_model(engine.arch())?,
-            kv_cache: if engine.use_kv_cache() {
-                engine.initial_kv_cache()
-            } else {
-                vec![]
-            },
-            total_tokens: 0,
-            engine,
+            model,
+            typed_term,
+            interpreter,
+            state_cache,
+            use_kv_cache: engine.use_kv_cache(),
+            eos_token_ids: engine.inner.eos_token_ids.clone(),
         })
     }
 
-    fn run(&mut self, state: &mut EvalState, x: &NdArray<i32>) -> TaggedNdArray {
-        let mut sources = vec![x.clone().into()];
-        if self.engine.use_kv_cache() {
-            sources.extend(self.kv_cache.clone());
-        }
-
-        let result = state.eval_with(sources);
-        if self.engine.use_kv_cache() {
-            self.kv_cache = result[1..].iter().map(|&tensor| tensor.clone()).collect();
-        }
-
-        result[0].clone()
-    }
-
-    fn generate_next_token(&mut self, tokens: Vec<i32>) -> Option<i32> {
+    fn generate_next_token(&mut self, tokens: &[u32]) -> Result<Option<(i32, u32)>> {
         if tokens.is_empty() {
-            return None;
+            return Ok(None);
         }
 
-        let num_tokens = tokens.len();
-        let input = NdArray::new(tokens, Shape(vec![1, num_tokens]));
-
-        let mut state = self
-            .engine
-            .eval_for_step(&*self.model, self.total_tokens, num_tokens);
-        log::debug!("Model graph built...");
-        let result = self.run(&mut state, &input);
-
-        let token = result.data()[0] as i32;
-        if self.engine.config().get_eos_token_ids().contains(&token) {
-            return None;
+        let mut inputs = Vec::with_capacity(self.state_cache.len() + 2);
+        inputs.push(token_tensor(&self.interpreter, tokens)?);
+        inputs.extend(self.state_cache.iter().cloned());
+        if let Some(extra_nat) = self.model.extra_nat_input(tokens.len()) {
+            inputs.push(interpreter::Value::Nat(extra_nat));
         }
 
-        self.total_tokens += num_tokens;
-        Some(token)
+        let mut results = self
+            .interpreter
+            .run(self.typed_term.term.clone(), inputs)
+            .map_err(|err| {
+                LLMError::InvalidModelConfig(format!("Failed to run inference: {err}"))
+            })?;
+        if results.is_empty() {
+            return Err(LLMError::InvalidModelConfig(
+                "model returned no outputs".to_string(),
+            ));
+        }
+
+        let updated_state_cache = if results.len() > 1 {
+            results.split_off(1)
+        } else {
+            Vec::new()
+        };
+        let output = results.remove(0);
+        let token = match output {
+            interpreter::Value::Tensor(arr) => match self.interpreter.backend.to_vec(arr) {
+                interpreter::TaggedVec::U32(v) => v.last().copied().ok_or_else(|| {
+                    LLMError::InvalidModelConfig("token output tensor was empty".to_string())
+                })?,
+                _ => {
+                    return Err(LLMError::InvalidModelConfig(
+                        "unexpected output dtype".to_string(),
+                    ));
+                }
+            },
+            value => {
+                return Err(LLMError::InvalidModelConfig(format!(
+                    "output was not a tensor: {value:?}"
+                )));
+            }
+        };
+
+        if self.use_kv_cache {
+            self.state_cache = updated_state_cache;
+        }
+
+        let token_i32 = token as i32;
+        if self.eos_token_ids.contains(&token_i32) {
+            return Ok(None);
+        }
+
+        Ok(Some((token_i32, token)))
     }
+}
+
+fn token_tensor(
+    interpreter: &interpreter::Interpreter<CandleBackend>,
+    input_tokens: &[u32],
+) -> Result<interpreter::Value<CandleBackend>> {
+    interpreter::tensor(
+        &interpreter.backend,
+        Shape(vec![1, input_tokens.len()]),
+        input_tokens.to_vec(),
+    )
+    .map_err(|err| LLMError::InvalidModelConfig(format!("input tensor error: {err:?}")))
+}
+
+fn token_ids_to_u32(token_ids: &[i32]) -> Vec<u32> {
+    token_ids.iter().map(|&token_id| token_id as u32).collect()
 }
