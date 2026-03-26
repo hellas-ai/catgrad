@@ -5,8 +5,9 @@ use catgrad::prelude::*;
 use catgrad_llm::helpers::LLMModel;
 use catgrad_llm::utils::{
     cache_path_for_embeddings, empty_state_cache, get_model, get_model_chat_template,
-    load_and_preprocess_image, load_cached_embeddings, load_model, post_process_model_weights,
-    print_bench_table, render_chat_template, save_cached_embeddings,
+    interpolate_multimodal_prompt, load_and_preprocess_image, load_cached_embeddings, load_model,
+    post_process_model_weights, prepare_multimodal_input, print_bench_table, render_chat_template,
+    save_cached_embeddings,
 };
 use clap::{Parser, ValueEnum};
 use serde::Deserialize;
@@ -201,24 +202,19 @@ fn run_with_backend<B: interpreter::Backend>(
         render_chat_template(&chat_template, &args.prompt, use_image, false)?
     };
 
-    if !benchmarking && !use_image {
+    let prepared_multimodal = if use_image {
+        prepare_multimodal_input(&config_json, args.image.as_deref())?
+    } else {
+        Default::default()
+    };
+    let runtime_context = prepared_multimodal.runtime_context.as_ref();
+
+    if !benchmarking {
+        //&& !use_image {
         print!("{}", prompt);
     }
     let prompt = if use_image {
-        // FIXME: this extra get_model call is needed to get the multimodal prompt interpolation length.
-        // maybe allow max_sequence_length be set after the constructor
-        let model = get_model(&config_json, 1)?;
-        if !model.is_multimodal() {
-            return Err(anyhow::anyhow!(
-                "Model {} does not support image input",
-                model_name
-            ));
-        }
-        model
-            .multimodal_interpolate_prompt(&prompt)
-            .ok_or_else(|| {
-                anyhow::anyhow!("Model did not provide multimodal prompt interpolation")
-            })?
+        interpolate_multimodal_prompt(&config_json, runtime_context, &prompt)?
     } else {
         prompt
     };
@@ -228,9 +224,8 @@ fn run_with_backend<B: interpreter::Backend>(
         .map_err(|err| anyhow::anyhow!("check error {:?}", err))?;
 
     let mut token_ids = encoding.get_ids().to_vec();
-
     let max_sequence_length = max_seq_len + token_ids.len();
-    let model = get_model(&config_json, max_sequence_length)?;
+    let model = get_model(&config_json, max_sequence_length, runtime_context)?;
     post_process_model_weights(
         model.as_ref(),
         &backend,
@@ -307,7 +302,11 @@ fn run_with_backend<B: interpreter::Backend>(
             .as_ref()
             .expect("image existence already checked");
         let (image_data, image_shape) =
-            load_and_preprocess_image(image_path, mm.image_size, mm.patch_size)?;
+            if let Some(prepared_image) = prepared_multimodal.image.as_ref() {
+                (prepared_image.data.clone(), prepared_image.shape.clone())
+            } else {
+                load_and_preprocess_image(image_path, mm.image_size, mm.patch_size)?
+            };
         let cache_path =
             cache_path_for_embeddings(&model_name, &image_path.to_string_lossy(), &image_data);
         let visual_embeddings = if let Ok(cached) = load_cached_embeddings(&cache_path) {

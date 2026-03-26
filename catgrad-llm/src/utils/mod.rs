@@ -257,15 +257,91 @@ pub fn render_chat_template(
             )
 }
 
-pub fn get_model(
-    config_json: &serde_json::Value,
-    max_sequence_length: usize,
-) -> Result<Box<dyn LLMModel>> {
-    let arch = config_json["architectures"][0]
+#[derive(Debug, Clone)]
+pub struct PreparedImageInput {
+    pub data: Vec<f32>,
+    pub shape: Vec<usize>,
+}
+
+#[derive(Debug, Clone)]
+pub enum ModelRuntimeContext {
+    Qwen3_5Vision(models::qwen3_5::Qwen3_5RuntimeVisionConfig),
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct PreparedMultimodalInput {
+    pub image: Option<PreparedImageInput>,
+    pub runtime_context: Option<ModelRuntimeContext>,
+}
+
+pub fn get_model_architecture(config_json: &serde_json::Value) -> Result<&str> {
+    config_json["architectures"][0]
         .as_str()
         .ok_or(LLMError::InvalidModelConfig(
             "Missing architectures field".to_string(),
-        ))?;
+        ))
+}
+
+pub fn prepare_multimodal_input(
+    config_json: &serde_json::Value,
+    image_path: Option<&Path>,
+) -> Result<PreparedMultimodalInput> {
+    let Some(image_path) = image_path else {
+        return Ok(PreparedMultimodalInput::default());
+    };
+
+    match get_model_architecture(config_json)? {
+        "Qwen3_5ForConditionalGeneration" => {
+            let prepared = models::qwen3_5::prepare_qwen3_5_image_input(image_path, config_json)?;
+            Ok(PreparedMultimodalInput {
+                image: Some(PreparedImageInput {
+                    data: prepared.pixels,
+                    shape: prepared.shape,
+                }),
+                runtime_context: Some(ModelRuntimeContext::Qwen3_5Vision(prepared.runtime_vision)),
+            })
+        }
+        _ => Ok(PreparedMultimodalInput::default()),
+    }
+}
+
+pub fn interpolate_multimodal_prompt(
+    config_json: &serde_json::Value,
+    runtime_context: Option<&ModelRuntimeContext>,
+    prompt: &str,
+) -> Result<String> {
+    let arch = get_model_architecture(config_json)?;
+    let interpolated = match arch {
+        "Qwen3_5ForConditionalGeneration" => models::qwen3_5::interpolate_qwen3_5_prompt(
+            config_json,
+            match runtime_context {
+                Some(ModelRuntimeContext::Qwen3_5Vision(runtime_vision)) => Some(runtime_vision),
+                _ => None,
+            },
+            prompt,
+        )?,
+        _ => {
+            let model = get_model(config_json, 1, runtime_context)?;
+            if !model.is_multimodal() {
+                return Err(LLMError::InvalidModelConfig(format!(
+                    "Model architecture {arch} does not support image input"
+                )));
+            }
+            model.multimodal_interpolate_prompt(prompt)
+        }
+    };
+
+    interpolated.ok_or(LLMError::InvalidModelConfig(format!(
+        "Model architecture {arch} did not provide multimodal prompt interpolation"
+    )))
+}
+
+pub fn get_model(
+    config_json: &serde_json::Value,
+    max_sequence_length: usize,
+    runtime_context: Option<&ModelRuntimeContext>,
+) -> Result<Box<dyn LLMModel>> {
+    let arch = get_model_architecture(config_json)?;
 
     let model: Box<dyn LLMModel> = match arch {
         "Gemma2ForCausalLM" | "Gemma3ForCausalLM" => Box::new(models::gemma3::Gemma3Model::new(
@@ -306,6 +382,10 @@ pub fn get_model(
         "Qwen3_5ForConditionalGeneration" => Box::new(models::qwen3_5::Qwen3_5Model::new(
             config_json,
             max_sequence_length,
+            match runtime_context {
+                Some(ModelRuntimeContext::Qwen3_5Vision(runtime_vision)) => Some(runtime_vision),
+                _ => None,
+            },
         )?),
         "GraniteForCausalLM" | "GraniteMoeForCausalLM" | "GraniteMoeHybridForCausalLM" => Box::new(
             models::granite::GraniteModel::new(config_json, max_sequence_length)?,
