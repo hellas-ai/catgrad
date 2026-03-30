@@ -6,6 +6,7 @@ pub mod granite;
 pub mod lfm2;
 pub mod llama;
 pub mod mistral3;
+pub mod nemotron;
 pub mod olmo;
 pub mod phi3;
 pub mod qwen3;
