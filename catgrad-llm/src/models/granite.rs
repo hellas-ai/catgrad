@@ -325,16 +325,10 @@ impl DynModule for GraniteModel {
     }
 
     fn def(&self, builder: &Builder, args: Vec<Var>) -> Vec<Var> {
-        let [x, in_k, in_v]: [Var; 3] = args.try_into().expect("expected 3 inputs");
+        let [x, in_k, in_v, max_positions]: [Var; 4] = args.try_into().expect("expected 4 inputs");
         let root = self.path();
 
-        let mut cache = Cache::init(
-            builder,
-            &self.config,
-            self.max_sequence_length,
-            in_k.clone(),
-            in_v,
-        );
+        let mut cache = Cache::init(builder, &self.config, max_positions, in_k.clone(), in_v);
         let [_, _, _, pos, _] = unpack::<5>(builder, shape(builder, in_k));
 
         let emb = embeddings(builder, root.extend(["model", "embed_tokens"]).unwrap(), x);

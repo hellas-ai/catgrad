@@ -7,6 +7,7 @@ pub fn llm_type(config: &dyn LLMConfig) -> (Vec<Type>, Vec<Type>) {
     let batch_size = NatExpr::Var(0);
     let seq_len = NatExpr::Var(1);
     let cache_len = NatExpr::Var(2);
+    let max_positions = NatExpr::Var(3);
 
     // Input shape B×S
     let t_x = Type::Tensor(TypeExpr::NdArrayType(NdArrayType {
@@ -70,7 +71,10 @@ pub fn llm_type(config: &dyn LLMConfig) -> (Vec<Type>, Vec<Type>) {
         ]),
     }));
 
-    (vec![t_x, t_k, t_v], vec![t_y, t_k_out, t_v_out])
+    (
+        vec![t_x, t_k, t_v, Type::Nat(max_positions)],
+        vec![t_y, t_k_out, t_v_out],
+    )
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -109,7 +109,15 @@ impl LlamaModel {
         })
     }
 
-    pub fn forward(&self, builder: &Builder, p: Path, x: Var, in_k: Var, in_v: Var) -> Vec<Var> {
+    pub fn forward(
+        &self,
+        builder: &Builder,
+        p: Path,
+        x: Var,
+        in_k: Var,
+        in_v: Var,
+        max_positions: Var,
+    ) -> Vec<Var> {
         let transformer_root = p.extend(self.model_root.split('.')).unwrap();
         let x = embeddings(
             builder,
@@ -120,7 +128,7 @@ impl LlamaModel {
         let [_, _, _, pos, _] = unpack::<5>(builder, shape(builder, in_k.clone()));
         let attention_mask = causal_mask(builder, s, pos);
 
-        self.forward_embeddings(builder, p, attention_mask, x, in_k, in_v)
+        self.forward_embeddings(builder, p, attention_mask, x, in_k, in_v, max_positions)
     }
 
     pub fn forward_embeddings(
@@ -131,15 +139,10 @@ impl LlamaModel {
         x: Var,
         in_k: Var,
         in_v: Var,
+        max_positions: Var,
     ) -> Vec<Var> {
         let transformer_root = p.extend(self.model_root.split('.')).unwrap();
-        let mut cache = Cache::init(
-            builder,
-            &self.config,
-            self.max_sequence_length,
-            in_k.clone(),
-            in_v,
-        );
+        let mut cache = Cache::init(builder, &self.config, max_positions, in_k.clone(), in_v);
         let [_, _, _, pos, _] = unpack::<5>(builder, shape(builder, in_k));
 
         let mut x = x;
@@ -347,13 +350,13 @@ impl DynModule for LlamaModel {
     }
 
     fn def(&self, builder: &Builder, args: Vec<Var>) -> Vec<Var> {
-        let [x, in_k, in_v]: [Var; 3] = args.try_into().expect("expected 3 inputs");
+        let [x, in_k, in_v, max_positions]: [Var; 4] = args.try_into().expect("expected 4 inputs");
         let mut root = self.path();
         if !self.root.is_empty() {
             root = root.extend(self.root.split('.')).unwrap();
         }
 
-        self.forward(builder, root, x, in_k, in_v)
+        self.forward(builder, root, x, in_k, in_v, max_positions)
     }
 
     // This should return the *detailed* type of the model

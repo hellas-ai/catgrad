@@ -1375,8 +1375,9 @@ impl Qwen3_5Model {
         in_v: Var,
         in_conv: Var,
         in_recurrent: Var,
+        max_positions: Var,
     ) -> Cache {
-        let mut cache = Cache::init(builder, &self.config, self.max_sequence_length, in_k, in_v);
+        let mut cache = Cache::init(builder, &self.config, max_positions, in_k, in_v);
         cache.linear_cache = Some(
             (0..self.num_linear_layers)
                 .map(|layer_id| {
@@ -1442,6 +1443,7 @@ impl Qwen3_5Model {
         in_v: Var,
         in_conv: Var,
         in_recurrent: Var,
+        max_positions: Var,
         num_chunks: Var,
         custom_rope: Option<(Var, Var)>,
     ) -> Vec<Var> {
@@ -1451,6 +1453,7 @@ impl Qwen3_5Model {
             in_v,
             in_conv.clone(),
             in_recurrent.clone(),
+            max_positions,
         );
         let [_, _, _, pos, _] = unpack::<5>(builder, shape(builder, in_k));
         let language_root = root.extend(["model", "language_model"]).unwrap();
@@ -1515,8 +1518,9 @@ impl DynModule for Qwen3_5Model {
             in_conv,
             in_recurrent,
             in_mm_delta,
+            max_positions,
             num_chunks,
-        ]: [Var; 7] = args.try_into().expect("expected 7 inputs");
+        ]: [Var; 8] = args.try_into().expect("expected 8 inputs");
         let token_embeddings = embeddings(
             builder,
             self.path()
@@ -1532,6 +1536,7 @@ impl DynModule for Qwen3_5Model {
             in_v,
             in_conv,
             in_recurrent,
+            max_positions,
             num_chunks,
             None,
         );
@@ -1543,6 +1548,9 @@ impl DynModule for Qwen3_5Model {
         use catgrad::typecheck::*;
 
         let (mut source, mut target) = llm_type(&self.config);
+        let max_positions = source
+            .pop()
+            .expect("qwen3_5 missing max_positions nat input");
         let batch_size = NatExpr::Var(0);
         let num_linear_layers = NatExpr::Constant(self.num_linear_layers);
         let conv_dim = NatExpr::Constant(self.linear_conv_dim());
@@ -1578,7 +1586,8 @@ impl DynModule for Qwen3_5Model {
         source.push(t_conv.clone());
         source.push(t_recurrent.clone());
         source.push(t_mm_delta.clone());
-        source.push(Type::Nat(NatExpr::Var(3)));
+        source.push(max_positions);
+        source.push(Type::Nat(NatExpr::Var(4)));
         target.push(t_conv);
         target.push(t_recurrent);
         target.push(t_mm_delta);
@@ -2189,6 +2198,7 @@ impl Qwen3_5MultimodalModel {
         in_conv: Var,
         in_recurrent: Var,
         in_mm_delta: Var,
+        max_positions: Var,
         num_chunks: Var,
     ) -> Vec<Var> {
         let embed_path = path(vec!["model", "language_model", "embed_tokens"]).unwrap();
@@ -2218,6 +2228,7 @@ impl Qwen3_5MultimodalModel {
             in_v,
             in_conv,
             in_recurrent,
+            max_positions,
             num_chunks,
             Some(rope),
         );
@@ -2253,8 +2264,9 @@ impl DynModule for Qwen3_5MultimodalModel {
             in_conv,
             in_recurrent,
             in_mm_delta,
+            max_positions,
             num_chunks,
-        ]: [Var; 9] = args.try_into().expect("expected 9 inputs");
+        ]: [Var; 10] = args.try_into().expect("expected 10 inputs");
         self.forward_image_and_texts(
             builder,
             text1,
@@ -2265,6 +2277,7 @@ impl DynModule for Qwen3_5MultimodalModel {
             in_conv,
             in_recurrent,
             in_mm_delta,
+            max_positions,
             num_chunks,
         )
     }

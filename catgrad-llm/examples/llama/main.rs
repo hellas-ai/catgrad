@@ -371,6 +371,7 @@ fn run_with_backend<B: interpreter::Backend>(
             &interpreter,
             decode_inputs,
             &state_cache,
+            max_sequence_length,
         )?;
         if i == 0 {
             elapsed_pp = start_gen.elapsed();
@@ -496,8 +497,9 @@ fn run_interpreter<B: interpreter::Backend>(
     interpreter: &interpreter::Interpreter<B>,
     decode_inputs: DecodeInputs<'_, B>,
     state_cache: &[interpreter::Value<B>],
+    max_sequence_length: usize,
 ) -> Result<(u32, Vec<interpreter::Value<B>>)> {
-    let mut inputs = Vec::with_capacity(state_cache.len() + 3);
+    let mut inputs = Vec::with_capacity(state_cache.len() + 4);
     let input_seq_len;
 
     match decode_inputs {
@@ -541,6 +543,7 @@ fn run_interpreter<B: interpreter::Backend>(
     }
 
     inputs.extend(state_cache.iter().cloned());
+    inputs.push(interpreter::Value::Nat(max_sequence_length));
     // Workaround: push extra nat input needed for gated delta decoding, representing chunk_number.
     // It is seq_len dependent and cannot be computed in-graph as it is seq_len % chunk_size.
     if let Some(extra_nat) = model.extra_nat_input(input_seq_len) {

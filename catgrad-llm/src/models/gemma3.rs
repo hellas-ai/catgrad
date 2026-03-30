@@ -340,6 +340,7 @@ impl Gemma3MultimodalModel {
         text2: Var,
         in_k: Var,
         in_v: Var,
+        max_positions: Var,
     ) -> Vec<Var> {
         let text1 = self.language_model.scaled_embeddings(
             builder,
@@ -372,8 +373,15 @@ impl Gemma3MultimodalModel {
             attention_mask * image_mask
         };
 
-        self.language_model
-            .forward_embeddings(builder, p, attention_mask, embeddings, in_k, in_v)
+        self.language_model.forward_embeddings(
+            builder,
+            p,
+            attention_mask,
+            embeddings,
+            in_k,
+            in_v,
+            max_positions,
+        )
     }
 }
 
@@ -383,23 +391,39 @@ impl DynModule for Gemma3MultimodalModel {
     }
 
     fn ty(&self) -> (Vec<Type>, Vec<Type>) {
-        use catgrad::typecheck::TypeExpr;
+        use catgrad::typecheck::{NatExpr, TypeExpr};
         let t = Type::Tensor(TypeExpr::Var(0));
         (
-            vec![t.clone(), t.clone(), t.clone(), t.clone(), t.clone()],
+            vec![
+                t.clone(),
+                t.clone(),
+                t.clone(),
+                t.clone(),
+                t.clone(),
+                Type::Nat(NatExpr::Var(3)),
+            ],
             vec![t.clone(), t.clone(), t],
         )
     }
 
     fn def(&self, builder: &Builder, args: Vec<Var>) -> Vec<Var> {
-        let [text1, image, text2, in_k, in_v]: [Var; 5] =
-            args.try_into().expect("expected 5 inputs");
+        let [text1, image, text2, in_k, in_v, max_positions]: [Var; 6] =
+            args.try_into().expect("expected 6 inputs");
 
         let mut root = Path::empty();
         if !self.language_model.root.is_empty() {
             root = root.extend(self.language_model.root.split('.')).unwrap();
         }
-        self.forward_image_and_texts(builder, root, text1, image, text2, in_k, in_v)
+        self.forward_image_and_texts(
+            builder,
+            root,
+            text1,
+            image,
+            text2,
+            in_k,
+            in_v,
+            max_positions,
+        )
     }
 }
 
@@ -698,13 +722,21 @@ impl Gemma3Model {
     }
 
     // Forward pass with text tokens as input
-    pub fn forward(&self, builder: &Builder, p: Path, x: Var, in_k: Var, in_v: Var) -> Vec<Var> {
+    pub fn forward(
+        &self,
+        builder: &Builder,
+        p: Path,
+        x: Var,
+        in_k: Var,
+        in_v: Var,
+        max_positions: Var,
+    ) -> Vec<Var> {
         let x = self.scaled_embeddings(builder, p.extend(["embed_tokens"]).unwrap(), x);
         let [_b, s, _] = unpack::<3>(builder, shape(builder, x.clone()));
         let [_, _, _, pos, _] = unpack::<5>(builder, shape(builder, in_k.clone()));
         let attention_mask = causal_mask(builder, s, pos);
 
-        self.forward_embeddings(builder, p, attention_mask, x, in_k, in_v)
+        self.forward_embeddings(builder, p, attention_mask, x, in_k, in_v, max_positions)
     }
 
     // Forward pass with embeddings available.
@@ -716,14 +748,9 @@ impl Gemma3Model {
         x: Var,
         in_k: Var,
         in_v: Var,
+        max_positions: Var,
     ) -> Vec<Var> {
-        let mut cache = Cache::init(
-            builder,
-            &self.config,
-            self.max_sequence_length,
-            in_k.clone(),
-            in_v,
-        );
+        let mut cache = Cache::init(builder, &self.config, max_positions, in_k.clone(), in_v);
         let [_, _, _, pos, _] = unpack::<5>(builder, shape(builder, in_k));
         let [_b, s, _] = unpack::<3>(builder, shape(builder, x.clone()));
         let sliding_attention_mask =
@@ -783,12 +810,12 @@ impl DynModule for Gemma3Model {
     }
 
     fn def(&self, builder: &Builder, args: Vec<Var>) -> Vec<Var> {
-        let [x, in_k, in_v]: [Var; 3] = args.try_into().expect("expected 3 inputs");
+        let [x, in_k, in_v, max_positions]: [Var; 4] = args.try_into().expect("expected 4 inputs");
         let mut root = self.path();
         if !self.root.is_empty() {
             root = root.extend(self.root.split('.')).unwrap();
         }
-        self.forward(builder, root, x, in_k, in_v)
+        self.forward(builder, root, x, in_k, in_v, max_positions)
     }
 
     fn ty(&self) -> (Vec<Type>, Vec<Type>) {

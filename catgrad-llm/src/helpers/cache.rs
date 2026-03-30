@@ -15,7 +15,7 @@ impl Cache {
     pub fn init(
         builder: &Builder,
         config: &dyn LLMConfig,
-        positions: usize,
+        positions: impl IntoNatVar,
         in_k: Var,
         in_v: Var,
     ) -> Self {
