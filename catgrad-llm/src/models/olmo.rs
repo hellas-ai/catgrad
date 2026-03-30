@@ -717,17 +717,18 @@ impl DynModule for OlmoModel {
     }
 
     fn def(&self, builder: &Builder, args: Vec<Var>) -> Vec<Var> {
-        let [x, in_k, in_v, in_conv, in_recurrent, num_chunks]: [Var; 6] =
-            args.try_into().expect("expected 6 inputs");
+        let [
+            x,
+            in_k,
+            in_v,
+            in_conv,
+            in_recurrent,
+            max_positions,
+            num_chunks,
+        ]: [Var; 7] = args.try_into().expect("expected 7 inputs");
         let root = self.path();
 
-        let mut cache = Cache::init(
-            builder,
-            &self.config,
-            self.max_sequence_length,
-            in_k.clone(),
-            in_v,
-        );
+        let mut cache = Cache::init(builder, &self.config, max_positions, in_k.clone(), in_v);
         cache.linear_cache = Some(
             (0..self.num_linear_layers)
                 .map(|layer_id| {
@@ -821,6 +822,7 @@ impl DynModule for OlmoModel {
         use catgrad::typecheck::*;
 
         let (mut source, mut target) = llm_type(&self.config);
+        let max_positions = source.pop().expect("olmo missing max_positions nat input");
         let batch_size = NatExpr::Var(0);
         let num_linear_layers = NatExpr::Constant(self.num_linear_layers);
         let conv_dim = NatExpr::Constant(self.linear_conv_dim());
@@ -851,7 +853,8 @@ impl DynModule for OlmoModel {
 
         source.push(t_conv.clone());
         source.push(t_recurrent.clone());
-        source.push(Type::Nat(NatExpr::Var(3)));
+        source.push(max_positions);
+        source.push(Type::Nat(NatExpr::Var(4)));
         target.push(t_conv);
         target.push(t_recurrent);
         (source, target)

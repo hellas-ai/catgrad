@@ -805,8 +805,9 @@ impl NemotronModel {
         in_v: Var,
         in_conv: Var,
         in_ssm: Var,
+        max_positions: Var,
     ) -> Cache {
-        let mut cache = Cache::init(builder, &self.config, self.max_sequence_length, in_k, in_v);
+        let mut cache = Cache::init(builder, &self.config, max_positions, in_k, in_v);
         cache.linear_cache = Some(
             (0..self.num_mamba_layers)
                 .map(|layer_id| {
@@ -856,11 +857,12 @@ impl DynModule for NemotronModel {
     }
 
     fn def(&self, builder: &Builder, args: Vec<Var>) -> Vec<Var> {
-        let [x, in_k, in_v, in_conv, in_ssm]: [Var; 5] =
-            args.try_into().expect("expected 5 inputs");
+        let [x, in_k, in_v, in_conv, in_ssm, max_positions]: [Var; 6] =
+            args.try_into().expect("expected 6 inputs");
         let root = self.path();
         let in_v_out = in_v.clone();
-        let mut cache = self.init_cache(builder, in_k.clone(), in_v, in_conv, in_ssm);
+        let mut cache =
+            self.init_cache(builder, in_k.clone(), in_v, in_conv, in_ssm, max_positions);
         let [_, _, _, pos, _] = unpack::<5>(builder, shape(builder, in_k.clone()));
 
         let mut x = embeddings(builder, root.extend(["backbone", "embeddings"]).unwrap(), x);
@@ -914,6 +916,9 @@ impl DynModule for NemotronModel {
         use catgrad::typecheck::*;
 
         let (mut source, mut target) = llm_type(&self.config);
+        let max_positions = source
+            .pop()
+            .expect("nemotron_h missing max_positions nat input");
         let batch_size = NatExpr::Var(0);
         let num_mamba_layers = NatExpr::Constant(self.num_mamba_layers);
         let conv_dim = NatExpr::Constant(self.config.mamba_conv_dim());
@@ -944,6 +949,7 @@ impl DynModule for NemotronModel {
 
         source.push(t_conv.clone());
         source.push(t_ssm.clone());
+        source.push(max_positions);
         target.push(t_conv);
         target.push(t_ssm);
         (source, target)

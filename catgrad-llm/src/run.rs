@@ -74,6 +74,7 @@ struct ModelRunner {
     typed_term: TypedTerm,
     interpreter: interpreter::Interpreter<CandleBackend>,
     state_cache: Vec<interpreter::Value<CandleBackend>>,
+    max_sequence_length: usize,
     use_kv_cache: bool,
     eos_token_ids: Vec<i32>,
 }
@@ -255,6 +256,7 @@ impl ModelRunner {
             typed_term,
             interpreter,
             state_cache,
+            max_sequence_length,
             use_kv_cache: engine.use_kv_cache(),
             eos_token_ids: engine.inner.eos_token_ids.clone(),
         })
@@ -265,9 +267,10 @@ impl ModelRunner {
             return Ok(None);
         }
 
-        let mut inputs = Vec::with_capacity(self.state_cache.len() + 2);
+        let mut inputs = Vec::with_capacity(self.state_cache.len() + 3);
         inputs.push(token_tensor(&self.interpreter, tokens)?);
         inputs.extend(self.state_cache.iter().cloned());
+        inputs.push(interpreter::Value::Nat(self.max_sequence_length));
         if let Some(extra_nat) = self.model.extra_nat_input(tokens.len()) {
             inputs.push(interpreter::Value::Nat(extra_nat));
         }

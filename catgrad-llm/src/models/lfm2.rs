@@ -468,16 +468,11 @@ impl DynModule for Lfm2Model {
     }
 
     fn def(&self, builder: &Builder, args: Vec<Var>) -> Vec<Var> {
-        let [x, in_k, in_v, in_conv]: [Var; 4] = args.try_into().expect("expected 4 inputs");
+        let [x, in_k, in_v, in_conv, max_positions]: [Var; 5] =
+            args.try_into().expect("expected 5 inputs");
         let root = self.path();
 
-        let mut cache = Cache::init(
-            builder,
-            &self.config,
-            self.max_sequence_length,
-            in_k.clone(),
-            in_v,
-        );
+        let mut cache = Cache::init(builder, &self.config, max_positions, in_k.clone(), in_v);
 
         // initialize linear cache (slot 0 = conv state)
         cache.linear_cache = Some(
@@ -545,6 +540,7 @@ impl DynModule for Lfm2Model {
         use catgrad::typecheck::*;
 
         let (mut source, mut target) = llm_type(&self.config);
+        let max_positions = source.pop().expect("lfm2 missing max_positions nat input");
         let batch_size = NatExpr::Var(0);
         let num_linear_layers = NatExpr::Constant(self.num_linear_layers);
         let hidden_size = NatExpr::Constant(self.config.hidden_size);
@@ -559,6 +555,7 @@ impl DynModule for Lfm2Model {
             ]),
         }));
         source.push(t_conv.clone());
+        source.push(max_positions);
         target.push(t_conv);
         (source, target)
     }

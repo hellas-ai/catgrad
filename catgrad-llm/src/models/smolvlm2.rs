@@ -204,6 +204,7 @@ impl SmolVLM2MultimodalModel {
         text2: Var,
         in_k: Var,
         in_v: Var,
+        max_positions: Var,
     ) -> Vec<Var> {
         let text1 = embeddings(
             builder,
@@ -232,6 +233,7 @@ impl SmolVLM2MultimodalModel {
             embeddings,
             in_k,
             in_v,
+            max_positions,
         )
     }
 }
@@ -242,18 +244,34 @@ impl DynModule for SmolVLM2MultimodalModel {
     }
 
     fn ty(&self) -> (Vec<Type>, Vec<Type>) {
-        use catgrad::typecheck::TypeExpr;
+        use catgrad::typecheck::{NatExpr, TypeExpr};
         let t = Type::Tensor(TypeExpr::Var(0));
         (
-            vec![t.clone(), t.clone(), t.clone(), t.clone(), t.clone()],
+            vec![
+                t.clone(),
+                t.clone(),
+                t.clone(),
+                t.clone(),
+                t.clone(),
+                Type::Nat(NatExpr::Var(3)),
+            ],
             vec![t.clone(), t.clone(), t],
         )
     }
 
     fn def(&self, builder: &Builder, args: Vec<Var>) -> Vec<Var> {
-        let [text1, image, text2, in_k, in_v]: [Var; 5] =
-            args.try_into().expect("expected 5 inputs");
-        self.forward_image_and_texts(builder, Path::empty(), text1, image, text2, in_k, in_v)
+        let [text1, image, text2, in_k, in_v, max_positions]: [Var; 6] =
+            args.try_into().expect("expected 6 inputs");
+        self.forward_image_and_texts(
+            builder,
+            Path::empty(),
+            text1,
+            image,
+            text2,
+            in_k,
+            in_v,
+            max_positions,
+        )
     }
 }
 
@@ -289,9 +307,9 @@ impl DynModule for SmolVLM2Model {
     }
 
     fn def(&self, builder: &Builder, args: Vec<Var>) -> Vec<Var> {
-        let [x, in_k, in_v]: [Var; 3] = args.try_into().expect("expected 3 inputs");
+        let [x, in_k, in_v, max_positions]: [Var; 4] = args.try_into().expect("expected 4 inputs");
         self.language_model
-            .forward(builder, self.path(), x, in_k, in_v)
+            .forward(builder, self.path(), x, in_k, in_v, max_positions)
     }
 
     fn ty(&self) -> (Vec<Type>, Vec<Type>) {
