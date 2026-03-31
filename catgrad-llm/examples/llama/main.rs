@@ -282,8 +282,7 @@ fn run_with_backend<B: interpreter::Backend>(
 
     // Shapecheck the model
     if args.typecheck {
-        typecheck::check(&env, &parameter_types, typed_term.clone())
-            .map_err(|err| anyhow::anyhow!("check error {:?}", err))?;
+        typecheck::check(&env, &parameter_types, typed_term.clone()).map_err(anyhow::Error::new)?;
     }
 
     let mut generated_tokens = 0;

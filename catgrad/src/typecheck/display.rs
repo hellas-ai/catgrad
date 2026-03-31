@@ -1,3 +1,4 @@
+use crate::abstract_interpreter::{CoreSSA, InterpreterError};
 use crate::category::core::Dtype;
 use std::fmt::{Display, Formatter, Result as FmtResult};
 
@@ -120,5 +121,59 @@ impl Display for Dtype {
             Dtype::F32 => write!(f, "f32"),
             Dtype::U32 => write!(f, "u32"),
         }
+    }
+}
+
+pub(crate) fn type_error(
+    ssa: &CoreSSA,
+    op_name: &str,
+    inputs: &[Value],
+    detail: impl Into<String>,
+) -> InterpreterError {
+    InterpreterError::Typecheck(format_error(ssa, op_name, inputs, detail.into()))
+}
+
+pub(crate) fn format_values(values: &[Value]) -> String {
+    values
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn format_error(ssa: &CoreSSA, op_name: &str, inputs: &[Value], detail: String) -> String {
+    let mut message = format!(
+        "typecheck failed at {}: {detail}",
+        format_edge(ssa, op_name)
+    );
+
+    if !inputs.is_empty() {
+        message.push_str("\ninputs:");
+        for ((node_id, _), value) in ssa.sources.iter().zip(inputs) {
+            message.push_str(&format!("\n  v{}: {value}", node_id.0));
+        }
+    }
+
+    message
+}
+
+fn format_edge(ssa: &CoreSSA, op_name: &str) -> String {
+    let targets = ssa
+        .targets
+        .iter()
+        .map(|(node_id, _)| format!("v{}", node_id.0))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let sources = ssa
+        .sources
+        .iter()
+        .map(|(node_id, _)| format!("v{}", node_id.0))
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    if targets.is_empty() {
+        format!("edge {} {op_name}({sources})", ssa.edge_id.0)
+    } else {
+        format!("edge {} {targets} = {op_name}({sources})", ssa.edge_id.0)
     }
 }

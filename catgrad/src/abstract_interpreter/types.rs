@@ -118,6 +118,8 @@ pub enum InterpreterError {
     Load(EdgeId, Path),
     /// Interpreter-specific error while trying to apply an op
     ApplyError(EdgeId),
+    /// A typecheck-specific diagnostic message.
+    Typecheck(String),
 }
 
 impl From<SSAError> for InterpreterError {
@@ -128,7 +130,10 @@ impl From<SSAError> for InterpreterError {
 
 impl std::fmt::Display for InterpreterError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{self:?}")
+        match self {
+            Self::Typecheck(message) => f.write_str(message),
+            _ => write!(f, "{self:?}"),
+        }
     }
 }
 

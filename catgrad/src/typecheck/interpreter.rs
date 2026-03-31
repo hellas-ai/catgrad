@@ -1,4 +1,5 @@
 use super::Parameters;
+use super::display::{format_values, type_error};
 use super::value_types::*;
 
 use crate::category::{core, lang};
@@ -131,6 +132,7 @@ impl abstract_interpreter::Interpreter for Interpreter {
         then_branch: &core::Term,
         else_branch: &core::Term,
     ) -> abstract_interpreter::ResultValues<Self> {
+        let inputs = args.clone();
         let (_cond, branch_args) = args
             .split_first()
             .ok_or(InterpreterError::ArityError(ssa.edge_id))?;
@@ -147,7 +149,16 @@ impl abstract_interpreter::Interpreter for Interpreter {
         if then_norm == else_norm {
             Ok(then_norm)
         } else {
-            Err(InterpreterError::TypeError(ssa.edge_id))
+            Err(type_error(
+                ssa,
+                "if",
+                &inputs,
+                format!(
+                    "if branches return different types: then [{}], else [{}]",
+                    format_values(&then_norm),
+                    format_values(&else_norm)
+                ),
+            ))
         }
     }
 }
