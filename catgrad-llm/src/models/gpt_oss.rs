@@ -57,7 +57,6 @@ impl LLMConfig for GPTOssConfig {
 pub struct GPTOssModel {
     config: GPTOssConfig,
     dtype: Dtype,
-    pub max_sequence_length: usize,
 }
 
 impl LLMModel for GPTOssModel {
@@ -79,17 +78,9 @@ fn gptoss_linear(builder: &Builder, weight: Var, bias: Var, x: Var) -> Var {
 }
 
 impl GPTOssModel {
-    pub fn new(
-        config_json: &serde_json::Value,
-        max_sequence_length: usize,
-        dtype: Dtype,
-    ) -> crate::Result<Self> {
+    pub fn new(config_json: &serde_json::Value, dtype: Dtype) -> crate::Result<Self> {
         let config: GPTOssConfig = serde_json::from_value(config_json.clone())?;
-        Ok(Self {
-            config,
-            dtype,
-            max_sequence_length,
-        })
+        Ok(Self { config, dtype })
     }
 
     fn is_sliding_attention_layer(&self, layer_id: usize) -> bool {

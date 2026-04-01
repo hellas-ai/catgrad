@@ -100,7 +100,6 @@ impl LLMConfig for DeepSeekConfig {
 pub struct DeepSeekModel {
     config: DeepSeekConfig,
     dtype: Dtype,
-    pub max_sequence_length: usize,
 }
 
 impl LLMModel for DeepSeekModel {
@@ -120,17 +119,9 @@ impl LLMModel for DeepSeekModel {
 }
 
 impl DeepSeekModel {
-    pub fn new(
-        config_json: &serde_json::Value,
-        max_sequence_length: usize,
-        dtype: Dtype,
-    ) -> crate::Result<Self> {
+    pub fn new(config_json: &serde_json::Value, dtype: Dtype) -> crate::Result<Self> {
         let config: DeepSeekConfig = serde_json::from_value(config_json.clone())?;
-        Ok(Self {
-            config,
-            dtype,
-            max_sequence_length,
-        })
+        Ok(Self { config, dtype })
     }
 
     fn mlp(&self, builder: &Builder, p: Path, x: Var) -> Var {

@@ -73,7 +73,6 @@ pub struct LlamaModel {
     model_root: String,
     config: LlamaConfig,
     dtype: Dtype,
-    pub max_sequence_length: usize,
 }
 
 impl LLMModel for LlamaModel {
@@ -89,7 +88,6 @@ impl LLMModel for LlamaModel {
 impl LlamaModel {
     pub(crate) fn from_config_with_roots(
         config: LlamaConfig,
-        max_sequence_length: usize,
         model_root: &str,
         dtype: Dtype,
     ) -> Self {
@@ -98,23 +96,16 @@ impl LlamaModel {
             model_root: model_root.to_string(),
             config,
             dtype,
-            max_sequence_length,
         }
     }
 
-    pub fn new(
-        root: &str,
-        config_json: &serde_json::Value,
-        max_sequence_length: usize,
-        dtype: Dtype,
-    ) -> crate::Result<Self> {
+    pub fn new(root: &str, config_json: &serde_json::Value, dtype: Dtype) -> crate::Result<Self> {
         let config: LlamaConfig = serde_json::from_value(config_json.clone())?;
         Ok(Self {
             root: root.to_string(),
             model_root: "model".to_string(),
             config,
             dtype,
-            max_sequence_length,
         })
     }
 

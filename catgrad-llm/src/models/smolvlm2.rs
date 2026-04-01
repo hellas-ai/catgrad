@@ -280,11 +280,7 @@ impl DynModule for SmolVLM2MultimodalModel {
 }
 
 impl SmolVLM2Model {
-    pub fn new(
-        config_json: &serde_json::Value,
-        max_sequence_length: usize,
-        dtype: Dtype,
-    ) -> crate::Result<Self> {
+    pub fn new(config_json: &serde_json::Value, dtype: Dtype) -> crate::Result<Self> {
         let config: SmolVLM2Config = serde_json::from_value(config_json.clone())?;
         let text_config = config.text_config;
         let text_hidden_size = text_config.hidden_size();
@@ -295,7 +291,6 @@ impl SmolVLM2Model {
         Ok(Self {
             language_model: LlamaModel::from_config_with_roots(
                 text_config,
-                max_sequence_length,
                 "model.text_model",
                 dtype,
             ),

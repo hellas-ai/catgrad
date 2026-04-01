@@ -59,7 +59,6 @@ pub struct Mistral3Model {
     pub root: String,
     config: Mistral3TextConfig,
     dtype: Dtype,
-    pub max_sequence_length: usize,
 }
 
 impl LLMModel for Mistral3Model {
@@ -73,18 +72,12 @@ impl LLMModel for Mistral3Model {
 }
 
 impl Mistral3Model {
-    pub fn new(
-        root: &str,
-        config_json: &serde_json::Value,
-        max_sequence_length: usize,
-        dtype: Dtype,
-    ) -> crate::Result<Self> {
+    pub fn new(root: &str, config_json: &serde_json::Value, dtype: Dtype) -> crate::Result<Self> {
         let config: Mistral3Config = serde_json::from_value(config_json.clone())?;
         Ok(Self {
             root: root.to_string(),
             config: config.text_config,
             dtype,
-            max_sequence_length,
         })
     }
 
