@@ -75,7 +75,6 @@ impl LLMConfig for Qwen3Config {
 pub struct Qwen3Model {
     config: Qwen3Config,
     dtype: Dtype,
-    pub max_sequence_length: usize,
 }
 
 impl LLMModel for Qwen3Model {
@@ -89,17 +88,9 @@ impl LLMModel for Qwen3Model {
 }
 
 impl Qwen3Model {
-    pub fn new(
-        config_json: &serde_json::Value,
-        max_sequence_length: usize,
-        dtype: Dtype,
-    ) -> crate::Result<Self> {
+    pub fn new(config_json: &serde_json::Value, dtype: Dtype) -> crate::Result<Self> {
         let config: Qwen3Config = serde_json::from_value(config_json.clone())?;
-        Ok(Self {
-            config,
-            dtype,
-            max_sequence_length,
-        })
+        Ok(Self { config, dtype })
     }
 
     fn mlp(&self, builder: &Builder, p: Path, x: Var) -> Var {

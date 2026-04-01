@@ -77,7 +77,6 @@ pub struct Lfm2Model {
     layer_to_linear_id: Vec<Option<usize>>,
     num_linear_layers: usize,
     dtype: Dtype,
-    pub max_sequence_length: usize,
 }
 
 impl LLMModel for Lfm2Model {
@@ -126,11 +125,7 @@ impl LLMModel for Lfm2Model {
 }
 
 impl Lfm2Model {
-    pub fn new(
-        config_json: &serde_json::Value,
-        max_sequence_length: usize,
-        dtype: Dtype,
-    ) -> crate::Result<Self> {
+    pub fn new(config_json: &serde_json::Value, dtype: Dtype) -> crate::Result<Self> {
         let config: Lfm2Config = serde_json::from_value(config_json.clone())?;
         assert!(config.conv_l_cache > 0, "lfm2 conv_l_cache must be > 0");
         let mut layer_to_cache_id = Vec::with_capacity(config.num_hidden_layers);
@@ -155,7 +150,6 @@ impl Lfm2Model {
             layer_to_linear_id,
             num_linear_layers: next_linear_id,
             dtype,
-            max_sequence_length,
         })
     }
 

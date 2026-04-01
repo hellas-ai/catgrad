@@ -41,7 +41,6 @@ impl LLMConfig for GPT2Config {
 pub struct GPT2Model {
     config: GPT2Config,
     dtype: Dtype,
-    pub max_sequence_length: usize,
 }
 
 impl LLMModel for GPT2Model {
@@ -55,17 +54,9 @@ impl LLMModel for GPT2Model {
 }
 
 impl GPT2Model {
-    pub fn new(
-        config_json: &serde_json::Value,
-        max_sequence_length: usize,
-        dtype: Dtype,
-    ) -> crate::Result<Self> {
+    pub fn new(config_json: &serde_json::Value, dtype: Dtype) -> crate::Result<Self> {
         let config: GPT2Config = serde_json::from_value(config_json.clone())?;
-        Ok(Self {
-            config,
-            dtype,
-            max_sequence_length,
-        })
+        Ok(Self { config, dtype })
     }
 
     pub fn embeddings(&self, builder: &Builder, p: Path, pos: Var, x: Var) -> Var {

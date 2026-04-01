@@ -244,49 +244,34 @@ pub fn get_model(
         "Gemma2ForCausalLM" | "Gemma3ForCausalLM" => Box::new(models::gemma3::Gemma3Model::new(
             "model",
             config_json,
-            max_sequence_length,
             dtype,
         )?),
-        "Gemma3ForConditionalGeneration" | "PaliGemmaForConditionalGeneration" => {
-            Box::new(models::gemma3::Gemma3Model::new(
-                "language_model.model",
-                config_json,
-                max_sequence_length,
-                dtype,
-            )?)
-        }
+        "Gemma3ForConditionalGeneration" | "PaliGemmaForConditionalGeneration" => Box::new(
+            models::gemma3::Gemma3Model::new("language_model.model", config_json, dtype)?,
+        ),
         "Mistral3ForConditionalGeneration" => Box::new(models::mistral3::Mistral3Model::new(
             "language_model",
             config_json,
-            max_sequence_length,
             dtype,
         )?),
-        "MistralForCausalLM" | "LlamaForCausalLM" | "SmolLM3ForCausalLM" => Box::new(
-            models::llama::LlamaModel::new("", config_json, max_sequence_length, dtype)?,
-        ),
-        "NemotronHForCausalLM" => Box::new(models::nemotron::NemotronModel::new(
-            config_json,
-            max_sequence_length,
-            dtype,
-        )?),
-        "SmolVLMForConditionalGeneration" => Box::new(models::smolvlm2::SmolVLM2Model::new(
-            config_json,
-            max_sequence_length,
-            dtype,
-        )?),
-        "Phi3ForCausalLM" | "Phi4MMForCausalLM" => Box::new(models::phi3::Phi3Model::new(
-            config_json,
-            max_sequence_length,
-            dtype,
-        )?),
+        "MistralForCausalLM" | "LlamaForCausalLM" | "SmolLM3ForCausalLM" => {
+            Box::new(models::llama::LlamaModel::new("", config_json, dtype)?)
+        }
+        "NemotronHForCausalLM" => {
+            Box::new(models::nemotron::NemotronModel::new(config_json, dtype)?)
+        }
+        "SmolVLMForConditionalGeneration" => {
+            Box::new(models::smolvlm2::SmolVLM2Model::new(config_json, dtype)?)
+        }
+        "Phi3ForCausalLM" | "Phi4MMForCausalLM" => {
+            Box::new(models::phi3::Phi3Model::new(config_json, dtype)?)
+        }
         "Olmo2ForCausalLM" | "Olmo3ForCausalLM" | "OlmoHybridForCausalLM" => Box::new(
             models::olmo::OlmoModel::new(config_json, max_sequence_length, dtype)?,
         ),
-        "Qwen3ForCausalLM" | "Qwen3MoeForCausalLM" => Box::new(models::qwen3::Qwen3Model::new(
-            config_json,
-            max_sequence_length,
-            dtype,
-        )?),
+        "Qwen3ForCausalLM" | "Qwen3MoeForCausalLM" => {
+            Box::new(models::qwen3::Qwen3Model::new(config_json, dtype)?)
+        }
         "Qwen3_5ForConditionalGeneration" => Box::new(models::qwen3_5::Qwen3_5Model::new(
             config_json,
             max_sequence_length,
@@ -296,29 +281,15 @@ pub fn get_model(
             },
             dtype,
         )?),
-        "GraniteForCausalLM" | "GraniteMoeForCausalLM" | "GraniteMoeHybridForCausalLM" => Box::new(
-            models::granite::GraniteModel::new(config_json, max_sequence_length, dtype)?,
-        ),
-        "DeepseekV3ForCausalLM" => Box::new(models::deepseek::DeepSeekModel::new(
-            config_json,
-            max_sequence_length,
-            dtype,
-        )?),
-        "GptOssForCausalLM" => Box::new(models::gpt_oss::GPTOssModel::new(
-            config_json,
-            max_sequence_length,
-            dtype,
-        )?),
-        "Lfm2ForCausalLM" => Box::new(models::lfm2::Lfm2Model::new(
-            config_json,
-            max_sequence_length,
-            dtype,
-        )?),
-        "GPT2LMHeadModel" => Box::new(models::gpt2::GPT2Model::new(
-            config_json,
-            max_sequence_length,
-            dtype,
-        )?),
+        "GraniteForCausalLM" | "GraniteMoeForCausalLM" | "GraniteMoeHybridForCausalLM" => {
+            Box::new(models::granite::GraniteModel::new(config_json, dtype)?)
+        }
+        "DeepseekV3ForCausalLM" => {
+            Box::new(models::deepseek::DeepSeekModel::new(config_json, dtype)?)
+        }
+        "GptOssForCausalLM" => Box::new(models::gpt_oss::GPTOssModel::new(config_json, dtype)?),
+        "Lfm2ForCausalLM" => Box::new(models::lfm2::Lfm2Model::new(config_json, dtype)?),
+        "GPT2LMHeadModel" => Box::new(models::gpt2::GPT2Model::new(config_json, dtype)?),
         _ => {
             return Err(LLMError::InvalidModelConfig(format!(
                 "Unsupported model architecture: {}",

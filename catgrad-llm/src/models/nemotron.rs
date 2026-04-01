@@ -119,7 +119,6 @@ pub struct NemotronModel {
     layer_to_mamba_id: Vec<Option<usize>>,
     num_mamba_layers: usize,
     dtype: Dtype,
-    pub max_sequence_length: usize,
 }
 
 impl LLMModel for NemotronModel {
@@ -178,11 +177,7 @@ impl LLMModel for NemotronModel {
 }
 
 impl NemotronModel {
-    pub fn new(
-        config_json: &serde_json::Value,
-        max_sequence_length: usize,
-        dtype: Dtype,
-    ) -> crate::Result<Self> {
+    pub fn new(config_json: &serde_json::Value, dtype: Dtype) -> crate::Result<Self> {
         let config: NemotronConfig = serde_json::from_value(config_json.clone())?;
         let mut layer_kinds = Vec::with_capacity(config.num_hidden_layers);
         for ch in config.hybrid_override_pattern.chars() {
@@ -229,7 +224,6 @@ impl NemotronModel {
             layer_to_mamba_id,
             num_mamba_layers: next_mamba_id,
             dtype,
-            max_sequence_length,
         })
     }
 
