@@ -55,9 +55,9 @@ struct Args {
     /// Backend to use
     #[arg(short = 'b', long, value_enum, default_value_t = BackendChoice::Candle)]
     backend: BackendChoice,
-    /// Enable Candle backend acceleration
-    #[arg(short = 'a', long)]
-    accel: bool,
+    /// Disable Candle backend acceleration
+    #[arg(long = "no-accel")]
+    no_accel: bool,
     /// Dump the constructed graph to this JSON file then exit.
     #[arg(long)]
     dump: Option<PathBuf>,
@@ -138,7 +138,7 @@ fn main() -> Result<()> {
     match args.backend {
         BackendChoice::Ndarray => run_with_backend(&args, &app_config, NdArrayBackend),
         BackendChoice::Candle => {
-            run_with_backend(&args, &app_config, CandleBackend::new_accel(args.accel))
+            run_with_backend(&args, &app_config, CandleBackend::new_accel(!args.no_accel))
         }
     }
 }
