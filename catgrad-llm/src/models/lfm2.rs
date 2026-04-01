@@ -7,6 +7,11 @@ use nn::*;
 use serde::Deserialize;
 
 #[derive(Debug, Clone, Default, Deserialize)]
+struct LFM2RopeParameters {
+    rope_theta: f32,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
 struct Lfm2Config {
     hidden_size: usize,
@@ -24,6 +29,7 @@ struct Lfm2Config {
     num_attention_heads: usize,
     num_key_value_heads: usize,
     rope_theta: f32,
+    rope_parameters: Option<LFM2RopeParameters>,
     eos_token_id: Option<EosTokenId>,
     vocab_size: usize,
     layer_types: Vec<String>,
@@ -59,7 +65,9 @@ impl LLMConfig for Lfm2Config {
     }
 
     fn rope_theta(&self) -> f32 {
-        self.rope_theta
+        self.rope_parameters
+            .as_ref()
+            .map_or(self.rope_theta, |p| p.rope_theta)
     }
 
     fn get_head_dim(&self) -> usize {
