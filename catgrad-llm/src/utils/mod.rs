@@ -217,7 +217,7 @@ pub fn interpolate_multimodal_prompt(
             prompt,
         )?,
         _ => {
-            let model = get_model(config_json, 1, runtime_context)?;
+            let model = get_model(config_json, 1, runtime_context, Dtype::F32)?;
             if !model.is_multimodal() {
                 return Err(LLMError::InvalidModelConfig(format!(
                     "Model architecture {arch} does not support image input"
@@ -236,6 +236,7 @@ pub fn get_model(
     config_json: &serde_json::Value,
     max_sequence_length: usize,
     runtime_context: Option<&ModelRuntimeContext>,
+    dtype: Dtype,
 ) -> Result<Box<dyn LLMModel>> {
     let arch = get_model_architecture(config_json)?;
 
@@ -244,40 +245,47 @@ pub fn get_model(
             "model",
             config_json,
             max_sequence_length,
+            dtype,
         )?),
         "Gemma3ForConditionalGeneration" | "PaliGemmaForConditionalGeneration" => {
             Box::new(models::gemma3::Gemma3Model::new(
                 "language_model.model",
                 config_json,
                 max_sequence_length,
+                dtype,
             )?)
         }
         "Mistral3ForConditionalGeneration" => Box::new(models::mistral3::Mistral3Model::new(
             "language_model",
             config_json,
             max_sequence_length,
+            dtype,
         )?),
         "MistralForCausalLM" | "LlamaForCausalLM" | "SmolLM3ForCausalLM" => Box::new(
-            models::llama::LlamaModel::new("", config_json, max_sequence_length)?,
+            models::llama::LlamaModel::new("", config_json, max_sequence_length, dtype)?,
         ),
         "NemotronHForCausalLM" => Box::new(models::nemotron::NemotronModel::new(
             config_json,
             max_sequence_length,
+            dtype,
         )?),
         "SmolVLMForConditionalGeneration" => Box::new(models::smolvlm2::SmolVLM2Model::new(
             config_json,
             max_sequence_length,
+            dtype,
         )?),
         "Phi3ForCausalLM" | "Phi4MMForCausalLM" => Box::new(models::phi3::Phi3Model::new(
             config_json,
             max_sequence_length,
+            dtype,
         )?),
         "Olmo2ForCausalLM" | "Olmo3ForCausalLM" | "OlmoHybridForCausalLM" => Box::new(
-            models::olmo::OlmoModel::new(config_json, max_sequence_length)?,
+            models::olmo::OlmoModel::new(config_json, max_sequence_length, dtype)?,
         ),
         "Qwen3ForCausalLM" | "Qwen3MoeForCausalLM" => Box::new(models::qwen3::Qwen3Model::new(
             config_json,
             max_sequence_length,
+            dtype,
         )?),
         "Qwen3_5ForConditionalGeneration" => Box::new(models::qwen3_5::Qwen3_5Model::new(
             config_json,
@@ -286,25 +294,30 @@ pub fn get_model(
                 Some(ModelRuntimeContext::Qwen3_5Vision(runtime_vision)) => Some(runtime_vision),
                 _ => None,
             },
+            dtype,
         )?),
         "GraniteForCausalLM" | "GraniteMoeForCausalLM" | "GraniteMoeHybridForCausalLM" => Box::new(
-            models::granite::GraniteModel::new(config_json, max_sequence_length)?,
+            models::granite::GraniteModel::new(config_json, max_sequence_length, dtype)?,
         ),
         "DeepseekV3ForCausalLM" => Box::new(models::deepseek::DeepSeekModel::new(
             config_json,
             max_sequence_length,
+            dtype,
         )?),
         "GptOssForCausalLM" => Box::new(models::gpt_oss::GPTOssModel::new(
             config_json,
             max_sequence_length,
+            dtype,
         )?),
         "Lfm2ForCausalLM" => Box::new(models::lfm2::Lfm2Model::new(
             config_json,
             max_sequence_length,
+            dtype,
         )?),
         "GPT2LMHeadModel" => Box::new(models::gpt2::GPT2Model::new(
             config_json,
             max_sequence_length,
+            dtype,
         )?),
         _ => {
             return Err(LLMError::InvalidModelConfig(format!(
@@ -453,7 +466,12 @@ pub fn post_process_model_weights<B: interpreter::Backend>(
 pub fn load_model_weights<B: interpreter::Backend>(
     model_paths: Vec<PathBuf>,
     backend: &B,
+    dtype: Dtype,
 ) -> Result<(interpreter::Parameters<B>, typecheck::Parameters, usize)> {
+    if dtype != Dtype::F32 {
+        return Err(LLMError::UnsupportedDtype(format!("{dtype:?}")));
+    }
+
     // Read each tensor
     let mut type_map = HashMap::new();
     let mut data_map = HashMap::new();
@@ -513,6 +531,7 @@ pub fn load_model<B: interpreter::Backend>(
     model_name: &str,
     revision: &str,
     backend: &B,
+    dtype: Dtype,
 ) -> Result<(
     interpreter::Parameters<B>,
     typecheck::Parameters,
@@ -526,7 +545,7 @@ pub fn load_model<B: interpreter::Backend>(
         .map_err(|err| LLMError::TokenizerError(format!("tokenizer load error {:?}", err)))?;
 
     let (parameter_values, parameter_types, total_params) =
-        load_model_weights(model_paths, backend)?;
+        load_model_weights(model_paths, backend, dtype)?;
 
     Ok((
         parameter_values,

@@ -1,3 +1,4 @@
+use catgrad::prelude::Dtype;
 use clap::Parser;
 use serde::Serialize;
 use serde_json::json;
@@ -51,7 +52,7 @@ struct InferenceEngine {
 impl InferenceEngine {
     fn new(model: &str, use_kv_cache: bool, default_max_tokens: u32) -> anyhow::Result<Self> {
         Ok(Self {
-            engine: ModelEngine::new(model, use_kv_cache)?,
+            engine: ModelEngine::new(model, use_kv_cache, Dtype::F32)?,
             model_name: model.to_string(),
             default_max_tokens,
         })

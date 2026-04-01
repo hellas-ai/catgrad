@@ -16,7 +16,7 @@ use crate::utils::{
 use crate::{Detokenizer, LLMError, PreparedPrompt, Result};
 use catgrad::interpreter::backend::candle::CandleBackend;
 use catgrad::interpreter::{self, Backend};
-use catgrad::prelude::{Shape, TypedTerm, stdlib, to_load_ops};
+use catgrad::prelude::{Dtype, Shape, TypedTerm, stdlib, to_load_ops};
 use std::rc::Rc;
 use tokenizers::tokenizer::Tokenizer;
 
@@ -28,6 +28,7 @@ struct ModelEngineInner {
     tokenizer: Tokenizer,
     chat_template: String,
     eos_token_ids: Vec<i32>,
+    dtype: Dtype,
     use_kv_cache: bool,
 }
 
@@ -45,7 +46,7 @@ struct ModelEngineInner {
 /// use catgrad_llm::types::Message;
 /// use catgrad_llm::types::openai::ChatMessage;
 ///
-/// let engine = ModelEngine::new("Qwen/Qwen3-0.6B", true)?;
+/// let engine = ModelEngine::new("Qwen/Qwen3-0.6B", true, catgrad::prelude::Dtype::F32)?;
 ///
 /// let prompt = engine.prepare_messages(&[
 ///     Message::openai(ChatMessage::system("You are concise.")),
@@ -123,11 +124,11 @@ impl ModelEngine {
     ///
     /// Set `use_kv_cache` to reuse KV-cache state between decode steps within a single request.
     /// The cache does not persist across separate generation calls.
-    pub fn new(model_name: &str, use_kv_cache: bool) -> Result<Self> {
+    pub fn new(model_name: &str, use_kv_cache: bool, dtype: Dtype) -> Result<Self> {
         let backend = CandleBackend::new();
         let (parameter_values, parameter_types, config_json, tokenizer, _) =
-            load_model(model_name, "main", &backend)?;
-        let model = get_model(&config_json, 1, None)?;
+            load_model(model_name, "main", &backend, dtype.clone())?;
+        let model = get_model(&config_json, 1, None, dtype.clone())?;
         let chat_template = get_model_chat_template(model_name, "main")?;
         let chat_template = chat_template
             .replace("{% generation %}", "")
@@ -143,6 +144,7 @@ impl ModelEngine {
                 tokenizer,
                 chat_template,
                 eos_token_ids,
+                dtype,
                 use_kv_cache,
             }),
         })
@@ -234,7 +236,12 @@ impl ModelRunner {
         let backend = engine.inner.backend.clone();
         let mut parameter_values = engine.inner.parameter_values.clone();
         let mut parameter_types = engine.inner.parameter_types.clone();
-        let model = get_model(&engine.inner.config_json, max_sequence_length, None)?;
+        let model = get_model(
+            &engine.inner.config_json,
+            max_sequence_length,
+            None,
+            engine.inner.dtype.clone(),
+        )?;
         post_process_model_weights(
             model.as_ref(),
             &backend,

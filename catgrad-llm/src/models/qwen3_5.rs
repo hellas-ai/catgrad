@@ -614,6 +614,7 @@ pub struct Qwen3_5Model {
     layer_to_cache_id: Vec<Option<usize>>,
     layer_to_linear_id: Vec<Option<usize>>,
     num_linear_layers: usize,
+    dtype: Dtype,
     pub max_sequence_length: usize,
     multimodal: Option<Qwen3_5MultimodalConfig>,
 }
@@ -621,6 +622,10 @@ pub struct Qwen3_5Model {
 impl LLMModel for Qwen3_5Model {
     fn config(&self) -> &dyn LLMConfig {
         &self.config
+    }
+
+    fn dtype(&self) -> Dtype {
+        self.dtype.clone()
     }
 
     fn extra_nat_input(&self, seq_len: usize) -> Option<usize> {
@@ -714,6 +719,7 @@ impl Qwen3_5Model {
         config_json: &serde_json::Value,
         max_sequence_length: usize,
         runtime_vision: Option<&Qwen3_5RuntimeVisionConfig>,
+        dtype: Dtype,
     ) -> crate::Result<Self> {
         let config: Qwen3_5Config = serde_json::from_value(config_json.clone())?;
         let multimodal =
@@ -744,6 +750,7 @@ impl Qwen3_5Model {
             layer_to_cache_id,
             layer_to_linear_id,
             num_linear_layers: next_linear_id,
+            dtype,
             max_sequence_length,
             multimodal,
         })

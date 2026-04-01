@@ -66,6 +66,7 @@ impl LLMConfig for GraniteConfig {
 
 pub struct GraniteModel {
     config: GraniteConfig,
+    dtype: Dtype,
     pub max_sequence_length: usize,
 }
 
@@ -73,13 +74,22 @@ impl LLMModel for GraniteModel {
     fn config(&self) -> &dyn LLMConfig {
         &self.config
     }
+
+    fn dtype(&self) -> Dtype {
+        self.dtype.clone()
+    }
 }
 
 impl GraniteModel {
-    pub fn new(config_json: &serde_json::Value, max_sequence_length: usize) -> crate::Result<Self> {
+    pub fn new(
+        config_json: &serde_json::Value,
+        max_sequence_length: usize,
+        dtype: Dtype,
+    ) -> crate::Result<Self> {
         let config: GraniteConfig = serde_json::from_value(config_json.clone())?;
         Ok(Self {
             config,
+            dtype,
             max_sequence_length,
         })
     }

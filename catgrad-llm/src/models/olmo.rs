@@ -82,12 +82,17 @@ pub struct OlmoModel {
     layer_to_cache_id: Vec<Option<usize>>,
     layer_to_linear_id: Vec<Option<usize>>,
     num_linear_layers: usize,
+    dtype: Dtype,
     pub max_sequence_length: usize,
 }
 
 impl LLMModel for OlmoModel {
     fn config(&self) -> &dyn LLMConfig {
         &self.config
+    }
+
+    fn dtype(&self) -> Dtype {
+        self.dtype.clone()
     }
 
     fn extra_nat_input(&self, seq_len: usize) -> Option<usize> {
@@ -141,7 +146,11 @@ impl LLMModel for OlmoModel {
 }
 
 impl OlmoModel {
-    pub fn new(config_json: &serde_json::Value, max_sequence_length: usize) -> crate::Result<Self> {
+    pub fn new(
+        config_json: &serde_json::Value,
+        max_sequence_length: usize,
+        dtype: Dtype,
+    ) -> crate::Result<Self> {
         let config: OlmoConfig = serde_json::from_value(config_json.clone())?;
         if config.is_hybrid() {
             assert!(
@@ -169,6 +178,7 @@ impl OlmoModel {
             layer_to_cache_id,
             layer_to_linear_id,
             num_linear_layers: next_linear_id,
+            dtype,
             max_sequence_length,
         })
     }

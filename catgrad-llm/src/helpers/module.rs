@@ -95,9 +95,7 @@ pub struct MultimodalMetadata {
 pub trait LLMModel: DynModule {
     fn config(&self) -> &dyn LLMConfig;
 
-    fn dtype(&self) -> Dtype {
-        Dtype::F32
-    }
+    fn dtype(&self) -> Dtype;
 
     fn extra_nat_input(&self, _seq_len: usize) -> Option<usize> {
         None

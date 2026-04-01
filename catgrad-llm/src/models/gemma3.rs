@@ -155,6 +155,7 @@ struct GemmaMultimodalConfig {
 pub struct Gemma3Model {
     pub root: String,
     pub config: GemmaTextConfig,
+    dtype: Dtype,
     pub max_sequence_length: usize,
     multimodal: Option<GemmaMultimodalConfig>,
 }
@@ -162,6 +163,10 @@ pub struct Gemma3Model {
 impl LLMModel for Gemma3Model {
     fn config(&self) -> &dyn LLMConfig {
         &self.config
+    }
+
+    fn dtype(&self) -> Dtype {
+        self.dtype.clone()
     }
 
     fn multimodal_metadata(&self) -> Option<MultimodalMetadata> {
@@ -432,6 +437,7 @@ impl Gemma3Model {
         root: &str,
         config_json: &serde_json::Value,
         max_sequence_length: usize,
+        dtype: Dtype,
     ) -> crate::Result<Self> {
         let (config, multimodal) = match serde_json::from_value(config_json.clone())? {
             GemmaConfig::Text(config) => (config, None),
@@ -461,6 +467,7 @@ impl Gemma3Model {
         Ok(Gemma3Model {
             root: root.to_string(),
             config,
+            dtype,
             max_sequence_length,
             multimodal,
         })

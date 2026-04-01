@@ -167,10 +167,11 @@ fn run_with_backend<B: interpreter::Backend>(
     backend: B,
 ) -> Result<()> {
     let model_name = get_model_name(args, app_config);
+    let model_dtype = Dtype::F32;
 
     let start_load = std::time::Instant::now();
     let (mut parameter_values, mut parameter_types, config_json, tokenizer, total_params) =
-        load_model(&model_name, &args.revision, &backend)?;
+        load_model(&model_name, &args.revision, &backend, model_dtype.clone())?;
     let elapsed_load = start_load.elapsed();
 
     eprintln!(
@@ -224,7 +225,12 @@ fn run_with_backend<B: interpreter::Backend>(
 
     let mut token_ids = encoding.get_ids().to_vec();
     let max_sequence_length = max_seq_len + token_ids.len();
-    let model = get_model(&config_json, max_sequence_length, runtime_context)?;
+    let model = get_model(
+        &config_json,
+        max_sequence_length,
+        runtime_context,
+        model_dtype,
+    )?;
     post_process_model_weights(
         model.as_ref(),
         &backend,
