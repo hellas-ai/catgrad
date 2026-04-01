@@ -313,6 +313,6 @@ impl DynModule for SmolVLM2Model {
     }
 
     fn ty(&self) -> (Vec<Type>, Vec<Type>) {
-        llm_type(self.config())
+        llm_type(self.config(), self.dtype())
     }
 }

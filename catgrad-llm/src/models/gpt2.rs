@@ -234,6 +234,6 @@ impl DynModule for GPT2Model {
 
     // This should return the *detailed* type of the model
     fn ty(&self) -> (Vec<Type>, Vec<Type>) {
-        llm_type(&self.config)
+        llm_type(&self.config, self.dtype())
     }
 }

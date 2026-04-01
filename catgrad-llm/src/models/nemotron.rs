@@ -127,9 +127,10 @@ impl LLMModel for NemotronModel {
     }
 
     fn empty_state_type(&self) -> Vec<(Dtype, Shape)> {
+        let dtype = self.dtype();
         vec![
             (
-                Dtype::F32,
+                dtype.clone(),
                 Shape(vec![
                     self.config.num_kv_layers(),
                     1,
@@ -139,7 +140,7 @@ impl LLMModel for NemotronModel {
                 ]),
             ),
             (
-                Dtype::F32,
+                dtype.clone(),
                 Shape(vec![
                     self.config.num_kv_layers(),
                     1,
@@ -149,7 +150,7 @@ impl LLMModel for NemotronModel {
                 ]),
             ),
             (
-                Dtype::F32,
+                dtype.clone(),
                 Shape(vec![
                     self.num_mamba_layers,
                     1,
@@ -158,7 +159,7 @@ impl LLMModel for NemotronModel {
                 ]),
             ),
             (
-                Dtype::F32,
+                dtype,
                 Shape(vec![
                     self.num_mamba_layers,
                     1,
@@ -915,7 +916,7 @@ impl DynModule for NemotronModel {
     fn ty(&self) -> (Vec<Type>, Vec<Type>) {
         use catgrad::typecheck::*;
 
-        let (mut source, mut target) = llm_type(&self.config);
+        let (mut source, mut target) = llm_type(&self.config, self.dtype());
         let max_positions = source
             .pop()
             .expect("nemotron_h missing max_positions nat input");
@@ -928,7 +929,7 @@ impl DynModule for NemotronModel {
         let ssm_state_size = NatExpr::Constant(self.config.ssm_state_size);
 
         let t_conv = Type::Tensor(TypeExpr::NdArrayType(NdArrayType {
-            dtype: DtypeExpr::Constant(Dtype::F32),
+            dtype: DtypeExpr::Constant(self.dtype()),
             shape: ShapeExpr::Shape(vec![
                 num_mamba_layers.clone(),
                 batch_size.clone(),
@@ -937,7 +938,7 @@ impl DynModule for NemotronModel {
             ]),
         }));
         let t_ssm = Type::Tensor(TypeExpr::NdArrayType(NdArrayType {
-            dtype: DtypeExpr::Constant(Dtype::F32),
+            dtype: DtypeExpr::Constant(self.dtype()),
             shape: ShapeExpr::Shape(vec![
                 num_mamba_layers,
                 batch_size,
