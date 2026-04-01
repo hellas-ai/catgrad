@@ -40,6 +40,7 @@ impl LLMConfig for GPT2Config {
 
 pub struct GPT2Model {
     config: GPT2Config,
+    dtype: Dtype,
     pub max_sequence_length: usize,
 }
 
@@ -47,13 +48,22 @@ impl LLMModel for GPT2Model {
     fn config(&self) -> &dyn LLMConfig {
         &self.config
     }
+
+    fn dtype(&self) -> Dtype {
+        self.dtype.clone()
+    }
 }
 
 impl GPT2Model {
-    pub fn new(config_json: &serde_json::Value, max_sequence_length: usize) -> crate::Result<Self> {
+    pub fn new(
+        config_json: &serde_json::Value,
+        max_sequence_length: usize,
+        dtype: Dtype,
+    ) -> crate::Result<Self> {
         let config: GPT2Config = serde_json::from_value(config_json.clone())?;
         Ok(Self {
             config,
+            dtype,
             max_sequence_length,
         })
     }
@@ -234,6 +244,6 @@ impl DynModule for GPT2Model {
 
     // This should return the *detailed* type of the model
     fn ty(&self) -> (Vec<Type>, Vec<Type>) {
-        llm_type(&self.config)
+        llm_type(&self.config, self.dtype())
     }
 }

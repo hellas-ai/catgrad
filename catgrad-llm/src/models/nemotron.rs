@@ -118,6 +118,7 @@ pub struct NemotronModel {
     layer_to_cache_id: Vec<Option<usize>>,
     layer_to_mamba_id: Vec<Option<usize>>,
     num_mamba_layers: usize,
+    dtype: Dtype,
     pub max_sequence_length: usize,
 }
 
@@ -126,10 +127,15 @@ impl LLMModel for NemotronModel {
         &self.config
     }
 
+    fn dtype(&self) -> Dtype {
+        self.dtype.clone()
+    }
+
     fn empty_state_type(&self) -> Vec<(Dtype, Shape)> {
+        let dtype = self.dtype();
         vec![
             (
-                Dtype::F32,
+                dtype.clone(),
                 Shape(vec![
                     self.config.num_kv_layers(),
                     1,
@@ -139,7 +145,7 @@ impl LLMModel for NemotronModel {
                 ]),
             ),
             (
-                Dtype::F32,
+                dtype.clone(),
                 Shape(vec![
                     self.config.num_kv_layers(),
                     1,
@@ -149,7 +155,7 @@ impl LLMModel for NemotronModel {
                 ]),
             ),
             (
-                Dtype::F32,
+                dtype.clone(),
                 Shape(vec![
                     self.num_mamba_layers,
                     1,
@@ -158,7 +164,7 @@ impl LLMModel for NemotronModel {
                 ]),
             ),
             (
-                Dtype::F32,
+                dtype,
                 Shape(vec![
                     self.num_mamba_layers,
                     1,
@@ -172,7 +178,11 @@ impl LLMModel for NemotronModel {
 }
 
 impl NemotronModel {
-    pub fn new(config_json: &serde_json::Value, max_sequence_length: usize) -> crate::Result<Self> {
+    pub fn new(
+        config_json: &serde_json::Value,
+        max_sequence_length: usize,
+        dtype: Dtype,
+    ) -> crate::Result<Self> {
         let config: NemotronConfig = serde_json::from_value(config_json.clone())?;
         let mut layer_kinds = Vec::with_capacity(config.num_hidden_layers);
         for ch in config.hybrid_override_pattern.chars() {
@@ -218,6 +228,7 @@ impl NemotronModel {
             layer_to_cache_id,
             layer_to_mamba_id,
             num_mamba_layers: next_mamba_id,
+            dtype,
             max_sequence_length,
         })
     }
@@ -915,7 +926,7 @@ impl DynModule for NemotronModel {
     fn ty(&self) -> (Vec<Type>, Vec<Type>) {
         use catgrad::typecheck::*;
 
-        let (mut source, mut target) = llm_type(&self.config);
+        let (mut source, mut target) = llm_type(&self.config, self.dtype());
         let max_positions = source
             .pop()
             .expect("nemotron_h missing max_positions nat input");
@@ -928,7 +939,7 @@ impl DynModule for NemotronModel {
         let ssm_state_size = NatExpr::Constant(self.config.ssm_state_size);
 
         let t_conv = Type::Tensor(TypeExpr::NdArrayType(NdArrayType {
-            dtype: DtypeExpr::Constant(Dtype::F32),
+            dtype: DtypeExpr::Constant(self.dtype()),
             shape: ShapeExpr::Shape(vec![
                 num_mamba_layers.clone(),
                 batch_size.clone(),
@@ -937,7 +948,7 @@ impl DynModule for NemotronModel {
             ]),
         }));
         let t_ssm = Type::Tensor(TypeExpr::NdArrayType(NdArrayType {
-            dtype: DtypeExpr::Constant(Dtype::F32),
+            dtype: DtypeExpr::Constant(self.dtype()),
             shape: ShapeExpr::Shape(vec![
                 num_mamba_layers,
                 batch_size,

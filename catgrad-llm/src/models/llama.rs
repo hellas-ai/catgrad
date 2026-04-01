@@ -72,12 +72,17 @@ pub struct LlamaModel {
     pub root: String,
     model_root: String,
     config: LlamaConfig,
+    dtype: Dtype,
     pub max_sequence_length: usize,
 }
 
 impl LLMModel for LlamaModel {
     fn config(&self) -> &dyn LLMConfig {
         &self.config
+    }
+
+    fn dtype(&self) -> Dtype {
+        self.dtype.clone()
     }
 }
 
@@ -86,11 +91,13 @@ impl LlamaModel {
         config: LlamaConfig,
         max_sequence_length: usize,
         model_root: &str,
+        dtype: Dtype,
     ) -> Self {
         Self {
             root: String::new(),
             model_root: model_root.to_string(),
             config,
+            dtype,
             max_sequence_length,
         }
     }
@@ -99,12 +106,14 @@ impl LlamaModel {
         root: &str,
         config_json: &serde_json::Value,
         max_sequence_length: usize,
+        dtype: Dtype,
     ) -> crate::Result<Self> {
         let config: LlamaConfig = serde_json::from_value(config_json.clone())?;
         Ok(Self {
             root: root.to_string(),
             model_root: "model".to_string(),
             config,
+            dtype,
             max_sequence_length,
         })
     }
@@ -361,6 +370,6 @@ impl DynModule for LlamaModel {
 
     // This should return the *detailed* type of the model
     fn ty(&self) -> (Vec<Type>, Vec<Type>) {
-        llm_type(&self.config)
+        llm_type(&self.config, self.dtype())
     }
 }

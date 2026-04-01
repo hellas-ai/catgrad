@@ -76,6 +76,7 @@ pub struct Lfm2Model {
     layer_to_cache_id: Vec<Option<usize>>,
     layer_to_linear_id: Vec<Option<usize>>,
     num_linear_layers: usize,
+    dtype: Dtype,
     pub max_sequence_length: usize,
 }
 
@@ -84,10 +85,15 @@ impl LLMModel for Lfm2Model {
         &self.config
     }
 
+    fn dtype(&self) -> Dtype {
+        self.dtype.clone()
+    }
+
     fn empty_state_type(&self) -> Vec<(Dtype, Shape)> {
+        let dtype = self.dtype();
         vec![
             (
-                Dtype::F32,
+                dtype.clone(),
                 Shape(vec![
                     self.config.num_hidden_layers,
                     1,
@@ -97,7 +103,7 @@ impl LLMModel for Lfm2Model {
                 ]),
             ),
             (
-                Dtype::F32,
+                dtype.clone(),
                 Shape(vec![
                     self.config.num_hidden_layers,
                     1,
@@ -107,7 +113,7 @@ impl LLMModel for Lfm2Model {
                 ]),
             ),
             (
-                Dtype::F32,
+                dtype,
                 Shape(vec![
                     self.num_linear_layers,
                     1,
@@ -120,7 +126,11 @@ impl LLMModel for Lfm2Model {
 }
 
 impl Lfm2Model {
-    pub fn new(config_json: &serde_json::Value, max_sequence_length: usize) -> crate::Result<Self> {
+    pub fn new(
+        config_json: &serde_json::Value,
+        max_sequence_length: usize,
+        dtype: Dtype,
+    ) -> crate::Result<Self> {
         let config: Lfm2Config = serde_json::from_value(config_json.clone())?;
         assert!(config.conv_l_cache > 0, "lfm2 conv_l_cache must be > 0");
         let mut layer_to_cache_id = Vec::with_capacity(config.num_hidden_layers);
@@ -144,6 +154,7 @@ impl Lfm2Model {
             layer_to_cache_id,
             layer_to_linear_id,
             num_linear_layers: next_linear_id,
+            dtype,
             max_sequence_length,
         })
     }
@@ -539,14 +550,14 @@ impl DynModule for Lfm2Model {
     fn ty(&self) -> (Vec<Type>, Vec<Type>) {
         use catgrad::typecheck::*;
 
-        let (mut source, mut target) = llm_type(&self.config);
+        let (mut source, mut target) = llm_type(&self.config, self.dtype());
         let max_positions = source.pop().expect("lfm2 missing max_positions nat input");
         let batch_size = NatExpr::Var(0);
         let num_linear_layers = NatExpr::Constant(self.num_linear_layers);
         let hidden_size = NatExpr::Constant(self.config.hidden_size);
         let conv_l_cache = NatExpr::Constant(self.config.conv_l_cache);
         let t_conv = Type::Tensor(TypeExpr::NdArrayType(NdArrayType {
-            dtype: DtypeExpr::Constant(Dtype::F32),
+            dtype: DtypeExpr::Constant(self.dtype()),
             shape: ShapeExpr::Shape(vec![
                 num_linear_layers,
                 batch_size,

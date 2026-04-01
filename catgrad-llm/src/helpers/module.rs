@@ -2,7 +2,7 @@ use crate::config::LLMConfig;
 use catgrad::prelude::*;
 
 /// Type signature for LLM Modules
-pub fn llm_type(config: &dyn LLMConfig) -> (Vec<Type>, Vec<Type>) {
+pub fn llm_type(config: &dyn LLMConfig, dtype: Dtype) -> (Vec<Type>, Vec<Type>) {
     use catgrad::typecheck::*;
     let batch_size = NatExpr::Var(0);
     let seq_len = NatExpr::Var(1);
@@ -27,7 +27,7 @@ pub fn llm_type(config: &dyn LLMConfig) -> (Vec<Type>, Vec<Type>) {
     let v_head_dim = NatExpr::Constant(config.get_v_head_dim());
 
     let t_k = Type::Tensor(TypeExpr::NdArrayType(NdArrayType {
-        dtype: DtypeExpr::Constant(Dtype::F32),
+        dtype: DtypeExpr::Constant(dtype.clone()),
         shape: ShapeExpr::Shape(vec![
             num_layers.clone(),
             batch_size.clone(),
@@ -38,7 +38,7 @@ pub fn llm_type(config: &dyn LLMConfig) -> (Vec<Type>, Vec<Type>) {
     }));
 
     let t_v = Type::Tensor(TypeExpr::NdArrayType(NdArrayType {
-        dtype: DtypeExpr::Constant(Dtype::F32),
+        dtype: DtypeExpr::Constant(dtype.clone()),
         shape: ShapeExpr::Shape(vec![
             num_layers.clone(),
             batch_size.clone(),
@@ -50,7 +50,7 @@ pub fn llm_type(config: &dyn LLMConfig) -> (Vec<Type>, Vec<Type>) {
 
     let out_cache_len = NatExpr::Add(vec![cache_len, seq_len]);
     let t_k_out = Type::Tensor(TypeExpr::NdArrayType(NdArrayType {
-        dtype: DtypeExpr::Constant(Dtype::F32),
+        dtype: DtypeExpr::Constant(dtype.clone()),
         shape: ShapeExpr::Shape(vec![
             num_layers.clone(),
             batch_size.clone(),
@@ -61,7 +61,7 @@ pub fn llm_type(config: &dyn LLMConfig) -> (Vec<Type>, Vec<Type>) {
     }));
 
     let t_v_out = Type::Tensor(TypeExpr::NdArrayType(NdArrayType {
-        dtype: DtypeExpr::Constant(Dtype::F32),
+        dtype: DtypeExpr::Constant(dtype),
         shape: ShapeExpr::Shape(vec![
             num_layers,
             batch_size,
@@ -95,6 +95,8 @@ pub struct MultimodalMetadata {
 pub trait LLMModel: DynModule {
     fn config(&self) -> &dyn LLMConfig;
 
+    fn dtype(&self) -> Dtype;
+
     fn extra_nat_input(&self, _seq_len: usize) -> Option<usize> {
         None
     }
@@ -102,6 +104,7 @@ pub trait LLMModel: DynModule {
     // Return empty KV-cache shape by default
     fn empty_state_type(&self) -> Vec<(Dtype, Shape)> {
         let config = self.config();
+        let dtype = self.dtype();
         let k_shape = Shape(vec![
             config.num_kv_layers(),
             1,
@@ -116,7 +119,7 @@ pub trait LLMModel: DynModule {
             0,
             config.get_v_head_dim(),
         ]);
-        vec![(Dtype::F32, k_shape), (Dtype::F32, v_shape)]
+        vec![(dtype.clone(), k_shape), (dtype, v_shape)]
     }
 
     fn weight_post_process(&self) -> WeightPostProcess {

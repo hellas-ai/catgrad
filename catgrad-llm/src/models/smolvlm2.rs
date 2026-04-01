@@ -44,6 +44,10 @@ impl LLMModel for SmolVLM2Model {
         self.language_model.config()
     }
 
+    fn dtype(&self) -> Dtype {
+        self.language_model.dtype()
+    }
+
     fn multimodal_metadata(&self) -> Option<MultimodalMetadata> {
         Some(MultimodalMetadata {
             image_token_index: self.multimodal.image_token_index,
@@ -276,7 +280,11 @@ impl DynModule for SmolVLM2MultimodalModel {
 }
 
 impl SmolVLM2Model {
-    pub fn new(config_json: &serde_json::Value, max_sequence_length: usize) -> crate::Result<Self> {
+    pub fn new(
+        config_json: &serde_json::Value,
+        max_sequence_length: usize,
+        dtype: Dtype,
+    ) -> crate::Result<Self> {
         let config: SmolVLM2Config = serde_json::from_value(config_json.clone())?;
         let text_config = config.text_config;
         let text_hidden_size = text_config.hidden_size();
@@ -289,6 +297,7 @@ impl SmolVLM2Model {
                 text_config,
                 max_sequence_length,
                 "model.text_model",
+                dtype,
             ),
             multimodal: SmolVLM2MultimodalConfig {
                 vision_config,
@@ -313,6 +322,6 @@ impl DynModule for SmolVLM2Model {
     }
 
     fn ty(&self) -> (Vec<Type>, Vec<Type>) {
-        llm_type(self.config())
+        llm_type(self.config(), self.dtype())
     }
 }

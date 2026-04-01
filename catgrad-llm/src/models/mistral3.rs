@@ -58,12 +58,17 @@ impl LLMConfig for Mistral3TextConfig {
 pub struct Mistral3Model {
     pub root: String,
     config: Mistral3TextConfig,
+    dtype: Dtype,
     pub max_sequence_length: usize,
 }
 
 impl LLMModel for Mistral3Model {
     fn config(&self) -> &dyn LLMConfig {
         &self.config
+    }
+
+    fn dtype(&self) -> Dtype {
+        self.dtype.clone()
     }
 }
 
@@ -72,11 +77,13 @@ impl Mistral3Model {
         root: &str,
         config_json: &serde_json::Value,
         max_sequence_length: usize,
+        dtype: Dtype,
     ) -> crate::Result<Self> {
         let config: Mistral3Config = serde_json::from_value(config_json.clone())?;
         Ok(Self {
             root: root.to_string(),
             config: config.text_config,
+            dtype,
             max_sequence_length,
         })
     }
@@ -326,6 +333,6 @@ impl DynModule for Mistral3Model {
     }
 
     fn ty(&self) -> (Vec<Type>, Vec<Type>) {
-        llm_type(&self.config)
+        llm_type(&self.config, self.dtype())
     }
 }
