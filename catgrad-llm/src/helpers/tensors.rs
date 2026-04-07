@@ -143,12 +143,29 @@ pub fn repeat_kv(builder: &Builder, rep: usize, x: Var) -> Var {
 
 /// Average pooling over a square 2D grid.
 pub fn avgpool2d(builder: &Builder, dim: usize, side: usize, k: usize, x: Var) -> Var {
-    let windows = side / k;
-    let x = reshape(builder, shape!(builder, 1, dim, windows, k, windows, k), x);
+    avgpool2d_rect(builder, dim, side, side, k, x)
+}
+
+/// Average pooling over a rectangular 2D grid.
+pub fn avgpool2d_rect(
+    builder: &Builder,
+    dim: usize,
+    height: usize,
+    width: usize,
+    k: usize,
+    x: Var,
+) -> Var {
+    let windows_h = height / k;
+    let windows_w = width / k;
+    let x = reshape(
+        builder,
+        shape!(builder, 1, dim, windows_h, k, windows_w, k),
+        x,
+    );
     let x = transpose(builder, 3, 4, x);
     let x = reshape(
         builder,
-        shape!(builder, 1, dim, windows * windows, k * k),
+        shape!(builder, 1, dim, windows_h * windows_w, k * k),
         x,
     );
 
