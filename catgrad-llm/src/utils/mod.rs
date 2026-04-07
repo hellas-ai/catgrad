@@ -249,6 +249,11 @@ pub fn get_model(
         "Gemma3ForConditionalGeneration" | "PaliGemmaForConditionalGeneration" => Box::new(
             models::gemma3::Gemma3Model::new("language_model.model", config_json, dtype)?,
         ),
+        "Gemma4ForConditionalGeneration" => Box::new(models::gemma4::Gemma4Model::new(
+            "model.language_model",
+            config_json,
+            dtype,
+        )?),
         "Mistral3ForConditionalGeneration" => Box::new(models::mistral3::Mistral3Model::new(
             "language_model",
             config_json,
