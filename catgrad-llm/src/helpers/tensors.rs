@@ -179,14 +179,17 @@ pub fn clamp(builder: &Builder, x: Var, min_val: f32, max_val: f32) -> Var {
     let sh = shape(builder, x.clone());
     let min_t = constant(builder, min_val, &sh);
     let max_t = constant(builder, max_val, &sh);
-    let one = constant(builder, 1.0, &sh);
+    clamp_with_tensors(builder, x, min_t, max_t)
+}
 
-    let mask_min = lt(builder, x.clone(), min_t.clone());
-    let mask_min = cast(builder, mask_min, Dtype::F32);
-    let x = mask_min.clone() * min_t + (one.clone() - mask_min) * x;
-
-    let mask_max = lt(builder, max_t.clone(), x.clone());
-    mask_max.clone() * max_t + (one - mask_max) * x
+pub fn clamp_with_tensors(builder: &Builder, x: Var, min_val: Var, max_val: Var) -> Var {
+    let x_dtype = dtype(builder, x.clone());
+    let below = lt(builder, x.clone(), min_val.clone());
+    let below = cast(builder, below, x_dtype.clone());
+    let x = where_cond(builder, below, min_val, x);
+    let above = lt(builder, max_val.clone(), x.clone());
+    let above = cast(builder, above, x_dtype);
+    where_cond(builder, above, max_val, x)
 }
 
 pub fn causal_mask(builder: &Builder, seq_len: Var, pos: Var) -> Var {

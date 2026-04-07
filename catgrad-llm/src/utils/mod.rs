@@ -170,6 +170,7 @@ pub struct PreparedImageInput {
 #[derive(Debug, Clone)]
 pub enum ModelRuntimeContext {
     Qwen3_5Vision(models::qwen3_5::Qwen3_5RuntimeVisionConfig),
+    Gemma4Vision(models::gemma4::Gemma4RuntimeVisionConfig),
 }
 
 #[derive(Debug, Clone, Default)]
@@ -203,6 +204,16 @@ pub fn prepare_multimodal_input(
                     shape: prepared.shape,
                 }),
                 runtime_context: Some(ModelRuntimeContext::Qwen3_5Vision(prepared.runtime_vision)),
+            })
+        }
+        "Gemma4ForConditionalGeneration" => {
+            let prepared = models::gemma4::prepare_gemma4_image_input(image_path, config_json)?;
+            Ok(PreparedMultimodalInput {
+                image: Some(PreparedImageInput {
+                    data: prepared.patches,
+                    shape: prepared.shape,
+                }),
+                runtime_context: Some(ModelRuntimeContext::Gemma4Vision(prepared.runtime_vision)),
             })
         }
         _ => Ok(PreparedMultimodalInput::default()),
@@ -260,6 +271,10 @@ pub fn get_model(
         "Gemma4ForConditionalGeneration" => Box::new(models::gemma4::Gemma4Model::new(
             "model.language_model",
             config_json,
+            match runtime_context {
+                Some(ModelRuntimeContext::Gemma4Vision(runtime_vision)) => Some(runtime_vision),
+                _ => None,
+            },
             dtype,
         )?),
         "Mistral3ForConditionalGeneration" => Box::new(models::mistral3::Mistral3Model::new(

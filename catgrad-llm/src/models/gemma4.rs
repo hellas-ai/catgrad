@@ -1,14 +1,19 @@
 #![allow(clippy::too_many_arguments)]
 use crate::config::{EosTokenId, LLMConfig};
 use crate::helpers::*;
+use crate::utils::load_and_patchify_image;
 use catgrad::prelude::ops::*;
 use catgrad::prelude::*;
 use nn::*;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
+use std::path::Path as FsPath;
 
 #[derive(Debug, Clone, Deserialize)]
 struct Gemma4Config {
     text_config: Gemma4TextConfig,
+    vision_config: Option<Gemma4VisionConfig>,
+    image_token_id: Option<usize>,
+    vision_soft_tokens_per_image: Option<usize>,
     eos_token_id: Option<EosTokenId>,
 }
 
@@ -46,7 +51,43 @@ pub struct Gemma4TextConfig {
     use_double_wide_mlp: bool,
     tie_word_embeddings: bool,
     rope_parameters: Gemma4RopeParameters,
+    pad_token_id: usize,
     eos_token_id: Option<EosTokenId>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct Gemma4VisionRopeParameters {
+    rope_theta: f32,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct Gemma4VisionConfig {
+    hidden_size: usize,
+    intermediate_size: usize,
+    num_hidden_layers: usize,
+    num_attention_heads: usize,
+    num_key_value_heads: usize,
+    head_dim: usize,
+    patch_size: usize,
+    pooling_kernel_size: usize,
+    position_embedding_size: usize,
+    rms_norm_eps: f32,
+    use_clipped_linears: bool,
+    rope_parameters: Gemma4VisionRopeParameters,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+pub struct Gemma4RuntimeVisionConfig {
+    pub patch_grid_height: usize,
+    pub patch_grid_width: usize,
+    pub num_soft_tokens_per_image: usize,
+}
+
+#[derive(Debug, Clone)]
+pub struct Gemma4PreparedImageInput {
+    pub patches: Vec<f32>,
+    pub shape: Vec<usize>,
+    pub runtime_vision: Gemma4RuntimeVisionConfig,
 }
 
 impl Gemma4TextConfig {
@@ -138,6 +179,43 @@ impl LLMConfig for Gemma4TextConfig {
     }
 }
 
+pub fn prepare_gemma4_image_input(
+    image_path: &FsPath,
+    config_json: &serde_json::Value,
+) -> crate::Result<Gemma4PreparedImageInput> {
+    let config: Gemma4Config = serde_json::from_value(config_json.clone())?;
+    let vision_config = config.vision_config.ok_or_else(|| {
+        crate::LLMError::InvalidModelConfig("gemma4 missing vision_config".to_string())
+    })?;
+    let max_soft_tokens = config.vision_soft_tokens_per_image.ok_or_else(|| {
+        crate::LLMError::InvalidModelConfig(
+            "gemma4 missing vision_soft_tokens_per_image".to_string(),
+        )
+    })?;
+    let patched = load_and_patchify_image(
+        image_path,
+        vision_config.patch_size,
+        max_soft_tokens,
+        vision_config.pooling_kernel_size,
+    )?;
+    let num_patches = patched.patch_grid_height * patched.patch_grid_width;
+    let pooling_area = vision_config.pooling_kernel_size * vision_config.pooling_kernel_size;
+    if !num_patches.is_multiple_of(pooling_area) {
+        return Err(crate::LLMError::InvalidModelConfig(format!(
+            "gemma4 image patch count {num_patches} was not divisible by pooling area {pooling_area}"
+        )));
+    }
+    Ok(Gemma4PreparedImageInput {
+        patches: patched.data,
+        shape: patched.shape,
+        runtime_vision: Gemma4RuntimeVisionConfig {
+            patch_grid_height: patched.patch_grid_height,
+            patch_grid_width: patched.patch_grid_width,
+            num_soft_tokens_per_image: num_patches / pooling_area,
+        },
+    })
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Gemma4AttentionKind {
     Sliding,
@@ -156,6 +234,14 @@ struct Gemma4LayerPlan {
     cache: Gemma4CacheSource,
 }
 
+#[derive(Debug, Clone)]
+struct Gemma4MultimodalConfig {
+    vision_config: Gemma4VisionConfig,
+    image_token_index: usize,
+    runtime_vision: Gemma4RuntimeVisionConfig,
+}
+
+#[derive(Debug, Clone)]
 pub struct Gemma4Model {
     root: String,
     config: Gemma4TextConfig,
@@ -163,6 +249,7 @@ pub struct Gemma4Model {
     layer_plans: Vec<Gemma4LayerPlan>,
     sliding_cache_layers: usize,
     full_cache_layers: usize,
+    multimodal: Option<Gemma4MultimodalConfig>,
 }
 
 impl LLMModel for Gemma4Model {
@@ -219,18 +306,81 @@ impl LLMModel for Gemma4Model {
             ),
         ]
     }
+
+    fn multimodal_metadata(&self) -> Option<MultimodalMetadata> {
+        let mm = self.multimodal.as_ref()?;
+        Some(MultimodalMetadata {
+            image_token_index: mm.image_token_index,
+            mm_tokens_per_image: mm.runtime_vision.num_soft_tokens_per_image,
+            hidden_size: self.config.hidden_size,
+            image_size: mm
+                .runtime_vision
+                .patch_grid_height
+                .max(mm.runtime_vision.patch_grid_width)
+                * mm.vision_config.patch_size,
+            patch_size: mm.vision_config.patch_size,
+        })
+    }
+
+    fn multimodal_vision_module(&self) -> Option<Box<dyn DynModule>> {
+        let mm = self.multimodal.as_ref()?;
+        Some(Box::new(Gemma4VisionEmbeddings {
+            vision_config: mm.vision_config.clone(),
+            runtime_vision: mm.runtime_vision.clone(),
+            text_hidden_size: self.config.hidden_size,
+        }))
+    }
+
+    fn multimodal_language_module(&self) -> Option<Box<dyn DynModule>> {
+        self.multimodal.as_ref()?;
+        Some(Box::new(Gemma4MultimodalModel {
+            language_model: self.clone(),
+        }))
+    }
+
+    fn multimodal_interpolate_prompt(&self, prompt: &str) -> Option<String> {
+        let mm = self.multimodal.as_ref()?;
+        Some(prompt.replace(
+            "<|image|>",
+            &format!(
+                "{}{}{}",
+                "<|image>",
+                "<|image|>".repeat(mm.runtime_vision.num_soft_tokens_per_image),
+                "<image|>"
+            ),
+        ))
+    }
 }
 
 impl Gemma4Model {
-    pub fn new(root: &str, config_json: &serde_json::Value, dtype: Dtype) -> crate::Result<Self> {
+    pub fn new(
+        root: &str,
+        config_json: &serde_json::Value,
+        runtime_vision: Option<&Gemma4RuntimeVisionConfig>,
+        dtype: Dtype,
+    ) -> crate::Result<Self> {
         let Gemma4Config {
             mut text_config,
+            vision_config,
+            image_token_id,
             eos_token_id,
+            ..
         }: Gemma4Config = serde_json::from_value(config_json.clone())?;
 
         if let Some(eos_token_id) = eos_token_id {
             text_config.eos_token_id = Some(eos_token_id);
         }
+
+        let multimodal = match (vision_config, image_token_id, runtime_vision) {
+            (Some(vision_config), Some(image_token_index), Some(runtime_vision)) => {
+                Some(Gemma4MultimodalConfig {
+                    vision_config,
+                    image_token_index,
+                    runtime_vision: runtime_vision.clone(),
+                })
+            }
+            _ => None,
+        };
 
         let first_shared_layer = text_config.num_hidden_layers - text_config.num_kv_shared_layers;
         let mut layer_plans = Vec::with_capacity(text_config.num_hidden_layers);
@@ -290,6 +440,7 @@ impl Gemma4Model {
             layer_plans,
             sliding_cache_layers,
             full_cache_layers,
+            multimodal,
         })
     }
 
@@ -299,13 +450,7 @@ impl Gemma4Model {
         x * scale
     }
 
-    fn per_layer_inputs(
-        &self,
-        builder: &Builder,
-        p: Path,
-        input_ids: Var,
-        inputs_embeds: Var,
-    ) -> Option<Var> {
+    fn get_per_layer_inputs(&self, builder: &Builder, p: Path, input_ids: Var) -> Option<Var> {
         if self.config.hidden_size_per_layer_input == 0 {
             return None;
         }
@@ -328,7 +473,21 @@ impl Gemma4Model {
             ),
             pli,
         );
+        Some(pli)
+    }
 
+    fn project_per_layer_inputs(
+        &self,
+        builder: &Builder,
+        p: Path,
+        inputs_embeds: Var,
+        per_layer_inputs: Option<Var>,
+    ) -> Option<Var> {
+        if self.config.hidden_size_per_layer_input == 0 {
+            return None;
+        }
+
+        let [b, s, _] = unpack::<3>(builder, shape(builder, inputs_embeds.clone()));
         let projection = linear_no_bias(
             builder,
             self.config.hidden_size,
@@ -360,12 +519,16 @@ impl Gemma4Model {
             projection,
         );
 
+        if per_layer_inputs.is_none() {
+            return Some(projection);
+        }
+
         let scale = constant(
             builder,
             2.0f32.powf(-0.5),
             &shape(builder, projection.clone()),
         );
-        Some((projection + pli) * scale)
+        Some((projection + per_layer_inputs.unwrap()) * scale)
     }
 
     fn mlp(&self, builder: &Builder, layer_id: usize, p: Path, x: Var) -> Var {
@@ -612,31 +775,23 @@ impl Gemma4Model {
         x * layer_scalar
     }
 
-    pub fn forward(
+    fn forward_embeddings(
         &self,
         builder: &Builder,
         p: Path,
         language_root: Path,
-        x: Var,
+        full_attention_mask: Var,
+        inputs_embeds: Var,
+        per_layer_inputs: Option<Var>,
         in_sliding_k: Var,
         in_sliding_v: Var,
         in_full_k: Var,
         in_full_v: Var,
         max_positions: Var,
     ) -> Vec<Var> {
-        let inputs_embeds = self.scaled_embeddings(
-            builder,
-            language_root.extend(["embed_tokens"]).unwrap(),
-            x.clone(),
-            (self.config.hidden_size as f32).sqrt(),
-        );
-        let per_layer_inputs =
-            self.per_layer_inputs(builder, language_root.clone(), x, inputs_embeds.clone());
-
         let [_, s, _] = unpack::<3>(builder, shape(builder, inputs_embeds.clone()));
         let [_, _, _, pos, _] = unpack::<5>(builder, shape(builder, in_sliding_k.clone()));
 
-        let full_attention_mask = causal_mask(builder, s.clone(), pos.clone());
         let sliding_attention_mask =
             sliding_window_mask(builder, s.clone(), pos.clone(), self.config.sliding_window);
 
@@ -663,6 +818,12 @@ impl Gemma4Model {
         );
         let mut full_cache = KVCache::init(builder, self.full_cache_layers, in_full_k, in_full_v);
 
+        let per_layer_inputs = self.project_per_layer_inputs(
+            builder,
+            language_root.clone(),
+            inputs_embeds.clone(),
+            per_layer_inputs,
+        );
         let mut x = inputs_embeds;
         for layer_id in 0..self.config.num_hidden_layers {
             let is_sliding = self.config.is_sliding_attention_layer(layer_id);
@@ -728,6 +889,637 @@ impl Gemma4Model {
         let (out_sliding_k, out_sliding_v) = sliding_cache.output(builder, s.clone());
         let (out_full_k, out_full_v) = full_cache.output(builder, s);
         vec![x, out_sliding_k, out_sliding_v, out_full_k, out_full_v]
+    }
+
+    pub fn forward(
+        &self,
+        builder: &Builder,
+        p: Path,
+        language_root: Path,
+        x: Var,
+        in_sliding_k: Var,
+        in_sliding_v: Var,
+        in_full_k: Var,
+        in_full_v: Var,
+        max_positions: Var,
+    ) -> Vec<Var> {
+        let inputs_embeds = self.scaled_embeddings(
+            builder,
+            language_root.extend(["embed_tokens"]).unwrap(),
+            x.clone(),
+            (self.config.hidden_size as f32).sqrt(),
+        );
+        let per_layer_inputs = self.get_per_layer_inputs(builder, language_root.clone(), x);
+        let [_, s, _] = unpack::<3>(builder, shape(builder, inputs_embeds.clone()));
+        let [_, _, _, pos, _] = unpack::<5>(builder, shape(builder, in_sliding_k.clone()));
+        let full_attention_mask = causal_mask(builder, s, pos);
+
+        self.forward_embeddings(
+            builder,
+            p,
+            language_root,
+            full_attention_mask,
+            inputs_embeds,
+            per_layer_inputs,
+            in_sliding_k,
+            in_sliding_v,
+            in_full_k,
+            in_full_v,
+            max_positions,
+        )
+    }
+}
+
+fn clippable_linear_no_bias(
+    builder: &Builder,
+    use_clipped_linears: bool,
+    in_features: usize,
+    out_features: usize,
+    p: Path,
+    x: Var,
+) -> Var {
+    let x = if use_clipped_linears {
+        let sh = shape(builder, x.clone());
+        let input_min = broadcast(
+            builder,
+            sh.clone(),
+            param(builder, &p.extend(["input_min"]).unwrap()),
+        );
+        let input_max = broadcast(
+            builder,
+            sh,
+            param(builder, &p.extend(["input_max"]).unwrap()),
+        );
+        clamp_with_tensors(builder, x, input_min, input_max)
+    } else {
+        x
+    };
+    let x = linear_no_bias(
+        builder,
+        in_features,
+        out_features,
+        p.extend(["linear"]).unwrap(),
+        x,
+    );
+    if use_clipped_linears {
+        let sh = shape(builder, x.clone());
+        let output_min = broadcast(
+            builder,
+            sh.clone(),
+            param(builder, &p.extend(["output_min"]).unwrap()),
+        );
+        let output_max = broadcast(
+            builder,
+            sh,
+            param(builder, &p.extend(["output_max"]).unwrap()),
+        );
+        clamp_with_tensors(builder, x, output_min, output_max)
+    } else {
+        x
+    }
+}
+
+fn gemma4_vision_positions(
+    builder: &Builder,
+    patch_grid_height: usize,
+    patch_grid_width: usize,
+) -> (Var, Var) {
+    let tokens = patch_grid_height * patch_grid_width;
+    let idx = cast(builder, arange(builder, tokens), Dtype::F32);
+    let sh = shape(builder, idx.clone());
+    let width = constant(builder, patch_grid_width as f32, &sh);
+    let row = floor(builder, idx.clone() / width.clone());
+    let col = idx - row.clone() * width;
+    (
+        cast(builder, col, Dtype::U32),
+        cast(builder, row, Dtype::U32),
+    )
+}
+
+fn gemma4_apply_2d_rope(
+    builder: &Builder,
+    col_positions: Var,
+    row_positions: Var,
+    head_dim: usize,
+    cos_x: Var,
+    sin_x: Var,
+    cos_y: Var,
+    sin_y: Var,
+    x: Var,
+) -> Var {
+    let [x_part, y_part] = chunk(builder, 3, 2, head_dim / 2, x).try_into().unwrap();
+    let x_part =
+        apply_rope_embedding_positions(builder, col_positions, head_dim / 2, cos_x, sin_x, x_part);
+    let y_part =
+        apply_rope_embedding_positions(builder, row_positions, head_dim / 2, cos_y, sin_y, y_part);
+    concat(builder, 3, x_part, y_part)
+}
+
+pub struct Gemma4VisionEmbeddings {
+    vision_config: Gemma4VisionConfig,
+    runtime_vision: Gemma4RuntimeVisionConfig,
+    text_hidden_size: usize,
+}
+
+impl Gemma4VisionEmbeddings {
+    fn patch_embedder(&self, builder: &Builder, pixels: Var) -> Var {
+        debug_assert!(
+            self.runtime_vision.patch_grid_height <= self.vision_config.position_embedding_size
+        );
+        debug_assert!(
+            self.runtime_vision.patch_grid_width <= self.vision_config.position_embedding_size
+        );
+        let [b, s, _] = unpack::<3>(builder, shape(builder, pixels.clone()));
+        let pixels = pixels.clone() * constant(builder, 2.0f32, &shape(builder, pixels.clone()))
+            - constant(builder, 1.0f32, &shape(builder, pixels));
+        let hidden_states = linear_no_bias(
+            builder,
+            3 * self.vision_config.patch_size * self.vision_config.patch_size,
+            self.vision_config.hidden_size,
+            path(vec![
+                "model",
+                "vision_tower",
+                "patch_embedder",
+                "input_proj",
+            ])
+            .unwrap(),
+            pixels,
+        );
+
+        let (col_positions, row_positions) = gemma4_vision_positions(
+            builder,
+            self.runtime_vision.patch_grid_height,
+            self.runtime_vision.patch_grid_width,
+        );
+        let position_embedding_table = param(
+            builder,
+            &path(vec![
+                "model",
+                "vision_tower",
+                "patch_embedder",
+                "position_embedding_table",
+            ])
+            .unwrap(),
+        );
+        let x_table = squeeze::<3, 2>(
+            builder,
+            0,
+            slice(builder, 0, 0, 1, position_embedding_table.clone()),
+        );
+        let y_table = squeeze::<3, 2>(
+            builder,
+            0,
+            slice(builder, 0, 1, 1, position_embedding_table),
+        );
+        let x_pos = index(builder, 0, col_positions, x_table);
+        let y_pos = index(builder, 0, row_positions, y_table);
+        let pos = reshape(
+            builder,
+            shape!(builder, 1, s, self.vision_config.hidden_size),
+            x_pos + y_pos,
+        );
+        hidden_states
+            + broadcast(
+                builder,
+                shape!(builder, b, s, self.vision_config.hidden_size),
+                pos,
+            )
+    }
+
+    fn attention(
+        &self,
+        builder: &Builder,
+        attention_mask: Var,
+        col_positions: Var,
+        row_positions: Var,
+        cos_x: Var,
+        sin_x: Var,
+        cos_y: Var,
+        sin_y: Var,
+        p: Path,
+        x: Var,
+    ) -> Var {
+        let num_heads = self.vision_config.num_attention_heads;
+        let num_kv_heads = self.vision_config.num_key_value_heads;
+        let head_dim = self.vision_config.head_dim;
+        let rep = num_heads / num_kv_heads;
+        let [b, s, _] = unpack::<3>(builder, shape(builder, x.clone()));
+
+        let q = clippable_linear_no_bias(
+            builder,
+            self.vision_config.use_clipped_linears,
+            self.vision_config.hidden_size,
+            num_heads * head_dim,
+            p.extend(["q_proj"]).unwrap(),
+            x.clone(),
+        );
+        let k = clippable_linear_no_bias(
+            builder,
+            self.vision_config.use_clipped_linears,
+            self.vision_config.hidden_size,
+            num_kv_heads * head_dim,
+            p.extend(["k_proj"]).unwrap(),
+            x.clone(),
+        );
+        let v = clippable_linear_no_bias(
+            builder,
+            self.vision_config.use_clipped_linears,
+            self.vision_config.hidden_size,
+            num_kv_heads * head_dim,
+            p.extend(["v_proj"]).unwrap(),
+            x,
+        );
+
+        let q = reshape(builder, shape!(builder, b, s, num_heads, head_dim), q);
+        let k = reshape(builder, shape!(builder, b, s, num_kv_heads, head_dim), k);
+        let v = reshape(builder, shape!(builder, b, s, num_kv_heads, head_dim), v);
+
+        let q = rmsnorm::<4>(
+            builder,
+            self.vision_config.rms_norm_eps,
+            p.extend(["q_norm"]).unwrap(),
+            q,
+        );
+        let k = rmsnorm::<4>(
+            builder,
+            self.vision_config.rms_norm_eps,
+            p.extend(["k_norm"]).unwrap(),
+            k,
+        );
+        let v = rmsnorm_raw::<4>(builder, self.vision_config.rms_norm_eps, v);
+
+        let q = gemma4_apply_2d_rope(
+            builder,
+            col_positions.clone(),
+            row_positions.clone(),
+            head_dim,
+            cos_x.clone(),
+            sin_x.clone(),
+            cos_y.clone(),
+            sin_y.clone(),
+            q,
+        );
+        let k = gemma4_apply_2d_rope(
+            builder,
+            col_positions,
+            row_positions,
+            head_dim,
+            cos_x,
+            sin_x,
+            cos_y,
+            sin_y,
+            k,
+        );
+
+        let q = transpose(builder, 1, 2, q);
+        let k = transpose(builder, 1, 2, k);
+        let v = transpose(builder, 1, 2, v);
+        let k = repeat_kv(builder, rep, k);
+        let v = repeat_kv(builder, rep, v);
+
+        let mut attn = matmul(builder, q, transpose(builder, 2, 3, k));
+        let sh = shape(builder, attn.clone());
+        attn = attn + broadcast(builder, sh, attention_mask);
+        let attn = softmax(builder, attn);
+        let attn = matmul(builder, attn, v);
+        let attn = transpose(builder, 1, 2, attn);
+        let attn = reshape(builder, shape!(builder, b, s, num_heads * head_dim), attn);
+
+        clippable_linear_no_bias(
+            builder,
+            self.vision_config.use_clipped_linears,
+            num_heads * head_dim,
+            self.vision_config.hidden_size,
+            p.extend(["o_proj"]).unwrap(),
+            attn,
+        )
+    }
+
+    fn layer(
+        &self,
+        builder: &Builder,
+        attention_mask: Var,
+        col_positions: Var,
+        row_positions: Var,
+        cos_x: Var,
+        sin_x: Var,
+        cos_y: Var,
+        sin_y: Var,
+        p: Path,
+        x: Var,
+    ) -> Var {
+        let residual = x.clone();
+        let x = rmsnorm::<3>(
+            builder,
+            self.vision_config.rms_norm_eps,
+            p.extend(["input_layernorm"]).unwrap(),
+            x,
+        );
+        let x = self.attention(
+            builder,
+            attention_mask,
+            col_positions,
+            row_positions,
+            cos_x,
+            sin_x,
+            cos_y,
+            sin_y,
+            p.extend(["self_attn"]).unwrap(),
+            x,
+        );
+        let x = rmsnorm::<3>(
+            builder,
+            self.vision_config.rms_norm_eps,
+            p.extend(["post_attention_layernorm"]).unwrap(),
+            x,
+        );
+        let x = residual + x;
+
+        let residual = x.clone();
+        let x = rmsnorm::<3>(
+            builder,
+            self.vision_config.rms_norm_eps,
+            p.extend(["pre_feedforward_layernorm"]).unwrap(),
+            x,
+        );
+        let gate = clippable_linear_no_bias(
+            builder,
+            self.vision_config.use_clipped_linears,
+            self.vision_config.hidden_size,
+            self.vision_config.intermediate_size,
+            p.extend(["mlp", "gate_proj"]).unwrap(),
+            x.clone(),
+        );
+        let up = clippable_linear_no_bias(
+            builder,
+            self.vision_config.use_clipped_linears,
+            self.vision_config.hidden_size,
+            self.vision_config.intermediate_size,
+            p.extend(["mlp", "up_proj"]).unwrap(),
+            x,
+        );
+        let x = gelu(builder, gate) * up;
+        let x = clippable_linear_no_bias(
+            builder,
+            self.vision_config.use_clipped_linears,
+            self.vision_config.intermediate_size,
+            self.vision_config.hidden_size,
+            p.extend(["mlp", "down_proj"]).unwrap(),
+            x,
+        );
+        let x = rmsnorm::<3>(
+            builder,
+            self.vision_config.rms_norm_eps,
+            p.extend(["post_feedforward_layernorm"]).unwrap(),
+            x,
+        );
+        residual + x
+    }
+
+    fn vision_model(&self, builder: &Builder, pixels: Var) -> Var {
+        let mut x = self.patch_embedder(builder, pixels);
+        let [_, s, _] = unpack::<3>(builder, shape(builder, x.clone()));
+        let attention_mask = constant(builder, 0.0f32, &shape!(builder, s.clone(), s));
+        let (col_positions, row_positions) = gemma4_vision_positions(
+            builder,
+            self.runtime_vision.patch_grid_height,
+            self.runtime_vision.patch_grid_width,
+        );
+        let (cos_x, sin_x) = rope_tables_default(
+            builder,
+            self.vision_config.rope_parameters.rope_theta,
+            self.runtime_vision.patch_grid_width,
+            self.vision_config.head_dim / 2,
+            1.0,
+        );
+        let (cos_y, sin_y) = rope_tables_default(
+            builder,
+            self.vision_config.rope_parameters.rope_theta,
+            self.runtime_vision.patch_grid_height,
+            self.vision_config.head_dim / 2,
+            1.0,
+        );
+
+        for layer_id in 0..self.vision_config.num_hidden_layers {
+            let layer_path = path(vec!["model", "vision_tower", "encoder", "layers"])
+                .unwrap()
+                .extend([&layer_id.to_string()])
+                .unwrap();
+            x = self.layer(
+                builder,
+                attention_mask.clone(),
+                col_positions.clone(),
+                row_positions.clone(),
+                cos_x.clone(),
+                sin_x.clone(),
+                cos_y.clone(),
+                sin_y.clone(),
+                layer_path,
+                x,
+            );
+        }
+
+        let x = transpose(builder, 1, 2, x);
+        let x = reshape(
+            builder,
+            shape!(
+                builder,
+                1,
+                self.vision_config.hidden_size,
+                self.runtime_vision.patch_grid_height,
+                self.runtime_vision.patch_grid_width
+            ),
+            x,
+        );
+        let x = avgpool2d_rect(
+            builder,
+            self.vision_config.hidden_size,
+            self.runtime_vision.patch_grid_height,
+            self.runtime_vision.patch_grid_width,
+            self.vision_config.pooling_kernel_size,
+            x,
+        );
+        let x = reshape(
+            builder,
+            shape!(
+                builder,
+                1,
+                self.vision_config.hidden_size,
+                self.runtime_vision.num_soft_tokens_per_image
+            ),
+            x,
+        );
+        let x = transpose(builder, 1, 2, x);
+        let scale = constant(
+            builder,
+            (self.vision_config.hidden_size as f32).sqrt(),
+            &shape(builder, x.clone()),
+        );
+        x * scale
+    }
+}
+
+impl DynModule for Gemma4VisionEmbeddings {
+    fn path(&self) -> Path {
+        path(vec!["Gemma4VisionEmbeddings"]).unwrap()
+    }
+
+    fn ty(&self) -> (Vec<Type>, Vec<Type>) {
+        use catgrad::typecheck::TypeExpr;
+        let t = Type::Tensor(TypeExpr::Var(0));
+        (vec![t.clone()], vec![t])
+    }
+
+    fn def(&self, builder: &Builder, args: Vec<Var>) -> Vec<Var> {
+        let [pixels]: [Var; 1] = args.try_into().expect("expected 1 input");
+        let x = self.vision_model(builder, pixels);
+        let x = rmsnorm_raw::<3>(builder, self.vision_config.rms_norm_eps, x);
+        let x = linear_no_bias(
+            builder,
+            self.vision_config.hidden_size,
+            self.text_hidden_size,
+            path(vec!["model", "embed_vision", "embedding_projection"]).unwrap(),
+            x,
+        );
+        vec![x]
+    }
+}
+
+pub struct Gemma4MultimodalModel {
+    language_model: Gemma4Model,
+}
+
+impl Gemma4MultimodalModel {
+    #[allow(clippy::too_many_arguments)]
+    fn forward_image_and_texts(
+        &self,
+        builder: &Builder,
+        text_before: Var,
+        image: Var,
+        text_after: Var,
+        in_sliding_k: Var,
+        in_sliding_v: Var,
+        in_full_k: Var,
+        in_full_v: Var,
+        max_positions: Var,
+    ) -> Vec<Var> {
+        let p = Path::empty();
+        let language_root = path(vec!["model", "language_model"]).unwrap();
+        let embed_tokens = language_root.extend(["embed_tokens"]).unwrap();
+        let scale = (self.language_model.config.hidden_size as f32).sqrt();
+
+        let text_before_embeds = self.language_model.scaled_embeddings(
+            builder,
+            embed_tokens.clone(),
+            text_before.clone(),
+            scale,
+        );
+        let text_after_embeds =
+            self.language_model
+                .scaled_embeddings(builder, embed_tokens, text_after.clone(), scale);
+        let inputs_embeds = concat(builder, 1, text_before_embeds, image.clone());
+        let inputs_embeds = concat(builder, 1, inputs_embeds, text_after_embeds);
+
+        let per_layer_inputs = if self.language_model.config.hidden_size_per_layer_input == 0 {
+            None
+        } else {
+            let [b, image_len, _] = unpack::<3>(builder, shape(builder, image));
+            let pad_ids = constant(
+                builder,
+                self.language_model.config.pad_token_id as u32,
+                &shape!(builder, b, image_len),
+            );
+            let text_before_pli = self.language_model.get_per_layer_inputs(
+                builder,
+                language_root.clone(),
+                text_before,
+            );
+            let image_pli =
+                self.language_model
+                    .get_per_layer_inputs(builder, language_root.clone(), pad_ids);
+            let text_after_pli = self.language_model.get_per_layer_inputs(
+                builder,
+                language_root.clone(),
+                text_after,
+            );
+            Some(concat(
+                builder,
+                1,
+                concat(
+                    builder,
+                    1,
+                    text_before_pli.expect("gemma4 text-before per-layer inputs missing"),
+                    image_pli.expect("gemma4 image per-layer inputs missing"),
+                ),
+                text_after_pli.expect("gemma4 text-after per-layer inputs missing"),
+            ))
+        };
+
+        let [_, s, _] = unpack::<3>(builder, shape(builder, inputs_embeds.clone()));
+        let [_, _, _, pos, _] = unpack::<5>(builder, shape(builder, in_sliding_k.clone()));
+        let full_attention_mask = causal_mask(builder, s, pos);
+
+        self.language_model.forward_embeddings(
+            builder,
+            p,
+            language_root,
+            full_attention_mask,
+            inputs_embeds,
+            per_layer_inputs,
+            in_sliding_k,
+            in_sliding_v,
+            in_full_k,
+            in_full_v,
+            max_positions,
+        )
+    }
+}
+
+impl DynModule for Gemma4MultimodalModel {
+    fn path(&self) -> Path {
+        path(vec!["Gemma4VLM"]).unwrap()
+    }
+
+    fn ty(&self) -> (Vec<Type>, Vec<Type>) {
+        use catgrad::typecheck::{NatExpr, TypeExpr};
+        let t = Type::Tensor(TypeExpr::Var(0));
+        (
+            vec![
+                t.clone(),
+                t.clone(),
+                t.clone(),
+                t.clone(),
+                t.clone(),
+                t.clone(),
+                t.clone(),
+                Type::Nat(NatExpr::Var(4)),
+            ],
+            vec![t.clone(), t.clone(), t.clone(), t.clone(), t],
+        )
+    }
+
+    fn def(&self, builder: &Builder, args: Vec<Var>) -> Vec<Var> {
+        let [
+            text_before,
+            image,
+            text_after,
+            in_sliding_k,
+            in_sliding_v,
+            in_full_k,
+            in_full_v,
+            max_positions,
+        ]: [Var; 8] = args.try_into().expect("expected 8 inputs");
+        self.forward_image_and_texts(
+            builder,
+            text_before,
+            image,
+            text_after,
+            in_sliding_k,
+            in_sliding_v,
+            in_full_k,
+            in_full_v,
+            max_positions,
+        )
     }
 }
 
