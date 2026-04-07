@@ -1,0 +1,894 @@
+#![allow(clippy::too_many_arguments)]
+use crate::config::{EosTokenId, LLMConfig};
+use crate::helpers::*;
+use catgrad::prelude::ops::*;
+use catgrad::prelude::*;
+use nn::*;
+use serde::Deserialize;
+
+#[derive(Debug, Clone, Deserialize)]
+struct Gemma4Config {
+    text_config: Gemma4TextConfig,
+    eos_token_id: Option<EosTokenId>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct Gemma4RopeTypeConfig {
+    rope_theta: f32,
+    partial_rotary_factor: Option<f32>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct Gemma4RopeParameters {
+    full_attention: Gemma4RopeTypeConfig,
+    sliding_attention: Gemma4RopeTypeConfig,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct Gemma4TextConfig {
+    hidden_size: usize,
+    intermediate_size: usize,
+    num_hidden_layers: usize,
+    num_attention_heads: usize,
+    num_key_value_heads: usize,
+    num_global_key_value_heads: Option<usize>,
+    head_dim: usize,
+    global_head_dim: usize,
+    rms_norm_eps: f32,
+    sliding_window: usize,
+    layer_types: Vec<String>,
+    final_logit_softcapping: Option<f32>,
+    vocab_size: usize,
+    hidden_size_per_layer_input: usize,
+    attention_bias: bool,
+    attention_k_eq_v: bool,
+    num_kv_shared_layers: usize,
+    use_double_wide_mlp: bool,
+    tie_word_embeddings: bool,
+    rope_parameters: Gemma4RopeParameters,
+    eos_token_id: Option<EosTokenId>,
+}
+
+impl Gemma4TextConfig {
+    fn is_sliding_attention_layer(&self, layer_id: usize) -> bool {
+        self.layer_types[layer_id] == "sliding_attention"
+    }
+
+    fn is_shared_kv_layer(&self, layer_id: usize) -> bool {
+        self.num_kv_shared_layers > 0
+            && layer_id >= self.num_hidden_layers - self.num_kv_shared_layers
+    }
+
+    fn full_num_key_value_heads(&self) -> usize {
+        if self.attention_k_eq_v {
+            self.num_global_key_value_heads
+                .unwrap_or(self.num_key_value_heads)
+        } else {
+            self.num_key_value_heads
+        }
+    }
+
+    fn head_dim_for_layer(&self, layer_id: usize) -> usize {
+        if self.is_sliding_attention_layer(layer_id) {
+            self.head_dim
+        } else {
+            self.global_head_dim
+        }
+    }
+
+    fn num_key_value_heads_for_layer(&self, layer_id: usize) -> usize {
+        if self.is_sliding_attention_layer(layer_id) {
+            self.num_key_value_heads
+        } else {
+            self.full_num_key_value_heads()
+        }
+    }
+
+    fn use_alternative_attention(&self, layer_id: usize) -> bool {
+        self.attention_k_eq_v && !self.is_sliding_attention_layer(layer_id)
+    }
+
+    fn mlp_intermediate_size(&self, layer_id: usize) -> usize {
+        if self.use_double_wide_mlp && self.is_shared_kv_layer(layer_id) {
+            self.intermediate_size * 2
+        } else {
+            self.intermediate_size
+        }
+    }
+
+    fn full_partial_rotary_factor(&self) -> f32 {
+        self.rope_parameters
+            .full_attention
+            .partial_rotary_factor
+            .expect("gemma4 full_attention partial_rotary_factor missing")
+    }
+}
+
+impl LLMConfig for Gemma4TextConfig {
+    fn num_hidden_layers(&self) -> usize {
+        self.num_hidden_layers
+    }
+
+    fn num_kv_layers(&self) -> usize {
+        self.num_hidden_layers - self.num_kv_shared_layers
+    }
+
+    fn num_key_value_heads(&self) -> usize {
+        self.num_key_value_heads
+            .max(self.full_num_key_value_heads())
+    }
+
+    fn rope_theta(&self) -> f32 {
+        self.rope_parameters
+            .full_attention
+            .rope_theta
+            .max(self.rope_parameters.sliding_attention.rope_theta)
+    }
+
+    fn partial_rotary_factor(&self) -> f32 {
+        self.full_partial_rotary_factor()
+    }
+
+    fn get_head_dim(&self) -> usize {
+        self.head_dim.max(self.global_head_dim)
+    }
+
+    fn eos_token_id(&self) -> Option<EosTokenId> {
+        self.eos_token_id.clone()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Gemma4AttentionKind {
+    Sliding,
+    Full,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum Gemma4CacheSource {
+    Own(usize),
+    Shared(usize),
+}
+
+#[derive(Debug, Clone, Copy)]
+struct Gemma4LayerPlan {
+    kind: Gemma4AttentionKind,
+    cache: Gemma4CacheSource,
+}
+
+pub struct Gemma4Model {
+    root: String,
+    config: Gemma4TextConfig,
+    dtype: Dtype,
+    layer_plans: Vec<Gemma4LayerPlan>,
+    sliding_cache_layers: usize,
+    full_cache_layers: usize,
+}
+
+impl LLMModel for Gemma4Model {
+    fn config(&self) -> &dyn LLMConfig {
+        &self.config
+    }
+
+    fn dtype(&self) -> Dtype {
+        self.dtype.clone()
+    }
+
+    fn empty_state_type(&self) -> Vec<(Dtype, Shape)> {
+        let dtype = self.dtype();
+        vec![
+            (
+                dtype.clone(),
+                Shape(vec![
+                    self.sliding_cache_layers,
+                    1,
+                    self.config.num_key_value_heads,
+                    0,
+                    self.config.head_dim,
+                ]),
+            ),
+            (
+                dtype.clone(),
+                Shape(vec![
+                    self.sliding_cache_layers,
+                    1,
+                    self.config.num_key_value_heads,
+                    0,
+                    self.config.head_dim,
+                ]),
+            ),
+            (
+                dtype.clone(),
+                Shape(vec![
+                    self.full_cache_layers,
+                    1,
+                    self.config.full_num_key_value_heads(),
+                    0,
+                    self.config.global_head_dim,
+                ]),
+            ),
+            (
+                dtype,
+                Shape(vec![
+                    self.full_cache_layers,
+                    1,
+                    self.config.full_num_key_value_heads(),
+                    0,
+                    self.config.global_head_dim,
+                ]),
+            ),
+        ]
+    }
+}
+
+impl Gemma4Model {
+    pub fn new(root: &str, config_json: &serde_json::Value, dtype: Dtype) -> crate::Result<Self> {
+        let Gemma4Config {
+            mut text_config,
+            eos_token_id,
+        }: Gemma4Config = serde_json::from_value(config_json.clone())?;
+
+        if let Some(eos_token_id) = eos_token_id {
+            text_config.eos_token_id = Some(eos_token_id);
+        }
+
+        let first_shared_layer = text_config.num_hidden_layers - text_config.num_kv_shared_layers;
+        let mut layer_plans = Vec::with_capacity(text_config.num_hidden_layers);
+        let mut sliding_cache_layers = 0;
+        let mut full_cache_layers = 0;
+        let mut last_sliding_cache_id = None;
+        let mut last_full_cache_id = None;
+
+        for layer_id in 0..text_config.num_hidden_layers {
+            let kind = if text_config.is_sliding_attention_layer(layer_id) {
+                Gemma4AttentionKind::Sliding
+            } else {
+                Gemma4AttentionKind::Full
+            };
+
+            let cache = if layer_id < first_shared_layer {
+                match kind {
+                    Gemma4AttentionKind::Sliding => {
+                        let cache_id = sliding_cache_layers;
+                        sliding_cache_layers += 1;
+                        last_sliding_cache_id = Some(cache_id);
+                        Gemma4CacheSource::Own(cache_id)
+                    }
+                    Gemma4AttentionKind::Full => {
+                        let cache_id = full_cache_layers;
+                        full_cache_layers += 1;
+                        last_full_cache_id = Some(cache_id);
+                        Gemma4CacheSource::Own(cache_id)
+                    }
+                }
+            } else {
+                match kind {
+                    Gemma4AttentionKind::Sliding => {
+                        Gemma4CacheSource::Shared(last_sliding_cache_id.ok_or_else(|| {
+                            crate::LLMError::InvalidModelConfig(
+                                "gemma4 sliding shared KV layer had no source layer".to_string(),
+                            )
+                        })?)
+                    }
+                    Gemma4AttentionKind::Full => {
+                        Gemma4CacheSource::Shared(last_full_cache_id.ok_or_else(|| {
+                            crate::LLMError::InvalidModelConfig(
+                                "gemma4 full shared KV layer had no source layer".to_string(),
+                            )
+                        })?)
+                    }
+                }
+            };
+
+            layer_plans.push(Gemma4LayerPlan { kind, cache });
+        }
+
+        Ok(Self {
+            root: root.to_string(),
+            config: text_config,
+            dtype,
+            layer_plans,
+            sliding_cache_layers,
+            full_cache_layers,
+        })
+    }
+
+    fn scaled_embeddings(&self, builder: &Builder, p: Path, x: Var, scale: f32) -> Var {
+        let x = embeddings(builder, p, x);
+        let scale = constant(builder, scale, &shape(builder, x.clone()));
+        x * scale
+    }
+
+    fn per_layer_inputs(
+        &self,
+        builder: &Builder,
+        p: Path,
+        input_ids: Var,
+        inputs_embeds: Var,
+    ) -> Option<Var> {
+        if self.config.hidden_size_per_layer_input == 0 {
+            return None;
+        }
+
+        let pli = self.scaled_embeddings(
+            builder,
+            p.extend(["embed_tokens_per_layer"]).unwrap(),
+            input_ids,
+            (self.config.hidden_size_per_layer_input as f32).sqrt(),
+        );
+        let [b, s, _] = unpack::<3>(builder, shape(builder, pli.clone()));
+        let pli = reshape(
+            builder,
+            shape!(
+                builder,
+                b,
+                s,
+                self.config.num_hidden_layers,
+                self.config.hidden_size_per_layer_input
+            ),
+            pli,
+        );
+
+        let projection = linear_no_bias(
+            builder,
+            self.config.hidden_size,
+            self.config.num_hidden_layers * self.config.hidden_size_per_layer_input,
+            p.extend(["per_layer_model_projection"]).unwrap(),
+            inputs_embeds,
+        );
+        let scale = constant(
+            builder,
+            (self.config.hidden_size as f32).powf(-0.5),
+            &shape(builder, projection.clone()),
+        );
+        let projection = projection * scale;
+        let projection = reshape(
+            builder,
+            shape!(
+                builder,
+                b,
+                s,
+                self.config.num_hidden_layers,
+                self.config.hidden_size_per_layer_input
+            ),
+            projection,
+        );
+        let projection = rmsnorm::<4>(
+            builder,
+            self.config.rms_norm_eps,
+            p.extend(["per_layer_projection_norm"]).unwrap(),
+            projection,
+        );
+
+        let scale = constant(
+            builder,
+            2.0f32.powf(-0.5),
+            &shape(builder, projection.clone()),
+        );
+        Some((projection + pli) * scale)
+    }
+
+    fn mlp(&self, builder: &Builder, layer_id: usize, p: Path, x: Var) -> Var {
+        let intermediate_size = self.config.mlp_intermediate_size(layer_id);
+        let gate = linear_no_bias(
+            builder,
+            self.config.hidden_size,
+            intermediate_size,
+            p.extend(["gate_proj"]).unwrap(),
+            x.clone(),
+        );
+        let up = linear_no_bias(
+            builder,
+            self.config.hidden_size,
+            intermediate_size,
+            p.extend(["up_proj"]).unwrap(),
+            x,
+        );
+        let x = gelu(builder, gate) * up;
+        linear_no_bias(
+            builder,
+            intermediate_size,
+            self.config.hidden_size,
+            p.extend(["down_proj"]).unwrap(),
+            x,
+        )
+    }
+
+    fn attention(
+        &self,
+        builder: &Builder,
+        layer_id: usize,
+        attention_mask: Var,
+        sliding_cache: &mut KVCache,
+        full_cache: &mut KVCache,
+        pos: Var,
+        cos: Var,
+        sin: Var,
+        p: Path,
+        x: Var,
+    ) -> Var {
+        let num_heads = self.config.num_attention_heads;
+        let num_kv_heads = self.config.num_key_value_heads_for_layer(layer_id);
+        let head_dim = self.config.head_dim_for_layer(layer_id);
+        let rep = num_heads / num_kv_heads;
+
+        let [b, s, _] = unpack::<3>(builder, shape(builder, x.clone()));
+
+        let q = linear_b(
+            builder,
+            self.config.hidden_size,
+            num_heads * head_dim,
+            self.config.attention_bias,
+            p.extend(["q_proj"]).unwrap(),
+            x.clone(),
+        );
+        let k = linear_b(
+            builder,
+            self.config.hidden_size,
+            num_kv_heads * head_dim,
+            self.config.attention_bias,
+            p.extend(["k_proj"]).unwrap(),
+            x.clone(),
+        );
+        let v = if self.config.use_alternative_attention(layer_id) {
+            k.clone()
+        } else {
+            linear_b(
+                builder,
+                self.config.hidden_size,
+                num_kv_heads * head_dim,
+                self.config.attention_bias,
+                p.extend(["v_proj"]).unwrap(),
+                x,
+            )
+        };
+
+        let q = reshape(builder, shape!(builder, b, s, num_heads, head_dim), q);
+        let k = reshape(builder, shape!(builder, b, s, num_kv_heads, head_dim), k);
+        let v = reshape(builder, shape!(builder, b, s, num_kv_heads, head_dim), v);
+
+        let q = transpose(builder, 1, 2, q);
+        let k = transpose(builder, 1, 2, k);
+        let v = transpose(builder, 1, 2, v);
+
+        let q = rmsnorm::<4>(
+            builder,
+            self.config.rms_norm_eps,
+            p.extend(["q_norm"]).unwrap(),
+            q,
+        );
+        let k = rmsnorm::<4>(
+            builder,
+            self.config.rms_norm_eps,
+            p.extend(["k_norm"]).unwrap(),
+            k,
+        );
+        let v = rmsnorm_raw::<4>(builder, self.config.rms_norm_eps, v);
+
+        let q = apply_rope_embedding(builder, pos.clone(), head_dim, cos.clone(), sin.clone(), q);
+        let k = apply_rope_embedding(builder, pos, head_dim, cos, sin, k);
+
+        let plan = self.layer_plans[layer_id];
+        let (cache, cache_id) = match plan.kind {
+            Gemma4AttentionKind::Sliding => (
+                sliding_cache,
+                match plan.cache {
+                    Gemma4CacheSource::Own(cache_id) | Gemma4CacheSource::Shared(cache_id) => {
+                        cache_id
+                    }
+                },
+            ),
+            Gemma4AttentionKind::Full => (
+                full_cache,
+                match plan.cache {
+                    Gemma4CacheSource::Own(cache_id) | Gemma4CacheSource::Shared(cache_id) => {
+                        cache_id
+                    }
+                },
+            ),
+        };
+        let (k, v) = match plan.cache {
+            Gemma4CacheSource::Own(_) => cache.update(builder, cache_id, k, v),
+            Gemma4CacheSource::Shared(_) => cache.get(cache_id),
+        };
+
+        let k = repeat_kv(builder, rep, k);
+        let v = repeat_kv(builder, rep, v);
+
+        let mut attn = matmul(builder, q, transpose(builder, 2, 3, k));
+        let sh = shape(builder, attn.clone());
+        let mask = broadcast(builder, sh, attention_mask);
+        attn = attn + mask;
+
+        let attn = softmax(builder, attn);
+        let attn = matmul(builder, attn, v);
+        let attn = transpose(builder, 1, 2, attn);
+        let attn = reshape(builder, shape!(builder, b, s, num_heads * head_dim), attn);
+
+        linear_b(
+            builder,
+            num_heads * head_dim,
+            self.config.hidden_size,
+            self.config.attention_bias,
+            p.extend(["o_proj"]).unwrap(),
+            attn,
+        )
+    }
+
+    fn layer_per_layer_input(
+        &self,
+        builder: &Builder,
+        layer_id: usize,
+        per_layer_inputs: Var,
+    ) -> Var {
+        squeeze::<4, 3>(builder, 2, slice(builder, 2, layer_id, 1, per_layer_inputs))
+    }
+
+    fn layer(
+        &self,
+        builder: &Builder,
+        layer_id: usize,
+        attention_mask: Var,
+        per_layer_input: Option<Var>,
+        sliding_cache: &mut KVCache,
+        full_cache: &mut KVCache,
+        pos: Var,
+        cos: Var,
+        sin: Var,
+        p: Path,
+        x: Var,
+    ) -> Var {
+        let residual = x.clone();
+        let x = rmsnorm::<3>(
+            builder,
+            self.config.rms_norm_eps,
+            p.extend(["input_layernorm"]).unwrap(),
+            x,
+        );
+        let x = self.attention(
+            builder,
+            layer_id,
+            attention_mask,
+            sliding_cache,
+            full_cache,
+            pos,
+            cos,
+            sin,
+            p.extend(["self_attn"]).unwrap(),
+            x,
+        );
+        let x = rmsnorm::<3>(
+            builder,
+            self.config.rms_norm_eps,
+            p.extend(["post_attention_layernorm"]).unwrap(),
+            x,
+        );
+        let x = residual + x;
+
+        let residual = x.clone();
+        let x = rmsnorm::<3>(
+            builder,
+            self.config.rms_norm_eps,
+            p.extend(["pre_feedforward_layernorm"]).unwrap(),
+            x,
+        );
+        let x = self.mlp(builder, layer_id, p.extend(["mlp"]).unwrap(), x);
+        let x = rmsnorm::<3>(
+            builder,
+            self.config.rms_norm_eps,
+            p.extend(["post_feedforward_layernorm"]).unwrap(),
+            x,
+        );
+        let mut x = residual + x;
+
+        if let Some(per_layer_input) = per_layer_input {
+            let residual = x.clone();
+            let x_per_layer = linear_no_bias(
+                builder,
+                self.config.hidden_size,
+                self.config.hidden_size_per_layer_input,
+                p.extend(["per_layer_input_gate"]).unwrap(),
+                x,
+            );
+            let x_per_layer = gelu(builder, x_per_layer) * per_layer_input;
+            let x_per_layer = linear_no_bias(
+                builder,
+                self.config.hidden_size_per_layer_input,
+                self.config.hidden_size,
+                p.extend(["per_layer_projection"]).unwrap(),
+                x_per_layer,
+            );
+            let x_per_layer = rmsnorm::<3>(
+                builder,
+                self.config.rms_norm_eps,
+                p.extend(["post_per_layer_input_norm"]).unwrap(),
+                x_per_layer,
+            );
+            x = residual + x_per_layer;
+        }
+
+        let layer_scalar = param(builder, &p.extend(["layer_scalar"]).unwrap());
+        let layer_scalar = broadcast(builder, shape(builder, x.clone()), layer_scalar);
+        x * layer_scalar
+    }
+
+    pub fn forward(
+        &self,
+        builder: &Builder,
+        p: Path,
+        language_root: Path,
+        x: Var,
+        in_sliding_k: Var,
+        in_sliding_v: Var,
+        in_full_k: Var,
+        in_full_v: Var,
+        max_positions: Var,
+    ) -> Vec<Var> {
+        let inputs_embeds = self.scaled_embeddings(
+            builder,
+            language_root.extend(["embed_tokens"]).unwrap(),
+            x.clone(),
+            (self.config.hidden_size as f32).sqrt(),
+        );
+        let per_layer_inputs =
+            self.per_layer_inputs(builder, language_root.clone(), x, inputs_embeds.clone());
+
+        let [_, s, _] = unpack::<3>(builder, shape(builder, inputs_embeds.clone()));
+        let [_, _, _, pos, _] = unpack::<5>(builder, shape(builder, in_sliding_k.clone()));
+
+        let full_attention_mask = causal_mask(builder, s.clone(), pos.clone());
+        let sliding_attention_mask =
+            sliding_window_mask(builder, s.clone(), pos.clone(), self.config.sliding_window);
+
+        let (sliding_cos, sliding_sin) = rope_tables_default(
+            builder,
+            self.config.rope_parameters.sliding_attention.rope_theta,
+            max_positions.clone(),
+            self.config.head_dim,
+            1.0,
+        );
+        let (full_cos, full_sin) = rope_tables_proportional(
+            builder,
+            self.config.rope_parameters.full_attention.rope_theta,
+            max_positions,
+            self.config.global_head_dim,
+            self.config.full_partial_rotary_factor(),
+        );
+
+        let mut sliding_cache = KVCache::init(
+            builder,
+            self.sliding_cache_layers,
+            in_sliding_k,
+            in_sliding_v,
+        );
+        let mut full_cache = KVCache::init(builder, self.full_cache_layers, in_full_k, in_full_v);
+
+        let mut x = inputs_embeds;
+        for layer_id in 0..self.config.num_hidden_layers {
+            let is_sliding = self.config.is_sliding_attention_layer(layer_id);
+            let attention_mask = if is_sliding {
+                sliding_attention_mask.clone()
+            } else {
+                full_attention_mask.clone()
+            };
+            let (cos, sin) = if is_sliding {
+                (sliding_cos.clone(), sliding_sin.clone())
+            } else {
+                (full_cos.clone(), full_sin.clone())
+            };
+            let per_layer_input = per_layer_inputs
+                .as_ref()
+                .map(|inputs| self.layer_per_layer_input(builder, layer_id, inputs.clone()));
+            x = self.layer(
+                builder,
+                layer_id,
+                attention_mask,
+                per_layer_input,
+                &mut sliding_cache,
+                &mut full_cache,
+                pos.clone(),
+                cos,
+                sin,
+                language_root
+                    .clone()
+                    .extend(["layers", &layer_id.to_string()])
+                    .unwrap(),
+                x,
+            );
+        }
+
+        x = rmsnorm::<3>(
+            builder,
+            self.config.rms_norm_eps,
+            language_root.extend(["norm"]).unwrap(),
+            x,
+        );
+
+        let lm_head_weights = if self.config.tie_word_embeddings {
+            language_root.extend(["embed_tokens"]).unwrap()
+        } else {
+            p.extend(["lm_head"]).unwrap()
+        };
+        x = linear_no_bias(
+            builder,
+            self.config.hidden_size,
+            self.config.vocab_size,
+            lm_head_weights,
+            x,
+        );
+
+        if let Some(softcap) = self.config.final_logit_softcapping {
+            let s = constant(builder, softcap, &shape(builder, x.clone()));
+            x = x / s.clone();
+            x = tanh(builder, x);
+            x = x * s;
+        }
+
+        x = argmax(builder, x);
+        let (out_sliding_k, out_sliding_v) = sliding_cache.output(builder, s.clone());
+        let (out_full_k, out_full_v) = full_cache.output(builder, s);
+        vec![x, out_sliding_k, out_sliding_v, out_full_k, out_full_v]
+    }
+}
+
+impl DynModule for Gemma4Model {
+    fn path(&self) -> Path {
+        path(vec!["gemma4"]).expect("invalid model path")
+    }
+
+    fn def(&self, builder: &Builder, args: Vec<Var>) -> Vec<Var> {
+        let [
+            x,
+            in_sliding_k,
+            in_sliding_v,
+            in_full_k,
+            in_full_v,
+            max_positions,
+        ]: [Var; 6] = args.try_into().expect("expected 6 inputs");
+        let p = self.path();
+        let language_root = if self.root.is_empty() {
+            p.clone()
+        } else {
+            p.extend(self.root.split('.')).unwrap()
+        };
+        self.forward(
+            builder,
+            p,
+            language_root,
+            x,
+            in_sliding_k,
+            in_sliding_v,
+            in_full_k,
+            in_full_v,
+            max_positions,
+        )
+    }
+
+    fn ty(&self) -> (Vec<Type>, Vec<Type>) {
+        use catgrad::typecheck::*;
+
+        let batch_size = NatExpr::Var(0);
+        let seq_len = NatExpr::Var(1);
+        let sliding_cache_len = NatExpr::Var(2);
+        let full_cache_len = NatExpr::Var(3);
+        let max_positions = NatExpr::Var(4);
+
+        let t_x = Type::Tensor(TypeExpr::NdArrayType(NdArrayType {
+            dtype: DtypeExpr::Constant(Dtype::U32),
+            shape: ShapeExpr::Shape(vec![batch_size.clone(), seq_len.clone()]),
+        }));
+        let t_y = Type::Tensor(TypeExpr::NdArrayType(NdArrayType {
+            dtype: DtypeExpr::Constant(Dtype::U32),
+            shape: ShapeExpr::Shape(vec![batch_size.clone(), NatExpr::Constant(1)]),
+        }));
+
+        let sliding_heads = NatExpr::Constant(self.config.num_key_value_heads);
+        let full_heads = NatExpr::Constant(self.config.full_num_key_value_heads());
+        let sliding_layers = NatExpr::Constant(self.sliding_cache_layers);
+        let full_layers = NatExpr::Constant(self.full_cache_layers);
+        let sliding_dim = NatExpr::Constant(self.config.head_dim);
+        let full_dim = NatExpr::Constant(self.config.global_head_dim);
+        let sliding_out_len = NatExpr::Add(vec![sliding_cache_len.clone(), seq_len.clone()]);
+        let full_out_len = NatExpr::Add(vec![full_cache_len.clone(), seq_len]);
+
+        let t_sliding_k = Type::Tensor(TypeExpr::NdArrayType(NdArrayType {
+            dtype: DtypeExpr::Constant(self.dtype()),
+            shape: ShapeExpr::Shape(vec![
+                sliding_layers.clone(),
+                batch_size.clone(),
+                sliding_heads.clone(),
+                sliding_cache_len.clone(),
+                sliding_dim.clone(),
+            ]),
+        }));
+        let t_sliding_v = Type::Tensor(TypeExpr::NdArrayType(NdArrayType {
+            dtype: DtypeExpr::Constant(self.dtype()),
+            shape: ShapeExpr::Shape(vec![
+                sliding_layers.clone(),
+                batch_size.clone(),
+                sliding_heads.clone(),
+                sliding_cache_len,
+                sliding_dim,
+            ]),
+        }));
+        let t_full_k = Type::Tensor(TypeExpr::NdArrayType(NdArrayType {
+            dtype: DtypeExpr::Constant(self.dtype()),
+            shape: ShapeExpr::Shape(vec![
+                full_layers.clone(),
+                batch_size.clone(),
+                full_heads.clone(),
+                full_cache_len.clone(),
+                full_dim.clone(),
+            ]),
+        }));
+        let t_full_v = Type::Tensor(TypeExpr::NdArrayType(NdArrayType {
+            dtype: DtypeExpr::Constant(self.dtype()),
+            shape: ShapeExpr::Shape(vec![
+                full_layers.clone(),
+                batch_size.clone(),
+                full_heads.clone(),
+                full_cache_len,
+                full_dim,
+            ]),
+        }));
+
+        let t_sliding_k_out = Type::Tensor(TypeExpr::NdArrayType(NdArrayType {
+            dtype: DtypeExpr::Constant(self.dtype()),
+            shape: ShapeExpr::Shape(vec![
+                sliding_layers,
+                batch_size.clone(),
+                sliding_heads.clone(),
+                sliding_out_len.clone(),
+                NatExpr::Constant(self.config.head_dim),
+            ]),
+        }));
+        let t_sliding_v_out = Type::Tensor(TypeExpr::NdArrayType(NdArrayType {
+            dtype: DtypeExpr::Constant(self.dtype()),
+            shape: ShapeExpr::Shape(vec![
+                NatExpr::Constant(self.sliding_cache_layers),
+                batch_size.clone(),
+                sliding_heads,
+                sliding_out_len,
+                NatExpr::Constant(self.config.head_dim),
+            ]),
+        }));
+        let t_full_k_out = Type::Tensor(TypeExpr::NdArrayType(NdArrayType {
+            dtype: DtypeExpr::Constant(self.dtype()),
+            shape: ShapeExpr::Shape(vec![
+                full_layers,
+                batch_size.clone(),
+                full_heads.clone(),
+                full_out_len.clone(),
+                NatExpr::Constant(self.config.global_head_dim),
+            ]),
+        }));
+        let t_full_v_out = Type::Tensor(TypeExpr::NdArrayType(NdArrayType {
+            dtype: DtypeExpr::Constant(self.dtype()),
+            shape: ShapeExpr::Shape(vec![
+                NatExpr::Constant(self.full_cache_layers),
+                batch_size,
+                full_heads,
+                full_out_len,
+                NatExpr::Constant(self.config.global_head_dim),
+            ]),
+        }));
+
+        (
+            vec![
+                t_x,
+                t_sliding_k,
+                t_sliding_v,
+                t_full_k,
+                t_full_v,
+                Type::Nat(max_positions),
+            ],
+            vec![
+                t_y,
+                t_sliding_k_out,
+                t_sliding_v_out,
+                t_full_k_out,
+                t_full_v_out,
+            ],
+        )
+    }
+}

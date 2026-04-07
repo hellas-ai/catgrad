@@ -170,8 +170,14 @@ fn run_with_backend<B: interpreter::Backend>(
     let model_dtype = Dtype::F32;
 
     let start_load = std::time::Instant::now();
-    let (mut parameter_values, mut parameter_types, config_json, tokenizer, total_params) =
-        load_model(&model_name, &args.revision, &backend, model_dtype.clone())?;
+    let (
+        mut parameter_values,
+        mut parameter_types,
+        config_json,
+        tokenizer,
+        tokenizer_config,
+        total_params,
+    ) = load_model(&model_name, &args.revision, &backend, model_dtype.clone())?;
     let elapsed_load = start_load.elapsed();
 
     eprintln!(
@@ -200,7 +206,13 @@ fn run_with_backend<B: interpreter::Backend>(
     } else if chat_template.is_empty() || args.raw {
         args.prompt.clone()
     } else {
-        render_chat_template(&chat_template, &args.prompt, use_image, false)?
+        render_chat_template(
+            &chat_template,
+            &tokenizer_config,
+            &args.prompt,
+            use_image,
+            false,
+        )?
     };
 
     let prepared_multimodal = if use_image {

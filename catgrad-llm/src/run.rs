@@ -27,6 +27,7 @@ struct ModelEngineInner {
     config_json: serde_json::Value,
     tokenizer: Tokenizer,
     chat_template: String,
+    tokenizer_config: serde_json::Value,
     eos_token_ids: Vec<i32>,
     dtype: Dtype,
     use_kv_cache: bool,
@@ -126,7 +127,7 @@ impl ModelEngine {
     /// The cache does not persist across separate generation calls.
     pub fn new(model_name: &str, use_kv_cache: bool, dtype: Dtype) -> Result<Self> {
         let backend = CandleBackend::new();
-        let (parameter_values, parameter_types, config_json, tokenizer, _) =
+        let (parameter_values, parameter_types, config_json, tokenizer, tokenizer_config, _) =
             load_model(model_name, "main", &backend, dtype.clone())?;
         let model = get_model(&config_json, 1, None, dtype.clone())?;
         let chat_template = get_model_chat_template(model_name, "main")?;
@@ -143,6 +144,7 @@ impl ModelEngine {
                 config_json,
                 tokenizer,
                 chat_template,
+                tokenizer_config,
                 eos_token_ids,
                 dtype,
                 use_kv_cache,
@@ -158,6 +160,7 @@ impl ModelEngine {
         PreparedPrompt::from_messages(
             &self.inner.tokenizer,
             &self.inner.chat_template,
+            &self.inner.tokenizer_config,
             messages,
             &self.inner.eos_token_ids,
         )

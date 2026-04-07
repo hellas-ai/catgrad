@@ -75,6 +75,52 @@ pub fn rope_tables_default(
     (cos, sin)
 }
 
+// Proportional rope tables based on the rotary factor and head dimension used by Gemma 4.
+pub fn rope_tables_proportional(
+    builder: &Builder,
+    theta: f32,
+    seq_len: impl IntoNatVar,
+    head_dim: usize,
+    partial_rotary_factor: f32,
+) -> (Var, Var) {
+    let half_dim = head_dim / 2;
+    let rope_angles = ((partial_rotary_factor * head_dim as f32) / 2.0).floor() as usize;
+
+    let inv_freq = if rope_angles == 0 {
+        constant(builder, 0.0, &shape!(builder, half_dim))
+    } else {
+        let f = arange(builder, rope_angles);
+        let f = cast(builder, f, Dtype::F32);
+        let sh = shape(builder, f.clone());
+        let scale = constant(builder, 2.0 / (head_dim as f32), &sh);
+        let theta = constant(builder, theta, &sh);
+        let freq = pow(builder, theta, f * scale);
+        let mut inv_freq = inverse(builder, freq);
+        if rope_angles < half_dim {
+            let zeros = constant(builder, 0.0, &shape!(builder, half_dim - rope_angles));
+            inv_freq = concat(builder, 0, inv_freq, zeros);
+        }
+        inv_freq
+    };
+
+    let seq_len = seq_len.to_nat(builder);
+    let sh = shape!(builder, seq_len, half_dim);
+    let inv_freq = broadcast(builder, sh.clone(), inv_freq);
+
+    let pos = arange(builder, seq_len.clone());
+    let pos = cast(builder, pos, Dtype::F32);
+    let pos = reshape(builder, shape!(builder, seq_len, 1), pos);
+    let pos = broadcast(builder, sh, pos);
+    let pos = pos * inv_freq;
+
+    let cos = cos(builder, pos.clone());
+    let sin = sin(builder, pos);
+    (
+        concat(builder, 1, cos.clone(), cos),
+        concat(builder, 1, sin.clone(), sin),
+    )
+}
+
 pub fn rope_tables_llama3(
     builder: &Builder,
     theta: f32,
