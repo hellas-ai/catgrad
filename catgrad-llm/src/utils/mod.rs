@@ -130,6 +130,7 @@ fn strftime_now(format_str: String) -> String {
 
 pub fn render_chat_template(
     chat_template: &str,
+    tokenizer_config: &serde_json::Value,
     prompt: &str,
     has_image: bool,
     enable_thinking: bool,
@@ -139,6 +140,10 @@ pub fn render_chat_template(
     env.add_function("strftime_now", strftime_now);
     env.add_template("chat", chat_template)?;
     let tmpl = env.get_template("chat")?;
+    let bos_token = tokenizer_config
+        .get("bos_token")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("");
     let messages = if has_image {
         let content = vec![
             context!(type => "text", text => prompt),
@@ -148,9 +153,12 @@ pub fn render_chat_template(
     } else {
         vec![context!(role => "user",content => prompt)]
     };
-    tmpl.render(
-            context!(messages => messages, add_generation_prompt => true, enable_thinking => enable_thinking)
-            )
+    tmpl.render(context!(
+        messages => messages,
+        add_generation_prompt => true,
+        enable_thinking => enable_thinking,
+        bos_token => bos_token
+    ))
 }
 
 #[derive(Debug, Clone)]
@@ -513,12 +521,16 @@ pub fn load_model<B: interpreter::Backend>(
     typecheck::Parameters,
     serde_json::Value,
     Tokenizer,
+    serde_json::Value,
     usize,
 )> {
-    let (model_paths, config_path, tokenizer_path, _) = get_model_files(model_name, revision)?;
+    let (model_paths, config_path, tokenizer_path, tokenizer_config_path) =
+        get_model_files(model_name, revision)?;
     let config_json: serde_json::Value = from_json_str(&std::fs::read_to_string(&config_path)?)?;
     let tokenizer = Tokenizer::from_file(tokenizer_path)
         .map_err(|err| LLMError::TokenizerError(format!("tokenizer load error {:?}", err)))?;
+    let tokenizer_config_json: serde_json::Value =
+        from_json_str(&std::fs::read_to_string(&tokenizer_config_path)?)?;
 
     let (parameter_values, parameter_types, total_params) =
         load_model_weights(model_paths, backend, dtype)?;
@@ -528,6 +540,7 @@ pub fn load_model<B: interpreter::Backend>(
         parameter_types,
         config_json,
         tokenizer,
+        tokenizer_config_json,
         total_params,
     ))
 }

@@ -35,10 +35,11 @@ impl PreparedPrompt {
     pub fn from_messages(
         tokenizer: &Tokenizer,
         chat_template: &str,
+        tokenizer_config: &JsonValue,
         messages: &[types::Message],
         stop_token_ids: &[i32],
     ) -> Result<Self> {
-        let prompt = render_chat_prompt(chat_template, messages)?;
+        let prompt = render_chat_prompt(chat_template, tokenizer_config, messages)?;
         Self::from_prompt(tokenizer, &prompt, stop_token_ids)
     }
 }
@@ -74,7 +75,11 @@ pub(crate) fn message_to_template_context(message: &types::Message) -> Result<Va
     Ok(Value::from_serialize(map))
 }
 
-fn render_chat_prompt(chat_template: &str, messages: &[types::Message]) -> Result<String> {
+fn render_chat_prompt(
+    chat_template: &str,
+    tokenizer_config: &JsonValue,
+    messages: &[types::Message],
+) -> Result<String> {
     let mut env = Environment::new();
     env.set_unknown_method_callback(unknown_method_callback);
     env.add_template("chat", chat_template)?;
@@ -83,10 +88,15 @@ fn render_chat_prompt(chat_template: &str, messages: &[types::Message]) -> Resul
         .iter()
         .map(message_to_template_context)
         .collect::<Result<_>>()?;
+    let bos_token = tokenizer_config
+        .get("bos_token")
+        .and_then(JsonValue::as_str)
+        .unwrap_or("");
     let prompt = tmpl.render(context!(
         messages => message_context,
         add_generation_prompt => true,
-        enable_thinking => false
+        enable_thinking => false,
+        bos_token => bos_token
     ))?;
 
     Ok(prompt)
