@@ -341,6 +341,30 @@ pub fn apply_rope_embedding(
     cos * x + sin * rotated_x
 }
 
+/// Apply RoPE to an input tensor using arbitrary per-token positions.
+pub fn apply_rope_embedding_positions(
+    builder: &Builder,
+    positions: Var,
+    head_dim: usize,
+    cos: Var,
+    sin: Var,
+    x: Var,
+) -> Var {
+    let sh = shape(builder, x.clone());
+    let [_, seq_len, _, _] = unpack::<4>(builder, sh.clone());
+    let positions = reshape(builder, shape!(builder, seq_len), positions);
+    let cos = index(builder, 0, positions.clone(), cos);
+    let sin = index(builder, 0, positions, sin);
+    let cos = reshape(builder, shape!(builder, 1, seq_len, 1, head_dim), cos);
+    let sin = reshape(builder, shape!(builder, 1, seq_len, 1, head_dim), sin);
+    let cos = broadcast(builder, sh.clone(), cos);
+    let sin = broadcast(builder, sh, sin);
+
+    let rotated_x = rotate_half(builder, head_dim, x.clone());
+
+    cos * x + sin * rotated_x
+}
+
 /// Apply RoPE (Rotary Positional Embedding) to the input tensor by calculating the tables
 pub fn rope(
     builder: &Builder,

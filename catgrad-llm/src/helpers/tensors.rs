@@ -143,12 +143,29 @@ pub fn repeat_kv(builder: &Builder, rep: usize, x: Var) -> Var {
 
 /// Average pooling over a square 2D grid.
 pub fn avgpool2d(builder: &Builder, dim: usize, side: usize, k: usize, x: Var) -> Var {
-    let windows = side / k;
-    let x = reshape(builder, shape!(builder, 1, dim, windows, k, windows, k), x);
+    avgpool2d_rect(builder, dim, side, side, k, x)
+}
+
+/// Average pooling over a rectangular 2D grid.
+pub fn avgpool2d_rect(
+    builder: &Builder,
+    dim: usize,
+    height: usize,
+    width: usize,
+    k: usize,
+    x: Var,
+) -> Var {
+    let windows_h = height / k;
+    let windows_w = width / k;
+    let x = reshape(
+        builder,
+        shape!(builder, 1, dim, windows_h, k, windows_w, k),
+        x,
+    );
     let x = transpose(builder, 3, 4, x);
     let x = reshape(
         builder,
-        shape!(builder, 1, dim, windows * windows, k * k),
+        shape!(builder, 1, dim, windows_h * windows_w, k * k),
         x,
     );
 
@@ -162,14 +179,17 @@ pub fn clamp(builder: &Builder, x: Var, min_val: f32, max_val: f32) -> Var {
     let sh = shape(builder, x.clone());
     let min_t = constant(builder, min_val, &sh);
     let max_t = constant(builder, max_val, &sh);
-    let one = constant(builder, 1.0, &sh);
+    clamp_with_tensors(builder, x, min_t, max_t)
+}
 
-    let mask_min = lt(builder, x.clone(), min_t.clone());
-    let mask_min = cast(builder, mask_min, Dtype::F32);
-    let x = mask_min.clone() * min_t + (one.clone() - mask_min) * x;
-
-    let mask_max = lt(builder, max_t.clone(), x.clone());
-    mask_max.clone() * max_t + (one - mask_max) * x
+pub fn clamp_with_tensors(builder: &Builder, x: Var, min_val: Var, max_val: Var) -> Var {
+    let x_dtype = dtype(builder, x.clone());
+    let below = lt(builder, x.clone(), min_val.clone());
+    let below = cast(builder, below, x_dtype.clone());
+    let x = where_cond(builder, below, min_val, x);
+    let above = lt(builder, max_val.clone(), x.clone());
+    let above = cast(builder, above, x_dtype);
+    where_cond(builder, above, max_val, x)
 }
 
 pub fn causal_mask(builder: &Builder, seq_len: Var, pos: Var) -> Var {
