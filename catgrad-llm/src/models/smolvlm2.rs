@@ -3,10 +3,12 @@ use crate::config::LLMConfig;
 use crate::helpers::*;
 use crate::models::llama::{LlamaConfig, LlamaModel};
 use crate::models::siglip::{SiglipVisionBackbone, SiglipVisionConfig};
+use crate::utils::load_and_preprocess_image;
 use catgrad::prelude::ops::*;
 use catgrad::prelude::*;
 use nn::*;
 use serde::Deserialize;
+use std::path::Path as FsPath;
 
 #[derive(Debug, Clone, Deserialize)]
 pub(crate) struct SmolVLM2Config {
@@ -22,6 +24,18 @@ pub(crate) struct SmolVLM2Config {
 
 fn default_scale_factor() -> usize {
     4
+}
+
+pub fn prepare_smolvlm2_image_input(
+    image_path: &FsPath,
+    config_json: &serde_json::Value,
+) -> crate::Result<(Vec<f32>, Vec<usize>)> {
+    let config: SmolVLM2Config = serde_json::from_value(config_json.clone())?;
+    load_and_preprocess_image(
+        image_path,
+        config.vision_config.image_size,
+        config.vision_config.patch_size,
+    )
 }
 
 #[derive(Debug, Clone)]

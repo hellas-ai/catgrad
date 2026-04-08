@@ -196,6 +196,22 @@ pub fn prepare_multimodal_input(
     };
 
     match get_model_architecture(config_json)? {
+        "Gemma3ForConditionalGeneration" | "PaliGemmaForConditionalGeneration" => {
+            let (data, shape) =
+                models::gemma3::prepare_gemma3_image_input(image_path, config_json)?;
+            Ok(PreparedMultimodalInput {
+                image: Some(PreparedImageInput { data, shape }),
+                runtime_context: None,
+            })
+        }
+        "SmolVLMForConditionalGeneration" => {
+            let (data, shape) =
+                models::smolvlm2::prepare_smolvlm2_image_input(image_path, config_json)?;
+            Ok(PreparedMultimodalInput {
+                image: Some(PreparedImageInput { data, shape }),
+                runtime_context: None,
+            })
+        }
         "Qwen3_5ForConditionalGeneration" => {
             let prepared = models::qwen3_5::prepare_qwen3_5_image_input(image_path, config_json)?;
             Ok(PreparedMultimodalInput {
