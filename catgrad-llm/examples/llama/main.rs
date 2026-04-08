@@ -5,9 +5,8 @@ use catgrad::prelude::*;
 use catgrad_llm::helpers::LLMModel;
 use catgrad_llm::utils::{
     cache_path_for_embeddings, empty_state_cache, get_model, get_model_chat_template,
-    interpolate_multimodal_prompt, load_and_preprocess_image, load_cached_embeddings, load_model,
-    post_process_model_weights, prepare_multimodal_input, print_bench_table, render_chat_template,
-    save_cached_embeddings,
+    interpolate_multimodal_prompt, load_cached_embeddings, load_model, post_process_model_weights,
+    prepare_multimodal_input, print_bench_table, render_chat_template, save_cached_embeddings,
 };
 use clap::{Parser, ValueEnum};
 use serde::Deserialize;
@@ -317,12 +316,15 @@ fn run_with_backend<B: interpreter::Backend>(
             .image
             .as_ref()
             .expect("image existence already checked");
-        let (image_data, image_shape) =
-            if let Some(prepared_image) = prepared_multimodal.image.as_ref() {
-                (prepared_image.data.clone(), prepared_image.shape.clone())
-            } else {
-                load_and_preprocess_image(image_path, mm.image_size, mm.patch_size)?
-            };
+        let prepared_image = prepared_multimodal.image.as_ref().ok_or_else(|| {
+            anyhow::anyhow!(
+                "Model {} did not provide prepared image input for {}",
+                model_name,
+                image_path.display()
+            )
+        })?;
+        let image_data = prepared_image.data.clone();
+        let image_shape = prepared_image.shape.clone();
         let cache_path =
             cache_path_for_embeddings(&model_name, &image_path.to_string_lossy(), &image_data);
         let visual_embeddings = if let Ok(cached) = load_cached_embeddings(&cache_path) {

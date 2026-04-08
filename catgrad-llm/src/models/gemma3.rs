@@ -2,10 +2,12 @@
 use crate::config::{EosTokenId, LLMConfig};
 use crate::helpers::*;
 use crate::models::siglip::{SiglipVisionBackbone, SiglipVisionConfig};
+use crate::utils::load_and_preprocess_image;
 use catgrad::prelude::ops::*;
 use catgrad::prelude::*;
 use catgrad::stdlib::nn::*;
 use serde::Deserialize;
+use std::path::Path as FsPath;
 
 #[derive(Debug, Clone, Deserialize)]
 pub enum GemmaConfig {
@@ -23,6 +25,26 @@ pub enum GemmaConfig {
 
 fn default_mm_tokens_per_image() -> usize {
     256
+}
+
+pub fn prepare_gemma3_image_input(
+    image_path: &FsPath,
+    config_json: &serde_json::Value,
+) -> crate::Result<(Vec<f32>, Vec<usize>)> {
+    let config: GemmaConfig = serde_json::from_value(config_json.clone())?;
+    let vision_config = match config {
+        GemmaConfig::VLM { vision_config, .. } => vision_config,
+        GemmaConfig::Text(_) => {
+            return Err(crate::LLMError::InvalidModelConfig(
+                "gemma3 missing vision_config".to_string(),
+            ));
+        }
+    };
+    load_and_preprocess_image(
+        image_path,
+        vision_config.image_size,
+        vision_config.patch_size,
+    )
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]

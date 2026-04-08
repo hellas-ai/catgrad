@@ -10,7 +10,7 @@ pub struct PatchedImageInput {
     pub patch_grid_width: usize,
 }
 
-// Loads the image and returns flattened data + shape
+// SigLIP-style image preprocessing: square resize/crop to CHW with pixels in [-1, 1].
 pub fn load_and_preprocess_image(
     image_path: &Path,
     image_size: usize,
@@ -47,7 +47,7 @@ pub fn load_and_preprocess_image(
     ))
 }
 
-pub fn get_aspect_ratio_preserving_size(
+fn get_aspect_ratio_preserving_size(
     height: usize,
     width: usize,
     patch_size: usize,
@@ -169,8 +169,6 @@ fn round_to_u8(x: f64) -> u8 {
     x.clamp(0.0, 255.0).round() as u8
 }
 
-// Pillow's bicubic resize rounds after the horizontal pass. Matching that keeps Gemma4 much
-// closer to HF than image::resize_exact(FilterType::CatmullRom).
 fn resize_rgb_bicubic(
     image: &image::RgbImage,
     new_width: usize,
@@ -221,6 +219,7 @@ fn resize_rgb_bicubic(
     image::RgbImage::from_raw(new_width as u32, new_height as u32, output).unwrap()
 }
 
+// Gemma4-style preprocessing: aspect-ratio-preserving resize, [0, 1] pixels, then patchify.
 pub fn load_and_patchify_image(
     image_path: &Path,
     patch_size: usize,
@@ -298,6 +297,7 @@ pub fn cache_path_for_embeddings(
     PathBuf::from(cache_dir).join(filename)
 }
 
+// Load cached image embeddings from a file to speed up processing.
 pub fn load_cached_embeddings(path: &Path) -> Result<Vec<f32>> {
     let mut bytes = Vec::new();
     File::open(path)?.read_to_end(&mut bytes)?;
@@ -310,6 +310,7 @@ pub fn load_cached_embeddings(path: &Path) -> Result<Vec<f32>> {
         .collect())
 }
 
+// Save image embeddings to a cache file for future use.
 pub fn save_cached_embeddings(path: &Path, data: &[f32]) -> Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
