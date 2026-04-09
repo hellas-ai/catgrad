@@ -1,4 +1,5 @@
 use crate::{Result, types};
+use chrono::Local;
 use minijinja::{Environment, Value, context};
 use minijinja_contrib::pycompat::unknown_method_callback;
 use serde_json::{Map as JsonMap, Value as JsonValue};
@@ -80,26 +81,60 @@ fn render_chat_prompt(
     tokenizer_config: &JsonValue,
     messages: &[types::Message],
 ) -> Result<String> {
-    let mut env = Environment::new();
-    env.set_unknown_method_callback(unknown_method_callback);
-    env.add_template("chat", chat_template)?;
-    let tmpl = env.get_template("chat")?;
-    let message_context: Vec<_> = messages
+    let messages: Vec<_> = messages
         .iter()
         .map(message_to_template_context)
         .collect::<Result<_>>()?;
+    render_chat_messages(chat_template, tokenizer_config, messages, false)
+}
+
+fn strftime_now(format_str: String) -> String {
+    Local::now().format(&format_str).to_string()
+}
+
+fn render_chat_messages(
+    chat_template: &str,
+    tokenizer_config: &JsonValue,
+    messages: Vec<Value>,
+    enable_thinking: bool,
+) -> Result<String> {
+    let mut env = Environment::new();
+    env.set_unknown_method_callback(unknown_method_callback);
+    env.add_function("strftime_now", strftime_now);
+    env.add_template("chat", chat_template)?;
+    let tmpl = env.get_template("chat")?;
     let bos_token = tokenizer_config
         .get("bos_token")
         .and_then(JsonValue::as_str)
         .unwrap_or("");
     let prompt = tmpl.render(context!(
-        messages => message_context,
+        messages => messages,
         add_generation_prompt => true,
-        enable_thinking => false,
+        enable_thinking => enable_thinking,
         bos_token => bos_token
     ))?;
 
     Ok(prompt)
+}
+
+// Used by the llm example app, clean up
+pub fn render_chat_template(
+    chat_template: &str,
+    tokenizer_config: &serde_json::Value,
+    prompt: &str,
+    has_image: bool,
+    enable_thinking: bool,
+) -> Result<String> {
+    let messages = if has_image {
+        let content = vec![
+            context!(type => "text", text => prompt),
+            context!(type => "image"),
+        ];
+        vec![context!(role => "user",content => content)]
+    } else {
+        vec![context!(role => "user",content => prompt)]
+    };
+    render_chat_messages(chat_template, tokenizer_config, messages, enable_thinking)
 }
 
 // HF chat templates generally expect message.content to be a plain string.

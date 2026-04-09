@@ -14,8 +14,9 @@ use crate::{LLMError, Result};
 
 mod detokenize;
 pub use detokenize::{Detokenizer, detokenize_tokens};
+
 mod prompt;
-pub use prompt::PreparedPrompt;
+pub use prompt::{PreparedPrompt, render_chat_template};
 
 mod images;
 pub use images::*;
@@ -118,47 +119,6 @@ pub fn get_model_chat_template(model: &str, revision: &str) -> Result<String> {
             ))?
             .to_string())
     }
-}
-
-use chrono::Local;
-use minijinja::{Environment, context};
-use minijinja_contrib::pycompat::unknown_method_callback;
-
-fn strftime_now(format_str: String) -> String {
-    Local::now().format(&format_str).to_string()
-}
-
-pub fn render_chat_template(
-    chat_template: &str,
-    tokenizer_config: &serde_json::Value,
-    prompt: &str,
-    has_image: bool,
-    enable_thinking: bool,
-) -> Result<String, minijinja::Error> {
-    let mut env = Environment::new();
-    env.set_unknown_method_callback(unknown_method_callback);
-    env.add_function("strftime_now", strftime_now);
-    env.add_template("chat", chat_template)?;
-    let tmpl = env.get_template("chat")?;
-    let bos_token = tokenizer_config
-        .get("bos_token")
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or("");
-    let messages = if has_image {
-        let content = vec![
-            context!(type => "text", text => prompt),
-            context!(type => "image"),
-        ];
-        vec![context!(role => "user",content => content)]
-    } else {
-        vec![context!(role => "user",content => prompt)]
-    };
-    tmpl.render(context!(
-        messages => messages,
-        add_generation_prompt => true,
-        enable_thinking => enable_thinking,
-        bos_token => bos_token
-    ))
 }
 
 #[derive(Debug, Clone)]
