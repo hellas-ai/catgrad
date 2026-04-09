@@ -154,26 +154,35 @@ pub fn prepare_multimodal_input(
     let Some(image_path) = image_path else {
         return Ok(PreparedMultimodalInput::default());
     };
+    let image = load_image(image_path)?;
+    prepare_multimodal_input_from_image(config_json, Some(&image))
+}
+
+fn prepare_multimodal_input_from_image(
+    config_json: &serde_json::Value,
+    image: Option<&image::DynamicImage>,
+) -> Result<PreparedMultimodalInput> {
+    let Some(image) = image else {
+        return Ok(PreparedMultimodalInput::default());
+    };
 
     match get_model_architecture(config_json)? {
         "Gemma3ForConditionalGeneration" | "PaliGemmaForConditionalGeneration" => {
-            let (data, shape) =
-                models::gemma3::prepare_gemma3_image_input(image_path, config_json)?;
+            let (data, shape) = models::gemma3::prepare_gemma3_image_input(image, config_json)?;
             Ok(PreparedMultimodalInput {
                 image: Some(PreparedImageInput { data, shape }),
                 runtime_context: None,
             })
         }
         "SmolVLMForConditionalGeneration" => {
-            let (data, shape) =
-                models::smolvlm2::prepare_smolvlm2_image_input(image_path, config_json)?;
+            let (data, shape) = models::smolvlm2::prepare_smolvlm2_image_input(image, config_json)?;
             Ok(PreparedMultimodalInput {
                 image: Some(PreparedImageInput { data, shape }),
                 runtime_context: None,
             })
         }
         "Qwen3_5ForConditionalGeneration" => {
-            let prepared = models::qwen3_5::prepare_qwen3_5_image_input(image_path, config_json)?;
+            let prepared = models::qwen3_5::prepare_qwen3_5_image_input(image, config_json)?;
             Ok(PreparedMultimodalInput {
                 image: Some(PreparedImageInput {
                     data: prepared.pixels,
@@ -183,7 +192,7 @@ pub fn prepare_multimodal_input(
             })
         }
         "Gemma4ForConditionalGeneration" => {
-            let prepared = models::gemma4::prepare_gemma4_image_input(image_path, config_json)?;
+            let prepared = models::gemma4::prepare_gemma4_image_input(image, config_json)?;
             Ok(PreparedMultimodalInput {
                 image: Some(PreparedImageInput {
                     data: prepared.patches,

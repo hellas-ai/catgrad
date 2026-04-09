@@ -16,10 +16,20 @@ pub fn load_and_preprocess_image(
     image_size: usize,
     patch_size: usize,
 ) -> Result<(Vec<f32>, Vec<usize>)> {
-    let num_channels = 3;
+    let img = load_image(image_path)?;
+    load_and_preprocess_dynamic_image(&img, image_size, patch_size)
+}
 
-    let img =
-        image::open(image_path).map_err(|err| LLMError::IoError(std::io::Error::other(err)))?;
+pub fn load_image(image_path: &Path) -> Result<image::DynamicImage> {
+    image::open(image_path).map_err(|err| LLMError::IoError(std::io::Error::other(err)))
+}
+
+pub fn load_and_preprocess_dynamic_image(
+    img: &image::DynamicImage,
+    image_size: usize,
+    patch_size: usize,
+) -> Result<(Vec<f32>, Vec<usize>)> {
+    let num_channels = 3;
     let resized_img = img.resize_to_fill(
         image_size as u32,
         image_size as u32,
@@ -226,8 +236,16 @@ pub fn load_and_patchify_image(
     max_soft_tokens: usize,
     pooling_kernel_size: usize,
 ) -> Result<PatchedImageInput> {
-    let img =
-        image::open(image_path).map_err(|err| LLMError::IoError(std::io::Error::other(err)))?;
+    let img = load_image(image_path)?;
+    load_and_patchify_dynamic_image(&img, patch_size, max_soft_tokens, pooling_kernel_size)
+}
+
+pub fn load_and_patchify_dynamic_image(
+    img: &image::DynamicImage,
+    patch_size: usize,
+    max_soft_tokens: usize,
+    pooling_kernel_size: usize,
+) -> Result<PatchedImageInput> {
     let (width, height) = (img.width() as usize, img.height() as usize);
     let (target_height, target_width) = get_aspect_ratio_preserving_size(
         height,
