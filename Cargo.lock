@@ -437,6 +437,8 @@ dependencies = [
  "tokenizers 0.21.4",
  "toml",
  "typed-builder",
+ "ureq",
+ "url",
 ]
 
 [[package]]

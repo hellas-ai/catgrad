@@ -30,6 +30,8 @@ chrono = "0.4.41"
 typed-builder = "0.23"
 serde_with = { version = "3.17", default-features = false, features = ["macros"] }
 serde_path_to_error = "0.1"
+ureq = "2.12.1"
+url = "2.5.7"
 
 
 [dev-dependencies]
