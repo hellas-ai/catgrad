@@ -73,8 +73,10 @@ pub struct Qwen3_5PreparedImageInput {
     pub runtime_vision: Qwen3_5RuntimeVisionConfig,
 }
 
-const QWEN3_5_IMAGE_MIN_PIXELS: usize = 65_536;
-const QWEN3_5_IMAGE_MAX_PIXELS: usize = 16_777_216;
+// Qwen's full theoretical range reaches 4-16384 visual tokens per image, but the
+// recommended practical range for inference is 256-1280 to avoid excessive memory use.
+const QWEN3_5_IMAGE_MIN_PIXELS: usize = 256 * 32 * 32;
+const QWEN3_5_IMAGE_MAX_PIXELS: usize = 1280 * 32 * 32;
 const QWEN3_5_IMAGE_PATCH_SIZE: usize = 16;
 const QWEN3_5_IMAGE_TEMPORAL_PATCH_SIZE: usize = 2;
 const QWEN3_5_IMAGE_MERGE_SIZE: usize = 2;
