@@ -24,6 +24,11 @@ pub fn load_image(image_path: &Path) -> Result<image::DynamicImage> {
     image::open(image_path).map_err(|err| LLMError::IoError(std::io::Error::other(err)))
 }
 
+pub fn load_image_from_bytes(image_bytes: &[u8]) -> Result<image::DynamicImage> {
+    image::load_from_memory(image_bytes)
+        .map_err(|err| LLMError::IoError(std::io::Error::other(err)))
+}
+
 pub fn load_and_preprocess_dynamic_image(
     img: &image::DynamicImage,
     image_size: usize,

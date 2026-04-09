@@ -16,6 +16,7 @@ mod detokenize;
 pub use detokenize::{Detokenizer, detokenize_tokens};
 
 mod prompt;
+pub(crate) use prompt::render_chat_prompt;
 pub use prompt::{PreparedPrompt, render_chat_template};
 
 mod images;
@@ -158,6 +159,14 @@ pub fn prepare_multimodal_input(
     prepare_multimodal_input_from_image(config_json, Some(&image))
 }
 
+pub fn prepare_multimodal_input_from_bytes(
+    config_json: &serde_json::Value,
+    image_bytes: &[u8],
+) -> Result<PreparedMultimodalInput> {
+    let image = load_image_from_bytes(image_bytes)?;
+    prepare_multimodal_input_from_image(config_json, Some(&image))
+}
+
 fn prepare_multimodal_input_from_image(
     config_json: &serde_json::Value,
     image: Option<&image::DynamicImage>,
@@ -234,6 +243,31 @@ pub fn interpolate_multimodal_prompt(
     interpolated.ok_or(LLMError::InvalidModelConfig(format!(
         "Model architecture {arch} did not provide multimodal prompt interpolation"
     )))
+}
+
+/// Split a multimodal token sequence into the text before and after the image-token span.
+pub fn split_image_tokens(
+    input_tokens: &[u32],
+    image_token_index: usize,
+) -> Result<(&[u32], &[u32])> {
+    let image_token = image_token_index as u32;
+    let first_image_token_index = input_tokens
+        .iter()
+        .position(|&token| token == image_token)
+        .ok_or_else(|| {
+            LLMError::InvalidModelConfig(format!(
+                "multimodal prompt is missing image token {image_token_index}"
+            ))
+        })?;
+    let last_image_token_index = input_tokens
+        .iter()
+        .rposition(|&token| token == image_token)
+        .expect("first image token implies last image token");
+
+    Ok((
+        &input_tokens[..first_image_token_index],
+        &input_tokens[last_image_token_index + 1..],
+    ))
 }
 
 pub fn get_model(

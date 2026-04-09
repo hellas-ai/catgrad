@@ -17,6 +17,13 @@ pub enum MessageContent {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ContentPart {
     Text { text: String },
+    ImageUrl { image_url: ImageUrl },
+}
+
+/// Image payload for OpenAI-style image_url content parts.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ImageUrl {
+    pub url: String,
 }
 
 /// Chat message.
@@ -184,6 +191,7 @@ mod tests {
 
         let parts: MessageContent = serde_json::from_value(json!([
             {"type":"text", "text":"A"},
+            {"type":"image_url", "image_url":{"url":"https://example.com/cat.png","detail":"high"}},
             {"type":"text", "text":"B"}
         ]))
         .unwrap();
@@ -192,6 +200,11 @@ mod tests {
             MessageContent::Parts(vec![
                 ContentPart::Text {
                     text: "A".to_string()
+                },
+                ContentPart::ImageUrl {
+                    image_url: ImageUrl {
+                        url: "https://example.com/cat.png".to_string(),
+                    },
                 },
                 ContentPart::Text {
                     text: "B".to_string()
@@ -225,6 +238,7 @@ mod tests {
                     "role": "user",
                     "content": [
                         {"type":"text","text":"Describe this image"},
+                        {"type":"image_url","image_url":{"url":"file:///tmp/cat.png","detail":"low"}},
                         {"type":"text","text":" in one sentence"}
                     ],
                     "tool_call_id": "call_1",
@@ -272,6 +286,11 @@ mod tests {
                         .content(Some(MessageContent::Parts(vec![
                             ContentPart::Text {
                                 text: "Describe this image".to_string(),
+                            },
+                            ContentPart::ImageUrl {
+                                image_url: ImageUrl {
+                                    url: "file:///tmp/cat.png".to_string(),
+                                },
                             },
                             ContentPart::Text {
                                 text: " in one sentence".to_string(),
