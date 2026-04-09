@@ -1,12 +1,11 @@
 #![allow(clippy::too_many_arguments)]
 use crate::config::{EosTokenId, LLMConfig};
 use crate::helpers::*;
-use crate::utils::load_and_patchify_image;
+use crate::utils::load_and_patchify_dynamic_image;
 use catgrad::prelude::ops::*;
 use catgrad::prelude::*;
 use nn::*;
 use serde::{Deserialize, Serialize};
-use std::path::Path as FsPath;
 
 #[derive(Debug, Clone, Deserialize)]
 struct Gemma4Config {
@@ -180,7 +179,7 @@ impl LLMConfig for Gemma4TextConfig {
 }
 
 pub fn prepare_gemma4_image_input(
-    image_path: &FsPath,
+    image: &image::DynamicImage,
     config_json: &serde_json::Value,
 ) -> crate::Result<Gemma4PreparedImageInput> {
     let config: Gemma4Config = serde_json::from_value(config_json.clone())?;
@@ -192,8 +191,8 @@ pub fn prepare_gemma4_image_input(
             "gemma4 missing vision_soft_tokens_per_image".to_string(),
         )
     })?;
-    let patched = load_and_patchify_image(
-        image_path,
+    let patched = load_and_patchify_dynamic_image(
+        image,
         vision_config.patch_size,
         max_soft_tokens,
         vision_config.pooling_kernel_size,

@@ -1,14 +1,17 @@
+use super::PreparedMultimodalInput;
 use crate::{Result, types};
+use chrono::Local;
 use minijinja::{Environment, Value, context};
 use minijinja_contrib::pycompat::unknown_method_callback;
 use serde_json::{Map as JsonMap, Value as JsonValue};
 use tokenizers::tokenizer::Tokenizer;
 
 /// Tokenized model input and its stop tokens.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct PreparedPrompt {
     pub input_ids: Vec<i32>,
     pub stop_token_ids: Vec<i32>,
+    pub multimodal: PreparedMultimodalInput,
 }
 
 impl PreparedPrompt {
@@ -17,6 +20,7 @@ impl PreparedPrompt {
         Self {
             input_ids,
             stop_token_ids,
+            multimodal: PreparedMultimodalInput::default(),
         }
     }
 
@@ -50,13 +54,24 @@ pub(crate) fn message_to_template_context(message: &types::Message) -> Result<Va
 
     match message {
         types::Message::OpenAI(msg) => {
+            let content_blocks = match msg.content.as_ref() {
+                Some(content) => openai_content_to_template_blocks(content),
+                None => Vec::new(),
+            };
             map.insert("role".to_string(), JsonValue::String(msg.role.clone()));
             map.insert(
                 "content".to_string(),
-                JsonValue::String(match msg.content.as_ref() {
-                    Some(content) => openai_content_to_template_string(content)?,
-                    None => String::new(),
-                }),
+                match msg.content.as_ref() {
+                    Some(_) if openai_blocks_include_image(&content_blocks) => {
+                        JsonValue::Array(content_blocks.clone())
+                    }
+                    Some(content) => JsonValue::String(openai_content_to_template_string(content)?),
+                    None => JsonValue::String(String::new()),
+                },
+            );
+            map.insert(
+                "content_blocks".to_string(),
+                JsonValue::Array(content_blocks),
             );
         }
         types::Message::Anthropic(msg) => {
@@ -75,31 +90,65 @@ pub(crate) fn message_to_template_context(message: &types::Message) -> Result<Va
     Ok(Value::from_serialize(map))
 }
 
-fn render_chat_prompt(
+pub(crate) fn render_chat_prompt(
     chat_template: &str,
     tokenizer_config: &JsonValue,
     messages: &[types::Message],
 ) -> Result<String> {
-    let mut env = Environment::new();
-    env.set_unknown_method_callback(unknown_method_callback);
-    env.add_template("chat", chat_template)?;
-    let tmpl = env.get_template("chat")?;
-    let message_context: Vec<_> = messages
+    let messages: Vec<_> = messages
         .iter()
         .map(message_to_template_context)
         .collect::<Result<_>>()?;
+    render_chat_messages(chat_template, tokenizer_config, messages, false)
+}
+
+fn strftime_now(format_str: String) -> String {
+    Local::now().format(&format_str).to_string()
+}
+
+fn render_chat_messages(
+    chat_template: &str,
+    tokenizer_config: &JsonValue,
+    messages: Vec<Value>,
+    enable_thinking: bool,
+) -> Result<String> {
+    let mut env = Environment::new();
+    env.set_unknown_method_callback(unknown_method_callback);
+    env.add_function("strftime_now", strftime_now);
+    env.add_template("chat", chat_template)?;
+    let tmpl = env.get_template("chat")?;
     let bos_token = tokenizer_config
         .get("bos_token")
         .and_then(JsonValue::as_str)
         .unwrap_or("");
     let prompt = tmpl.render(context!(
-        messages => message_context,
+        messages => messages,
         add_generation_prompt => true,
-        enable_thinking => false,
+        enable_thinking => enable_thinking,
         bos_token => bos_token
     ))?;
 
     Ok(prompt)
+}
+
+// Used by the llm example app, clean up
+pub fn render_chat_template(
+    chat_template: &str,
+    tokenizer_config: &serde_json::Value,
+    prompt: &str,
+    has_image: bool,
+    enable_thinking: bool,
+) -> Result<String> {
+    let messages = if has_image {
+        let content = vec![
+            context!(type => "text", text => prompt),
+            context!(type => "image"),
+        ];
+        vec![context!(role => "user",content => content)]
+    } else {
+        vec![context!(role => "user",content => prompt)]
+    };
+    render_chat_messages(chat_template, tokenizer_config, messages, enable_thinking)
 }
 
 // HF chat templates generally expect message.content to be a plain string.
@@ -112,11 +161,49 @@ fn openai_content_to_template_string(content: &types::openai::MessageContent) ->
             for part in parts {
                 match part {
                     types::openai::ContentPart::Text { text } => out.push_str(text),
+                    types::openai::ContentPart::ImageUrl { .. } => {}
                 }
             }
             Ok(out)
         }
     }
+}
+
+fn openai_content_to_template_blocks(content: &types::openai::MessageContent) -> Vec<JsonValue> {
+    match content {
+        types::openai::MessageContent::Text(text) => {
+            vec![JsonValue::Object(JsonMap::from_iter([
+                ("type".to_string(), JsonValue::String("text".to_string())),
+                ("text".to_string(), JsonValue::String(text.clone())),
+            ]))]
+        }
+        types::openai::MessageContent::Parts(parts) => parts
+            .iter()
+            .map(|part| match part {
+                types::openai::ContentPart::Text { text } => {
+                    JsonValue::Object(JsonMap::from_iter([
+                        ("type".to_string(), JsonValue::String("text".to_string())),
+                        ("text".to_string(), JsonValue::String(text.clone())),
+                    ]))
+                }
+                types::openai::ContentPart::ImageUrl { .. } => {
+                    JsonValue::Object(JsonMap::from_iter([(
+                        "type".to_string(),
+                        JsonValue::String("image".to_string()),
+                    )]))
+                }
+            })
+            .collect(),
+    }
+}
+
+fn openai_blocks_include_image(blocks: &[JsonValue]) -> bool {
+    blocks.iter().any(|block| {
+        block
+            .get("type")
+            .and_then(JsonValue::as_str)
+            .is_some_and(|kind| kind == "image")
+    })
 }
 
 fn anthropic_content_to_template_string(
@@ -172,6 +259,11 @@ mod tests {
         let content = types::openai::MessageContent::Parts(vec![
             types::openai::ContentPart::Text {
                 text: "hello".to_string(),
+            },
+            types::openai::ContentPart::ImageUrl {
+                image_url: types::openai::ImageUrl {
+                    url: "https://example.com/cat.png".to_string(),
+                },
             },
             types::openai::ContentPart::Text {
                 text: " world".to_string(),

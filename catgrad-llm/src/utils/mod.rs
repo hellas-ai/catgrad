@@ -14,8 +14,10 @@ use crate::{LLMError, Result};
 
 mod detokenize;
 pub use detokenize::{Detokenizer, detokenize_tokens};
+
 mod prompt;
-pub use prompt::PreparedPrompt;
+pub(crate) use prompt::render_chat_prompt;
+pub use prompt::{PreparedPrompt, render_chat_template};
 
 mod images;
 pub use images::*;
@@ -120,47 +122,6 @@ pub fn get_model_chat_template(model: &str, revision: &str) -> Result<String> {
     }
 }
 
-use chrono::Local;
-use minijinja::{Environment, context};
-use minijinja_contrib::pycompat::unknown_method_callback;
-
-fn strftime_now(format_str: String) -> String {
-    Local::now().format(&format_str).to_string()
-}
-
-pub fn render_chat_template(
-    chat_template: &str,
-    tokenizer_config: &serde_json::Value,
-    prompt: &str,
-    has_image: bool,
-    enable_thinking: bool,
-) -> Result<String, minijinja::Error> {
-    let mut env = Environment::new();
-    env.set_unknown_method_callback(unknown_method_callback);
-    env.add_function("strftime_now", strftime_now);
-    env.add_template("chat", chat_template)?;
-    let tmpl = env.get_template("chat")?;
-    let bos_token = tokenizer_config
-        .get("bos_token")
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or("");
-    let messages = if has_image {
-        let content = vec![
-            context!(type => "text", text => prompt),
-            context!(type => "image"),
-        ];
-        vec![context!(role => "user",content => content)]
-    } else {
-        vec![context!(role => "user",content => prompt)]
-    };
-    tmpl.render(context!(
-        messages => messages,
-        add_generation_prompt => true,
-        enable_thinking => enable_thinking,
-        bos_token => bos_token
-    ))
-}
-
 #[derive(Debug, Clone)]
 pub struct PreparedImageInput {
     pub data: Vec<f32>,
@@ -194,26 +155,43 @@ pub fn prepare_multimodal_input(
     let Some(image_path) = image_path else {
         return Ok(PreparedMultimodalInput::default());
     };
+    let image = load_image(image_path)?;
+    prepare_multimodal_input_from_image(config_json, Some(&image))
+}
+
+pub fn prepare_multimodal_input_from_bytes(
+    config_json: &serde_json::Value,
+    image_bytes: &[u8],
+) -> Result<PreparedMultimodalInput> {
+    let image = load_image_from_bytes(image_bytes)?;
+    prepare_multimodal_input_from_image(config_json, Some(&image))
+}
+
+fn prepare_multimodal_input_from_image(
+    config_json: &serde_json::Value,
+    image: Option<&image::DynamicImage>,
+) -> Result<PreparedMultimodalInput> {
+    let Some(image) = image else {
+        return Ok(PreparedMultimodalInput::default());
+    };
 
     match get_model_architecture(config_json)? {
         "Gemma3ForConditionalGeneration" | "PaliGemmaForConditionalGeneration" => {
-            let (data, shape) =
-                models::gemma3::prepare_gemma3_image_input(image_path, config_json)?;
+            let (data, shape) = models::gemma3::prepare_gemma3_image_input(image, config_json)?;
             Ok(PreparedMultimodalInput {
                 image: Some(PreparedImageInput { data, shape }),
                 runtime_context: None,
             })
         }
         "SmolVLMForConditionalGeneration" => {
-            let (data, shape) =
-                models::smolvlm2::prepare_smolvlm2_image_input(image_path, config_json)?;
+            let (data, shape) = models::smolvlm2::prepare_smolvlm2_image_input(image, config_json)?;
             Ok(PreparedMultimodalInput {
                 image: Some(PreparedImageInput { data, shape }),
                 runtime_context: None,
             })
         }
         "Qwen3_5ForConditionalGeneration" => {
-            let prepared = models::qwen3_5::prepare_qwen3_5_image_input(image_path, config_json)?;
+            let prepared = models::qwen3_5::prepare_qwen3_5_image_input(image, config_json)?;
             Ok(PreparedMultimodalInput {
                 image: Some(PreparedImageInput {
                     data: prepared.pixels,
@@ -223,7 +201,7 @@ pub fn prepare_multimodal_input(
             })
         }
         "Gemma4ForConditionalGeneration" => {
-            let prepared = models::gemma4::prepare_gemma4_image_input(image_path, config_json)?;
+            let prepared = models::gemma4::prepare_gemma4_image_input(image, config_json)?;
             Ok(PreparedMultimodalInput {
                 image: Some(PreparedImageInput {
                     data: prepared.patches,
@@ -265,6 +243,31 @@ pub fn interpolate_multimodal_prompt(
     interpolated.ok_or(LLMError::InvalidModelConfig(format!(
         "Model architecture {arch} did not provide multimodal prompt interpolation"
     )))
+}
+
+/// Split a multimodal token sequence into the text before and after the image-token span.
+pub fn split_image_tokens(
+    input_tokens: &[u32],
+    image_token_index: usize,
+) -> Result<(&[u32], &[u32])> {
+    let image_token = image_token_index as u32;
+    let first_image_token_index = input_tokens
+        .iter()
+        .position(|&token| token == image_token)
+        .ok_or_else(|| {
+            LLMError::InvalidModelConfig(format!(
+                "multimodal prompt is missing image token {image_token_index}"
+            ))
+        })?;
+    let last_image_token_index = input_tokens
+        .iter()
+        .rposition(|&token| token == image_token)
+        .expect("first image token implies last image token");
+
+    Ok((
+        &input_tokens[..first_image_token_index],
+        &input_tokens[last_image_token_index + 1..],
+    ))
 }
 
 pub fn get_model(

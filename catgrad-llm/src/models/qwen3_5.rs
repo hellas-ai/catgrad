@@ -5,7 +5,6 @@ use catgrad::prelude::ops::*;
 use catgrad::prelude::*;
 use nn::*;
 use serde::{Deserialize, Serialize};
-use std::path::Path as FsPath;
 
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct Qwen3_5Config {
@@ -74,8 +73,10 @@ pub struct Qwen3_5PreparedImageInput {
     pub runtime_vision: Qwen3_5RuntimeVisionConfig,
 }
 
-const QWEN3_5_IMAGE_MIN_PIXELS: usize = 65_536;
-const QWEN3_5_IMAGE_MAX_PIXELS: usize = 16_777_216;
+// Qwen's full theoretical range reaches 4-16384 visual tokens per image, but the
+// recommended practical range for inference is 256-1280 to avoid excessive memory use.
+const QWEN3_5_IMAGE_MIN_PIXELS: usize = 256 * 32 * 32;
+const QWEN3_5_IMAGE_MAX_PIXELS: usize = 1280 * 32 * 32;
 const QWEN3_5_IMAGE_PATCH_SIZE: usize = 16;
 const QWEN3_5_IMAGE_TEMPORAL_PATCH_SIZE: usize = 2;
 const QWEN3_5_IMAGE_MERGE_SIZE: usize = 2;
@@ -150,7 +151,7 @@ fn qwen3_5_smart_resize(
 }
 
 pub fn prepare_qwen3_5_image_input(
-    image_path: &FsPath,
+    image: &image::DynamicImage,
     config_json: &serde_json::Value,
 ) -> crate::Result<Qwen3_5PreparedImageInput> {
     let config: Qwen3_5Config = serde_json::from_value(config_json.clone())?;
@@ -178,9 +179,7 @@ pub fn prepare_qwen3_5_image_input(
         )));
     }
 
-    let img = image::open(image_path)
-        .map_err(|err| crate::LLMError::IoError(std::io::Error::other(err)))?;
-    let (width, height) = (img.width() as usize, img.height() as usize);
+    let (width, height) = (image.width() as usize, image.height() as usize);
     let factor = QWEN3_5_IMAGE_PATCH_SIZE * QWEN3_5_IMAGE_MERGE_SIZE;
     let (resized_height, resized_width) = qwen3_5_smart_resize(
         height,
@@ -189,7 +188,7 @@ pub fn prepare_qwen3_5_image_input(
         QWEN3_5_IMAGE_MIN_PIXELS,
         QWEN3_5_IMAGE_MAX_PIXELS,
     )?;
-    let resized = img.resize_exact(
+    let resized = image.resize_exact(
         resized_width as u32,
         resized_height as u32,
         image::imageops::FilterType::CatmullRom,
