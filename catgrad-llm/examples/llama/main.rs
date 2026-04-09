@@ -7,6 +7,7 @@ use catgrad_llm::utils::{
     cache_path_for_embeddings, empty_state_cache, get_model, get_model_chat_template,
     interpolate_multimodal_prompt, load_cached_embeddings, load_model, post_process_model_weights,
     prepare_multimodal_input, print_bench_table, render_chat_template, save_cached_embeddings,
+    split_image_tokens,
 };
 use clap::{Parser, ValueEnum};
 use serde::Deserialize;
@@ -486,28 +487,6 @@ fn token_tensor<B: interpreter::Backend>(
         input_tokens.to_vec(),
     )
     .map_err(|err| anyhow::anyhow!("{label} tensor error: {:?}", err))
-}
-
-fn split_image_tokens(input_tokens: &[u32], image_token_index: usize) -> Result<(&[u32], &[u32])> {
-    let image_token = image_token_index as u32;
-    let first_image_token_index = input_tokens
-        .iter()
-        .position(|&token| token == image_token)
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "multimodal prompt is missing image token {}",
-                image_token_index
-            )
-        })?;
-    let last_image_token_index = input_tokens
-        .iter()
-        .rposition(|&token| token == image_token)
-        .expect("first image token implies last image token");
-
-    Ok((
-        &input_tokens[..first_image_token_index],
-        &input_tokens[last_image_token_index + 1..],
-    ))
 }
 
 fn run_interpreter<B: interpreter::Backend>(
