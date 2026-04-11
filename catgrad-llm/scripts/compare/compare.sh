@@ -25,10 +25,11 @@ if [[ -z "${GITHUB_ACTIONS:-}" ]]; then
 fi
 
 DIR=$(dirname "$0")
-REFERENCE_DIR="$DIR/expected"
 
 MAXLEN="${CATGRAD_COMPARE_MAXLEN:-40}"
+REFERENCE_DIR=$DIR/expected/$MAXLEN
 OUTPUT_DIR=$DIR/outputs/$MAXLEN
+
 mkdir -p "$OUTPUT_DIR"
 rm -rf "$OUTPUT_DIR"/*
 
@@ -37,7 +38,6 @@ IMAGE=catgrad-llm/scripts/compare/images/cats.png
 echo "Generating outputs of ${MAXLEN} tokens for ${#MODELS[@]} models..."
 
 if [[ "${CATGRAD_COMPARE_HF_RUN:-}" ]]; then
-    REFERENCE_DIR=$DIR/expected/$MAXLEN
     mkdir -p $REFERENCE_DIR
 
     for model in "${MODELS[@]}"; do
