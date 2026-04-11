@@ -21,14 +21,16 @@ if [[ -z "${GITHUB_ACTIONS:-}" ]]; then
         "meta-llama/Llama-3.2-1B-Instruct"
         "google/gemma-3-270m-it"
         "allenai/OLMo-2-0425-1B-Instruct"
+        "microsoft/Phi-4-mini-instruct"
     )
 fi
 
 DIR=$(dirname "$0")
-REFERENCE_DIR="$DIR/expected"
 
 MAXLEN="${CATGRAD_COMPARE_MAXLEN:-40}"
+REFERENCE_DIR=$DIR/expected/$MAXLEN
 OUTPUT_DIR=$DIR/outputs/$MAXLEN
+
 mkdir -p "$OUTPUT_DIR"
 rm -rf "$OUTPUT_DIR"/*
 
@@ -37,7 +39,6 @@ IMAGE=catgrad-llm/scripts/compare/images/cats.png
 echo "Generating outputs of ${MAXLEN} tokens for ${#MODELS[@]} models..."
 
 if [[ "${CATGRAD_COMPARE_HF_RUN:-}" ]]; then
-    REFERENCE_DIR=$DIR/expected/$MAXLEN
     mkdir -p $REFERENCE_DIR
 
     for model in "${MODELS[@]}"; do
@@ -90,10 +91,15 @@ wait
 
 echo "Comparing $REFERENCE_DIR with $OUTPUT_DIR..."
 
-if diff -ur "$REFERENCE_DIR" "$OUTPUT_DIR"; then
-    echo "Success: All model outputs match."
-    exit 0
-else
-    echo "Failure: Differences found in model outputs."
-    exit 1
-fi
+for model in "${MODELS[@]}" "${MULTIMODAL_MODELS[@]}"; do
+    filename="${model//\//-}"
+
+    echo "Diffing $REFERENCE_DIR/$filename and $OUTPUT_DIR/$filename"
+
+    if ! diff -u "$REFERENCE_DIR/$filename" "$OUTPUT_DIR/$filename"; then
+        echo "Failure: Difference found for $model."
+        exit 1
+    fi
+done
+
+echo "Success: All model outputs match."

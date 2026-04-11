@@ -341,6 +341,25 @@ pub fn apply_rope_embedding(
     cos * x + sin * rotated_x
 }
 
+/// Apply RoPE to the rotary prefix of the head dimension and leave the tail unchanged.
+pub fn apply_rope_embedding_partial(
+    builder: &Builder,
+    pos: impl IntoNatVar,
+    rotary_dim: usize,
+    head_dim: usize,
+    cos: Var,
+    sin: Var,
+    x: Var,
+) -> Var {
+    if rotary_dim >= head_dim {
+        return apply_rope_embedding(builder, pos, head_dim, cos, sin, x);
+    }
+
+    let split = split(builder, 3, &[rotary_dim, head_dim - rotary_dim], x);
+    let x_rot = apply_rope_embedding(builder, pos, rotary_dim, cos, sin, split[0].clone());
+    concat(builder, 3, x_rot, split[1].clone())
+}
+
 /// Apply RoPE to an input tensor using arbitrary per-token positions.
 pub fn apply_rope_embedding_positions(
     builder: &Builder,
