@@ -18,6 +18,9 @@ struct Phi3Config {
     rms_norm_eps: f32,
     tie_word_embeddings: bool,
     vocab_size: usize,
+    max_position_embeddings: usize,
+    #[serde(default)]
+    original_max_position_embeddings: usize,
     rope_theta: f32,
     #[serde(default = "default_partial_rotary_factor")]
     partial_rotary_factor: f32,
@@ -52,6 +55,18 @@ impl LLMConfig for Phi3Config {
 
     fn partial_rotary_factor(&self) -> f32 {
         self.partial_rotary_factor
+    }
+
+    fn max_position_embeddings(&self) -> usize {
+        self.max_position_embeddings
+    }
+
+    fn original_max_position_embeddings(&self) -> usize {
+        if self.original_max_position_embeddings == 0 {
+            self.max_position_embeddings
+        } else {
+            self.original_max_position_embeddings
+        }
     }
 
     fn get_head_dim(&self) -> usize {
@@ -89,6 +104,20 @@ impl Phi3Model {
             p.extend([name, "base_layer"]).unwrap()
         } else {
             p.extend([name]).unwrap()
+        }
+    }
+
+    fn rotary_dim(&self) -> usize {
+        let head_dim = self.config.get_head_dim();
+        let mut rotary_dim = (head_dim as f32 * self.config.partial_rotary_factor()) as usize;
+        if rotary_dim == 0 || rotary_dim > head_dim {
+            rotary_dim = head_dim;
+        }
+        rotary_dim -= rotary_dim % 2;
+        if rotary_dim == 0 {
+            head_dim
+        } else {
+            rotary_dim
         }
     }
 
@@ -172,17 +201,20 @@ impl Phi3Model {
         let k = transpose(builder, 1, 2, k);
         let v = transpose(builder, 1, 2, v);
 
-        let q = apply_rope_embedding(
+        let rotary_dim = self.rotary_dim();
+        let q = apply_rope_embedding_partial(
             builder,
             pos.clone(),
+            rotary_dim,
             head_dim,
             cache.cos.clone(),
             cache.sin.clone(),
             q,
         );
-        let k = apply_rope_embedding(
+        let k = apply_rope_embedding_partial(
             builder,
             pos,
+            rotary_dim,
             head_dim,
             cache.cos.clone(),
             cache.sin.clone(),
@@ -261,8 +293,17 @@ impl DynModule for Phi3Model {
         let [x, in_k, in_v, max_positions]: [Var; 4] = args.try_into().expect("expected 4 inputs");
         let root = self.path();
 
-        let mut cache = Cache::init(builder, &self.config, max_positions, in_k.clone(), in_v);
-        let [_, _, _, pos, _] = unpack::<5>(builder, shape(builder, in_k));
+        let [_, input_seq_len] = unpack::<2>(builder, shape(builder, x.clone()));
+        let [_, _, _, pos, _] = unpack::<5>(builder, shape(builder, in_k.clone()));
+        let current_context_len = pos.clone() + input_seq_len;
+        let mut cache = Cache::init(
+            builder,
+            &self.config,
+            max_positions,
+            current_context_len,
+            in_k,
+            in_v,
+        );
 
         let mut x = embeddings(builder, root.extend(["model", "embed_tokens"]).unwrap(), x);
         let [_b, s, _] = unpack::<3>(builder, shape(builder, x.clone()));

@@ -196,7 +196,14 @@ impl DynModule for GPT2Model {
         let root = self.path();
 
         let [_, _, _, pos, _] = unpack::<5>(builder, shape(builder, in_k.clone()));
-        let mut cache = Cache::init(builder, &self.config, max_positions, in_k, in_v);
+        let mut cache = Cache::init(
+            builder,
+            &self.config,
+            max_positions.clone(),
+            max_positions,
+            in_k,
+            in_v,
+        );
         let mut x = self.embeddings(builder, root.clone(), pos.clone(), x);
         let [_b, s, _] = unpack::<3>(builder, shape(builder, x.clone()));
         let attention_mask = causal_mask(builder, s, pos);

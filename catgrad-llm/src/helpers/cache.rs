@@ -86,11 +86,12 @@ impl Cache {
     pub fn init(
         builder: &Builder,
         config: &dyn LLMConfig,
-        positions: impl IntoNatVar,
+        table_len: impl IntoNatVar,
+        current_context_len: impl IntoNatVar,
         in_k: Var,
         in_v: Var,
     ) -> Self {
-        let (cos, sin) = init_rope_tables(builder, config, positions);
+        let (cos, sin) = init_rope_tables(builder, config, table_len, current_context_len);
         let kv_cache = KVCache::init(builder, config.num_kv_layers(), in_k, in_v);
 
         Self {

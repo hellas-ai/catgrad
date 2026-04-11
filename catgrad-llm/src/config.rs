@@ -32,10 +32,17 @@ pub struct YarnRopeScaling {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+pub struct LongropeRopeScaling {
+    pub short_factor: Vec<f32>,
+    pub long_factor: Vec<f32>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
 #[serde(untagged)]
 pub enum RopeScaling {
     #[serde(alias = "llama3")]
     Llama3(Llama3RopeScaling),
+    Longrope(LongropeRopeScaling),
     #[serde(alias = "yarn")]
     Yarn(YarnRopeScaling),
 }
@@ -54,6 +61,12 @@ pub trait LLMConfig {
     }
     fn partial_rotary_factor(&self) -> f32 {
         1.0
+    }
+    fn max_position_embeddings(&self) -> usize {
+        0
+    }
+    fn original_max_position_embeddings(&self) -> usize {
+        self.max_position_embeddings()
     }
 
     fn get_head_dim(&self) -> usize;
