@@ -739,7 +739,14 @@ impl DynModule for OlmoModel {
         ]: [Var; 7] = args.try_into().expect("expected 7 inputs");
         let root = self.path();
 
-        let mut cache = Cache::init(builder, &self.config, max_positions, in_k.clone(), in_v);
+        let mut cache = Cache::init(
+            builder,
+            &self.config,
+            max_positions.clone(),
+            max_positions,
+            in_k.clone(),
+            in_v,
+        );
         cache.linear_cache = Some(
             (0..self.num_linear_layers)
                 .map(|layer_id| {

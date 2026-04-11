@@ -1,4 +1,6 @@
-use crate::config::{LLMConfig, Llama3RopeScaling, RopeScaling, YarnRopeScaling};
+use crate::config::{
+    LLMConfig, Llama3RopeScaling, LongropeRopeScaling, RopeScaling, YarnRopeScaling,
+};
 use crate::helpers::tensors::*;
 use catgrad::prelude::ops::*;
 use catgrad::prelude::*;
@@ -6,27 +8,53 @@ use catgrad::prelude::*;
 pub fn init_rope_tables(
     builder: &Builder,
     config: &dyn LLMConfig,
-    positions: impl IntoNatVar,
+    table_len: impl IntoNatVar,
+    current_context_len: impl IntoNatVar,
 ) -> (Var, Var) {
     match config.rope_scaling() {
         Some(RopeScaling::Yarn(params)) => rope_tables_yarn(
             builder,
             config.rope_theta(),
             &params,
-            positions,
+            table_len,
             config.get_head_dim(),
         ),
+        Some(RopeScaling::Longrope(params)) => {
+            let max_position_embeddings = config.max_position_embeddings();
+            let original_max_position_embeddings = config.original_max_position_embeddings();
+            let head_dim = config.get_head_dim();
+            let mut rotary_dim = (head_dim as f32 * config.partial_rotary_factor()) as usize;
+            if rotary_dim == 0 || rotary_dim > head_dim {
+                rotary_dim = head_dim;
+            }
+            rotary_dim -= rotary_dim % 2;
+            let rotary_dim = if rotary_dim == 0 {
+                head_dim
+            } else {
+                rotary_dim
+            };
+            rope_tables_longrope(
+                builder,
+                config.rope_theta(),
+                &params,
+                table_len.to_nat(builder),
+                current_context_len.to_nat(builder),
+                rotary_dim,
+                original_max_position_embeddings,
+                longrope_mscale(max_position_embeddings, original_max_position_embeddings),
+            )
+        }
         Some(RopeScaling::Llama3(params)) => rope_tables_llama3(
             builder,
             config.rope_theta(),
             &params,
-            positions,
+            table_len,
             config.get_head_dim(),
         ),
         _ => rope_tables_default(
             builder,
             config.rope_theta(),
-            positions,
+            table_len,
             ((config.get_head_dim() as f32) * config.partial_rotary_factor()) as usize,
             1.0,
         ),
@@ -115,6 +143,85 @@ pub fn rope_tables_proportional(
 
     let cos = cos(builder, pos.clone());
     let sin = sin(builder, pos);
+    (
+        concat(builder, 1, cos.clone(), cos),
+        concat(builder, 1, sin.clone(), sin),
+    )
+}
+
+pub(crate) fn longrope_mscale(
+    max_position_embeddings: usize,
+    original_max_position_embeddings: usize,
+) -> f32 {
+    let scale = (max_position_embeddings as f32) / (original_max_position_embeddings as f32);
+    if scale <= 1.0 {
+        1.0
+    } else {
+        (1.0 + scale.ln() / (original_max_position_embeddings as f32).ln()).sqrt()
+    }
+}
+
+fn constant_f32_vector(builder: &Builder, values: &[f32]) -> Var {
+    let mut values = values.iter();
+    let first = values
+        .next()
+        .copied()
+        .expect("constant_f32_vector requires at least one value");
+    let mut tensor = constant(builder, first, &shape!(builder, 1));
+    for value in values {
+        let next = constant(builder, *value, &shape!(builder, 1));
+        tensor = concat(builder, 0, tensor, next);
+    }
+    tensor
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn rope_tables_longrope(
+    builder: &Builder,
+    theta: f32,
+    rope_scaling: &LongropeRopeScaling,
+    table_len: Var,
+    current_context_len: Var,
+    head_dim: usize,
+    original_max_position_embeddings: usize,
+    mscale: f32,
+) -> (Var, Var) {
+    let half_dim = head_dim / 2;
+    let rope_angles = rope_scaling.short_factor.len();
+    let f = arange(builder, rope_angles);
+    let f = cast(builder, f, Dtype::F32);
+    let sh = shape(builder, f.clone());
+    let two = constant(builder, 2.0 / (head_dim as f32), &sh);
+    let theta = constant(builder, theta, &sh);
+    let freq = pow(builder, theta, f * two);
+    let inv_freq = inverse(builder, freq);
+
+    let short_factor = constant_f32_vector(builder, &rope_scaling.short_factor);
+    let long_factor = constant_f32_vector(builder, &rope_scaling.long_factor);
+    let use_long = gt(
+        builder,
+        nat_to_u32(builder, current_context_len),
+        lit(builder, original_max_position_embeddings as u32),
+    );
+    let factor = where_broadcast(builder, use_long, long_factor, short_factor);
+    let mut inv_freq = inv_freq / factor;
+    if rope_angles < half_dim {
+        let zeros = constant(builder, 0.0, &shape!(builder, half_dim - rope_angles));
+        inv_freq = concat(builder, 0, inv_freq, zeros);
+    }
+
+    let sh = shape!(builder, table_len, half_dim);
+    let inv_freq = broadcast(builder, sh.clone(), inv_freq);
+
+    let pos = arange(builder, table_len.clone());
+    let pos = cast(builder, pos, Dtype::F32);
+    let pos = reshape(builder, shape!(builder, table_len, 1), pos);
+    let pos = broadcast(builder, sh, pos);
+    let pos = pos * inv_freq;
+    let scale = constant(builder, mscale, &shape(builder, pos.clone()));
+    let cos = cos(builder, pos.clone()) * scale.clone();
+    let sin = sin(builder, pos) * scale;
+
     (
         concat(builder, 1, cos.clone(), cos),
         concat(builder, 1, sin.clone(), sin),

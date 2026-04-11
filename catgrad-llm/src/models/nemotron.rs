@@ -812,7 +812,14 @@ impl NemotronModel {
         in_ssm: Var,
         max_positions: Var,
     ) -> Cache {
-        let mut cache = Cache::init(builder, &self.config, max_positions, in_k, in_v);
+        let mut cache = Cache::init(
+            builder,
+            &self.config,
+            max_positions.clone(),
+            max_positions,
+            in_k,
+            in_v,
+        );
         cache.linear_cache = Some(
             (0..self.num_mamba_layers)
                 .map(|layer_id| {

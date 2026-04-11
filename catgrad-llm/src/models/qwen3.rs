@@ -375,7 +375,14 @@ impl DynModule for Qwen3Model {
         let [x, in_k, in_v, max_positions]: [Var; 4] = args.try_into().expect("expected 4 inputs");
         let root = self.path();
 
-        let mut cache = Cache::init(builder, &self.config, max_positions, in_k.clone(), in_v);
+        let mut cache = Cache::init(
+            builder,
+            &self.config,
+            max_positions.clone(),
+            max_positions,
+            in_k.clone(),
+            in_v,
+        );
         let [_, _, _, cache_len, _] = unpack::<5>(builder, shape(builder, in_k));
 
         let mut x = embeddings(builder, root.extend(["model", "embed_tokens"]).unwrap(), x);

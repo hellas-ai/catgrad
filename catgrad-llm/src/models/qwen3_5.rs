@@ -1370,7 +1370,14 @@ impl Qwen3_5Model {
         in_recurrent: Var,
         max_positions: Var,
     ) -> Cache {
-        let mut cache = Cache::init(builder, &self.config, max_positions, in_k, in_v);
+        let mut cache = Cache::init(
+            builder,
+            &self.config,
+            max_positions.clone(),
+            max_positions,
+            in_k,
+            in_v,
+        );
         cache.linear_cache = Some(
             (0..self.num_linear_layers)
                 .map(|layer_id| {

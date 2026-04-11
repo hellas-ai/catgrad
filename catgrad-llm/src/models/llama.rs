@@ -142,7 +142,14 @@ impl LlamaModel {
         max_positions: Var,
     ) -> Vec<Var> {
         let transformer_root = p.extend(self.model_root.split('.')).unwrap();
-        let mut cache = Cache::init(builder, &self.config, max_positions, in_k.clone(), in_v);
+        let mut cache = Cache::init(
+            builder,
+            &self.config,
+            max_positions.clone(),
+            max_positions,
+            in_k.clone(),
+            in_v,
+        );
         let [_, _, _, pos, _] = unpack::<5>(builder, shape(builder, in_k));
 
         let mut x = x;

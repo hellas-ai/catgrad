@@ -485,7 +485,14 @@ impl DynModule for Lfm2Model {
             args.try_into().expect("expected 5 inputs");
         let root = self.path();
 
-        let mut cache = Cache::init(builder, &self.config, max_positions, in_k.clone(), in_v);
+        let mut cache = Cache::init(
+            builder,
+            &self.config,
+            max_positions.clone(),
+            max_positions,
+            in_k.clone(),
+            in_v,
+        );
 
         // initialize linear cache (slot 0 = conv state)
         cache.linear_cache = Some(
