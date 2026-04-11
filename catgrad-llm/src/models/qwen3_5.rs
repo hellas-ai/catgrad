@@ -794,29 +794,15 @@ impl Qwen3_5Model {
 
         // Full Qwen3.5 mRoPE interleaving uses 3D position IDs (T/H/W). In this text-only path,
         // all axes collapse to the same scalar position so partial RoPE is equivalent here.
-        if rotary_dim >= head_dim {
-            return apply_rope_embedding(
-                builder,
-                pos,
-                head_dim,
-                cache.cos.clone(),
-                cache.sin.clone(),
-                x,
-            );
-        }
-
-        let split = split(builder, 3, &[rotary_dim, head_dim - rotary_dim], x);
-        let x_rot = split[0].clone();
-        let x_pass = split[1].clone();
-        let x_rot = apply_rope_embedding(
+        apply_rope_embedding_partial(
             builder,
             pos,
             rotary_dim,
+            head_dim,
             cache.cos.clone(),
             cache.sin.clone(),
-            x_rot,
-        );
-        concat(builder, 3, x_rot, x_pass)
+            x,
+        )
     }
 
     fn apply_rope_partial_with_tables(&self, builder: &Builder, cos: Var, sin: Var, x: Var) -> Var {
