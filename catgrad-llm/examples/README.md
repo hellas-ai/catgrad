@@ -4,15 +4,16 @@ These examples work with safetensor weights as found on [Huggingface Hub](https:
 
 ### Supported architectures: ###
 
-**GPT-2**, **Llama-3**, **Mistral**, **Qwen2**, **Qwen3**, **Qwen3-MoE**, **OLMo-2**, **OLMo-3**, **Gemma-3**, **Phi-3**, **GPT-OSS**, **SmolLM3-3B**, **Granite-3**
+**GPT-2**, **Llama-3**, **Mistral**, **Qwen2**, **Qwen3**, **Qwen3-MoE**, **Qwen-3.5**, **OLMo-2**, **OLMo-3**, **Gemma-3**, **Gemma-4**, **Phi-3**, **GPT-OSS**, **SmolLM3-3B**, **Nemotron-H**, **Granite-3**
+
 
 ### LLM example ###
 
-The `llm` example uses `model.safetensors`, `tokenizer.json`, `tokenizer_config.json` and `config.json` files from models under  `~/.cache/huggingface/hub/`.
+The `llama` example uses `model.safetensors`, `tokenizer.json`, `tokenizer_config.json` and `config.json` files from models under  `~/.cache/huggingface/hub/`.
 It either downloads the files or reuses the ones already in the cache (maybe previously downloaded by other frameworks like Candle, Transformers or vLLM).
 
 ```
-cargo run --release --example llm -- -m openai-community/gpt2 -p 'Category theory' -s 9
+cargo run --release --example llama -- -m openai-community/gpt2 -p 'Category theory' -s 9
 Category theory is a theory of how the universe works.
 ```
 
@@ -23,7 +24,7 @@ Category theory is a theory of how the universe works.
 ```
 
 For chat/instruct tuned models a chat template will be read from `tokenizer_config.json` and the prompt will be formatted accordingly.
-Pass -r for raw prompts without chat template application.
+Pass --raw for raw prompts without chat template application.
 
 Tool calling can be tested with a few models:
 ```
