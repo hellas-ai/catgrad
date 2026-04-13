@@ -13,7 +13,7 @@ use crate::types;
 use crate::utils::{
     empty_state_cache, get_model, get_model_chat_template, interpolate_multimodal_prompt,
     load_model, post_process_model_weights, prepare_multimodal_input,
-    prepare_multimodal_input_from_bytes, render_chat_prompt, split_image_tokens,
+    prepare_multimodal_input_from_bytes, render_chat_prompt_with_thinking, split_image_tokens,
 };
 use crate::{Detokenizer, LLMError, PreparedPrompt, Result};
 use catgrad::interpreter::backend::candle::CandleBackend;
@@ -170,11 +170,23 @@ impl ModelEngine {
     /// The engine does not retain chat history. To continue a conversation, pass the full message
     /// history you want rendered into the prompt.
     pub fn prepare_messages(&self, messages: &[types::Message]) -> Result<PreparedPrompt> {
+        self.prepare_messages_with_thinking(messages, false)
+    }
+
+    /// Renders chat messages with the model chat template and tokenizes the result.
+    ///
+    /// Set `enable_thinking` for chat templates that expose a corresponding template flag.
+    pub fn prepare_messages_with_thinking(
+        &self,
+        messages: &[types::Message],
+        enable_thinking: bool,
+    ) -> Result<PreparedPrompt> {
         let multimodal = self.prepare_multimodal_messages(messages)?;
-        let prompt = render_chat_prompt(
+        let prompt = render_chat_prompt_with_thinking(
             &self.inner.chat_template,
             &self.inner.tokenizer_config,
             messages,
+            enable_thinking,
         )?;
         let prompt = if multimodal.image.is_some() {
             interpolate_multimodal_prompt(

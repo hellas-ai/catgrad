@@ -95,11 +95,20 @@ pub(crate) fn render_chat_prompt(
     tokenizer_config: &JsonValue,
     messages: &[types::Message],
 ) -> Result<String> {
+    render_chat_prompt_with_thinking(chat_template, tokenizer_config, messages, false)
+}
+
+pub(crate) fn render_chat_prompt_with_thinking(
+    chat_template: &str,
+    tokenizer_config: &JsonValue,
+    messages: &[types::Message],
+    enable_thinking: bool,
+) -> Result<String> {
     let messages: Vec<_> = messages
         .iter()
         .map(message_to_template_context)
         .collect::<Result<_>>()?;
-    render_chat_messages(chat_template, tokenizer_config, messages, false)
+    render_chat_messages(chat_template, tokenizer_config, messages, enable_thinking)
 }
 
 fn strftime_now(format_str: String) -> String {
