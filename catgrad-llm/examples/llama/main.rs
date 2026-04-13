@@ -43,6 +43,9 @@ struct Args {
     /// Pass raw prompt without chat template
     #[arg(long)]
     raw: bool,
+    /// Thinking mode
+    #[arg(long)]
+    thinking: bool,
     /// Tokens to generate
     #[arg(short = 's', long, default_value_t = 1)]
     max_seq_len: usize,
@@ -211,7 +214,7 @@ fn run_with_backend<B: interpreter::Backend>(
             &tokenizer_config,
             &args.prompt,
             use_image,
-            false,
+            args.thinking,
         )?
     };
 

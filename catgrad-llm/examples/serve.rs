@@ -233,6 +233,9 @@ where
 fn serve_openai(request: Request, engine: &InferenceEngine, req: openai::ChatCompletionRequest) {
     let model = engine.model_name.clone();
     let max_tokens = req.max_tokens;
+    let enable_thinking = req
+        .reasoning_effort
+        .is_some_and(|effort| effort != openai::ReasoningEffort::None);
     let stream = req.stream == Some(true);
     let stream_include_usage = req
         .stream_options
@@ -244,7 +247,10 @@ fn serve_openai(request: Request, engine: &InferenceEngine, req: openai::ChatCom
         .into_iter()
         .map(|m| types::Message::OpenAI(Box::new(m)))
         .collect();
-    let prepared = match engine.engine.prepare_messages(&messages) {
+    let prepared = match engine
+        .engine
+        .prepare_messages_with_thinking(&messages, enable_thinking)
+    {
         Ok(prepared) => prepared,
         Err(err) => {
             respond_llm_error(request, err);

@@ -64,6 +64,16 @@ pub struct StreamOptions {
     pub include_usage: Option<bool>,
 }
 
+/// Requested reasoning level for chat-completions.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ReasoningEffort {
+    None,
+    Low,
+    Medium,
+    High,
+}
+
 /// Chat-completions request.
 #[skip_serializing_none]
 #[derive(Debug, Clone, Serialize, Deserialize, TypedBuilder, PartialEq)]
@@ -72,6 +82,8 @@ pub struct ChatCompletionRequest {
     pub messages: Vec<ChatMessage>,
     #[builder(default)]
     pub max_tokens: Option<u32>,
+    #[builder(default)]
+    pub reasoning_effort: Option<ReasoningEffort>,
     #[builder(default)]
     pub stream: Option<bool>,
     #[builder(default)]
@@ -248,6 +260,7 @@ mod tests {
                 }
             ],
             "max_tokens": 64,
+            "reasoning_effort": "medium",
             "stream": false,
             "stream_options": {"include_usage": true},
             "tools": [],
@@ -299,6 +312,7 @@ mod tests {
                         .build(),
                 ])
                 .max_tokens(Some(64))
+                .reasoning_effort(Some(ReasoningEffort::Medium))
                 .stream(Some(false))
                 .stream_options(Some(StreamOptions {
                     include_usage: Some(true),
