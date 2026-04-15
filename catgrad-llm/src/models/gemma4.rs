@@ -47,6 +47,13 @@ pub struct Gemma4TextConfig {
     attention_bias: bool,
     attention_k_eq_v: bool,
     num_kv_shared_layers: usize,
+    enable_moe_block: bool,
+    #[serde(default)]
+    num_experts: Option<usize>,
+    #[serde(default)]
+    top_k_experts: Option<usize>,
+    #[serde(default)]
+    moe_intermediate_size: Option<usize>,
     use_double_wide_mlp: bool,
     tie_word_embeddings: bool,
     rope_parameters: Gemma4RopeParameters,
@@ -556,6 +563,101 @@ impl Gemma4Model {
         )
     }
 
+    fn moe(&self, builder: &Builder, p: Path, x: Var) -> Var {
+        let num_experts = self
+            .config
+            .num_experts
+            .expect("gemma4 enable_moe_block missing num_experts");
+        let top_k_experts = self
+            .config
+            .top_k_experts
+            .expect("gemma4 enable_moe_block missing top_k_experts");
+        let moe_intermediate_size = self
+            .config
+            .moe_intermediate_size
+            .expect("gemma4 enable_moe_block missing moe_intermediate_size");
+        let [batch_size, seq_len, hidden_size] = unpack::<3>(builder, shape(builder, x.clone()));
+        let routed = rmsnorm_raw::<3>(builder, self.config.rms_norm_eps, x.clone());
+        let routed_scale = param(builder, &p.extend(["router", "scale"]).unwrap());
+        let routed_scale = broadcast(builder, shape(builder, routed.clone()), routed_scale);
+        let routed_scalar = constant(
+            builder,
+            (self.config.hidden_size as f32).powf(-0.5),
+            &shape(builder, routed.clone()),
+        );
+        let routed = routed * routed_scale * routed_scalar;
+        let routed = linear_no_bias(
+            builder,
+            self.config.hidden_size,
+            num_experts,
+            p.extend(["router", "proj"]).unwrap(),
+            routed,
+        );
+        let routed = softmax(builder, routed);
+
+        let num_tokens = batch_size.clone() * seq_len.clone();
+        let (mut top_k_weights, top_k_index) = topk(builder, top_k_experts, routed);
+        let top_k_shape = shape!(builder, num_tokens, top_k_experts);
+        top_k_weights = reshape(builder, top_k_shape.clone(), top_k_weights);
+        let top_k_index = reshape(builder, top_k_shape, top_k_index);
+        let top_k_shape = shape(builder, top_k_weights.clone());
+        let top_k_sum = sum(builder, top_k_weights.clone());
+        let top_k_sum = broadcast(builder, top_k_shape, top_k_sum);
+        top_k_weights = top_k_weights / top_k_sum;
+
+        let expert_input = rmsnorm::<3>(
+            builder,
+            self.config.rms_norm_eps,
+            p.extend(["pre_feedforward_layernorm_2"]).unwrap(),
+            x,
+        );
+        let fullx_shape = shape!(builder, num_tokens, 1, hidden_size);
+        let fullx = reshape(builder, fullx_shape.clone(), expert_input);
+
+        let gate_up_proj = param(builder, &p.extend(["experts", "gate_up_proj"]).unwrap());
+        let down_proj = param(builder, &p.extend(["experts", "down_proj"]).unwrap());
+        let per_expert_scale = param(builder, &p.extend(["router", "per_expert_scale"]).unwrap());
+        let mut sumk = constant(builder, 0.0, &fullx_shape);
+
+        for i in 0..top_k_experts {
+            let idx = get(builder, 1, i, top_k_index.clone());
+            let idx = squeeze::<2, 1>(builder, 1, idx);
+            let mut val = get(builder, 1, i, top_k_weights.clone());
+
+            let expert_scale = index(builder, 0, idx.clone(), per_expert_scale.clone());
+            let expert_scale = unsqueeze::<1, 2>(builder, 1, expert_scale);
+            val = val * expert_scale;
+
+            let gate_up = index(builder, 0, idx.clone(), gate_up_proj.clone());
+            let gate_up = transpose(builder, 1, 2, gate_up);
+            let down = index(builder, 0, idx, down_proj.clone());
+            let down = transpose(builder, 1, 2, down);
+
+            let gate_up = matmul(builder, fullx.clone(), gate_up);
+            let [gate, up]: [Var; 2] = chunk(builder, 2, 2, moe_intermediate_size, gate_up)
+                .try_into()
+                .unwrap();
+            let x = gelu(builder, gate) * up;
+            let x = matmul(builder, x, down);
+
+            let val = unsqueeze::<2, 3>(builder, 2, val);
+            let val = broadcast(builder, shape(builder, x.clone()), val);
+            sumk = sumk + x * val;
+        }
+
+        let x = reshape(
+            builder,
+            shape!(builder, batch_size, seq_len, hidden_size),
+            sumk,
+        );
+        rmsnorm::<3>(
+            builder,
+            self.config.rms_norm_eps,
+            p.extend(["post_feedforward_layernorm_2"]).unwrap(),
+            x,
+        )
+    }
+
     fn attention(
         &self,
         builder: &Builder,
@@ -735,6 +837,17 @@ impl Gemma4Model {
             x,
         );
         let x = self.mlp(builder, layer_id, p.extend(["mlp"]).unwrap(), x);
+        let x = if self.config.enable_moe_block {
+            let x_dense = rmsnorm::<3>(
+                builder,
+                self.config.rms_norm_eps,
+                p.extend(["post_feedforward_layernorm_1"]).unwrap(),
+                x,
+            );
+            x_dense + self.moe(builder, p.clone(), residual.clone())
+        } else {
+            x
+        };
         let x = rmsnorm::<3>(
             builder,
             self.config.rms_norm_eps,
