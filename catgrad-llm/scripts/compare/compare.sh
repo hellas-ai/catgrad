@@ -20,6 +20,7 @@ if [[ -z "${GITHUB_ACTIONS:-}" ]]; then
     MODELS+=(
         "meta-llama/Llama-3.2-1B-Instruct"
         "google/gemma-3-270m-it"
+        "google/gemma-4-E2B-it"
         "allenai/OLMo-2-0425-1B-Instruct"
         "microsoft/Phi-4-mini-instruct"
     )
