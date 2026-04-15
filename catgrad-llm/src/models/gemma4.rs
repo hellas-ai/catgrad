@@ -789,10 +789,15 @@ impl Gemma4Model {
         max_positions: Var,
     ) -> Vec<Var> {
         let [_, s, _] = unpack::<3>(builder, shape(builder, inputs_embeds.clone()));
-        let [_, _, _, pos, _] = unpack::<5>(builder, shape(builder, in_sliding_k.clone()));
+        let [_, _, _, sliding_pos, _] = unpack::<5>(builder, shape(builder, in_sliding_k.clone()));
+        let [_, _, _, full_pos, _] = unpack::<5>(builder, shape(builder, in_full_k.clone()));
 
-        let sliding_attention_mask =
-            sliding_window_mask(builder, s.clone(), pos.clone(), self.config.sliding_window);
+        let sliding_attention_mask = sliding_window_mask(
+            builder,
+            s.clone(),
+            sliding_pos.clone(),
+            self.config.sliding_window,
+        );
 
         let (sliding_cos, sliding_sin) = rope_tables_default(
             builder,
@@ -831,10 +836,14 @@ impl Gemma4Model {
             } else {
                 full_attention_mask.clone()
             };
-            let (cos, sin) = if is_sliding {
-                (sliding_cos.clone(), sliding_sin.clone())
+            let (pos, cos, sin) = if is_sliding {
+                (
+                    sliding_pos.clone(),
+                    sliding_cos.clone(),
+                    sliding_sin.clone(),
+                )
             } else {
-                (full_cos.clone(), full_sin.clone())
+                (full_pos.clone(), full_cos.clone(), full_sin.clone())
             };
             let per_layer_input = per_layer_inputs
                 .as_ref()
@@ -846,7 +855,7 @@ impl Gemma4Model {
                 per_layer_input,
                 &mut sliding_cache,
                 &mut full_cache,
-                pos.clone(),
+                pos,
                 cos,
                 sin,
                 language_root
@@ -910,8 +919,8 @@ impl Gemma4Model {
         );
         let per_layer_inputs = self.get_per_layer_inputs(builder, language_root.clone(), x);
         let [_, s, _] = unpack::<3>(builder, shape(builder, inputs_embeds.clone()));
-        let [_, _, _, pos, _] = unpack::<5>(builder, shape(builder, in_sliding_k.clone()));
-        let full_attention_mask = causal_mask(builder, s, pos);
+        let [_, _, _, full_pos, _] = unpack::<5>(builder, shape(builder, in_full_k.clone()));
+        let full_attention_mask = causal_mask(builder, s, full_pos);
 
         self.forward_embeddings(
             builder,
@@ -1455,8 +1464,8 @@ impl Gemma4MultimodalModel {
         };
 
         let [_, s, _] = unpack::<3>(builder, shape(builder, inputs_embeds.clone()));
-        let [_, _, _, pos, _] = unpack::<5>(builder, shape(builder, in_sliding_k.clone()));
-        let full_attention_mask = causal_mask(builder, s, pos);
+        let [_, _, _, full_pos, _] = unpack::<5>(builder, shape(builder, in_full_k.clone()));
+        let full_attention_mask = causal_mask(builder, s, full_pos);
 
         self.language_model.forward_embeddings(
             builder,
