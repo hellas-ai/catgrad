@@ -23,6 +23,8 @@ if [[ -z "${GITHUB_ACTIONS:-}" ]]; then
         "google/gemma-4-E2B-it"
         "allenai/OLMo-2-0425-1B-Instruct"
         "microsoft/Phi-4-mini-instruct"
+        "mistralai/Ministral-3-3B-Instruct-2512-BF16"
+        "nvidia/NVIDIA-Nemotron-3-Nano-4B-BF16"
     )
 fi
 
@@ -31,6 +33,8 @@ DIR=$(dirname "$0")
 MAXLEN="${CATGRAD_COMPARE_MAXLEN:-40}"
 REFERENCE_DIR=$DIR/expected/$MAXLEN
 OUTPUT_DIR=$DIR/outputs/$MAXLEN
+
+DTYPE="${CATGRAD_DTYPE:-f32}"
 
 mkdir -p "$OUTPUT_DIR"
 rm -rf "$OUTPUT_DIR"/*
@@ -72,7 +76,7 @@ for model in "${MODELS[@]}"; do
 
     TYPECHECK="-t"
 
-    ./target/release/examples/llama -m "$model" -p 'Category theory is' -s $MAXLEN --raw -k $TYPECHECK > "$OUTPUT_DIR/$filename" 2>/dev/null &
+    ./target/release/examples/llama -m "$model" -p 'Category theory is' -s $MAXLEN --raw -k $TYPECHECK --dtype $DTYPE > "$OUTPUT_DIR/$filename" 2>/dev/null &
 
     [[ -z "${GITHUB_ACTIONS:-}" ]] || wait
 done
@@ -83,7 +87,7 @@ for model in "${MULTIMODAL_MODELS[@]}"; do
 
     echo "Running for $model -> $OUTPUT_DIR/$filename"
 
-    ./target/release/examples/llama -m "$model" -p 'describe the image' -s $MAXLEN -i $IMAGE > "$OUTPUT_DIR/$filename" 2>/dev/null &
+    ./target/release/examples/llama -m "$model" -p 'describe the image' -s $MAXLEN -i $IMAGE --dtype $DTYPE > "$OUTPUT_DIR/$filename" 2>/dev/null &
 
     [[ -z "${GITHUB_ACTIONS:-}" ]] || wait
 done
