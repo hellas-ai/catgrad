@@ -13,6 +13,7 @@ open-hypergraphs = { workspace = true }
 graphviz-rust = { version = "0.9.5", optional = true }
 open-hypergraphs-dot = { version = "0.2.4", optional = true }
 serde = { workspace = true, optional = true }
+half = { workspace = true }
 
 # Interpreter backends (optional)
 ndarray = { version = "0.17.1", optional = true }
