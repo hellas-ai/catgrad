@@ -85,7 +85,7 @@ fn apply_op<I: Interpreter>(
     match op {
         Operation::Type(type_op) => apply_type_op(ssa, args, type_op),
         Operation::Nat(nat_op) => apply_nat_op(ssa, args, nat_op),
-        Operation::DtypeConstant(dtype) => Ok(vec![Value::Dtype(I::dtype_constant(dtype.clone()))]),
+        Operation::DtypeConstant(dtype) => Ok(vec![Value::Dtype(I::dtype_constant(*dtype))]),
         Operation::Tensor(tensor_op) => interpreter.tensor_op(ssa, args, tensor_op),
         Operation::Copy => apply_copy(ssa, args),
         Operation::If(then_branch, else_branch) => {

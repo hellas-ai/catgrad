@@ -46,6 +46,9 @@ impl Backend for NdArrayBackend {
     fn to_vec(&self, vec: TaggedTensor<Self>) -> TaggedVec {
         match vec {
             TaggedTensor::F32([x]) => TaggedVec::F32(x.unwrap_f32().as_slice().unwrap().to_vec()),
+            TaggedTensor::F16(_) | TaggedTensor::BF16(_) => {
+                panic!("float16 is not supported by the ndarray backend")
+            }
             TaggedTensor::U32([x]) => TaggedVec::U32(x.unwrap_u32().as_slice().unwrap().to_vec()),
         }
     }
@@ -53,6 +56,9 @@ impl Backend for NdArrayBackend {
     fn format_tensor(&self, tensor: &TaggedTensor<Self>) -> String {
         match tensor {
             TaggedTensor::F32([TaggedArrayD::F32(arr)]) => format!("{arr:?}"),
+            TaggedTensor::F16(_) | TaggedTensor::BF16(_) => {
+                panic!("float16 is not supported by the ndarray backend")
+            }
             TaggedTensor::U32([TaggedArrayD::U32(arr)]) => format!("{arr:?}"),
             _ => unreachable!("dtype/tag mismatch"),
         }
@@ -64,6 +70,9 @@ impl Backend for NdArrayBackend {
             Dtype::F32 => {
                 let arr = TaggedArrayD::F32(ArcArray::from_elem(IxDyn(&dims), 0.0f32));
                 TaggedTensor::F32([arr])
+            }
+            Dtype::F16 | Dtype::BF16 => {
+                panic!("float16 is not supported by the ndarray backend")
             }
             Dtype::U32 => {
                 let arr = TaggedArrayD::U32(ArcArray::from_elem(IxDyn(&dims), 0u32));
@@ -82,6 +91,22 @@ impl Backend for NdArrayBackend {
             ArrayD::from_shape_vec(IxDyn(&dims), data).map_err(|_| BackendError::ShapeError)?;
 
         Ok(from_f32(arr))
+    }
+
+    fn ndarray_from_vec_f16(
+        &self,
+        _data: Vec<half::f16>,
+        _shape: Shape,
+    ) -> Result<TaggedTensor<Self>, BackendError> {
+        panic!("float16 is not supported by the ndarray backend")
+    }
+
+    fn ndarray_from_vec_bf16(
+        &self,
+        _data: Vec<half::bf16>,
+        _shape: Shape,
+    ) -> Result<TaggedTensor<Self>, BackendError> {
+        panic!("float16 is not supported by the ndarray backend")
     }
 
     fn ndarray_from_vec_u32(
@@ -105,6 +130,9 @@ impl Backend for NdArrayBackend {
     fn to_bool(&self, x: TaggedTensor<Self>) -> bool {
         match x {
             TaggedTensor::F32([TaggedArrayD::F32(arr)]) => arr.iter().any(|&v| v > 0.0),
+            TaggedTensor::F16(_) | TaggedTensor::BF16(_) => {
+                panic!("float16 is not supported by the ndarray backend")
+            }
             TaggedTensor::U32([TaggedArrayD::U32(arr)]) => arr.iter().any(|&v| v != 0),
             _ => unreachable!(),
         }
@@ -124,6 +152,12 @@ impl Backend for NdArrayBackend {
                 let result = ArrayD::from_shape_vec(arr.raw_dim(), data).unwrap();
                 from_f32(result)
             }
+            (TaggedTensor::F16(_), _)
+            | (TaggedTensor::BF16(_), _)
+            | (_, Dtype::F16)
+            | (_, Dtype::BF16) => {
+                panic!("float16 is not supported by the ndarray backend")
+            }
             (x @ TaggedTensor::F32(_), Dtype::F32) => x,
             (x @ TaggedTensor::U32(_), Dtype::U32) => x,
         }
@@ -133,6 +167,7 @@ impl Backend for NdArrayBackend {
         use TaggedTensorTuple::*;
         match lhs {
             F32([x, y]) => from_f32(Self::batched_matmul(x.unwrap_f32(), y.unwrap_f32())),
+            F16(_) | BF16(_) => panic!("float16 is not supported by the ndarray backend"),
             U32([x, y]) => from_u32(Self::batched_matmul(x.unwrap_u32(), y.unwrap_u32())),
         }
     }
@@ -141,6 +176,7 @@ impl Backend for NdArrayBackend {
         use TaggedTensorTuple::*;
         match lhs {
             F32([x, y]) => from_f32(Self::add(x.unwrap_f32(), y.unwrap_f32())),
+            F16(_) | BF16(_) => panic!("float16 is not supported by the ndarray backend"),
             U32([x, y]) => from_u32(Self::add(x.unwrap_u32(), y.unwrap_u32())),
         }
     }
@@ -149,6 +185,7 @@ impl Backend for NdArrayBackend {
         use TaggedTensorTuple::*;
         match lhs {
             F32([x, y]) => from_f32(Self::sub(x.unwrap_f32(), y.unwrap_f32())),
+            F16(_) | BF16(_) => panic!("float16 is not supported by the ndarray backend"),
             U32([x, y]) => from_u32(Self::sub(x.unwrap_u32(), y.unwrap_u32())),
         }
     }
@@ -157,6 +194,7 @@ impl Backend for NdArrayBackend {
         use TaggedTensorTuple::*;
         match lhs {
             F32([x, y]) => from_f32(Self::mul(x.unwrap_f32(), y.unwrap_f32())),
+            F16(_) | BF16(_) => panic!("float16 is not supported by the ndarray backend"),
             U32([x, y]) => from_u32(Self::mul(x.unwrap_u32(), y.unwrap_u32())),
         }
     }
@@ -165,6 +203,7 @@ impl Backend for NdArrayBackend {
         use TaggedTensorTuple::*;
         match lhs {
             F32([x, y]) => from_f32(Self::div(x.unwrap_f32(), y.unwrap_f32())),
+            F16(_) | BF16(_) => panic!("float16 is not supported by the ndarray backend"),
             U32([x, y]) => from_u32(Self::div(x.unwrap_u32(), y.unwrap_u32())),
         }
     }
@@ -173,6 +212,7 @@ impl Backend for NdArrayBackend {
         use TaggedTensorTuple::*;
         match lhs {
             F32([x, y]) => from_f32(Self::pow_f32(x.unwrap_f32(), y.unwrap_f32())),
+            F16(_) | BF16(_) => panic!("float16 is not supported by the ndarray backend"),
             U32([x, y]) => from_u32(Self::pow_u32(x.unwrap_u32(), y.unwrap_u32())),
         }
     }
@@ -186,6 +226,7 @@ impl Backend for NdArrayBackend {
                 let res = ndarray::Zip::from(&x).and(&y).map_collect(|&x, &y| x < y);
                 from_f32(res.mapv(|x| x as u32 as f32))
             }
+            F16(_) | BF16(_) => panic!("float16 is not supported by the ndarray backend"),
             U32([x, y]) => {
                 let x = x.unwrap_u32();
                 let y = y.unwrap_u32();
@@ -204,6 +245,7 @@ impl Backend for NdArrayBackend {
                 let res = ndarray::Zip::from(&x).and(&y).map_collect(|&x, &y| x > y);
                 from_f32(res.mapv(|x| x as u32 as f32))
             }
+            F16(_) | BF16(_) => panic!("float16 is not supported by the ndarray backend"),
             U32([x, y]) => {
                 let x = x.unwrap_u32();
                 let y = y.unwrap_u32();
@@ -222,6 +264,7 @@ impl Backend for NdArrayBackend {
                 let res = ndarray::Zip::from(&x).and(&y).map_collect(|&x, &y| x >= y);
                 from_f32(res.mapv(|x| x as u32 as f32))
             }
+            F16(_) | BF16(_) => panic!("float16 is not supported by the ndarray backend"),
             U32([x, y]) => {
                 let x = x.unwrap_u32();
                 let y = y.unwrap_u32();
@@ -240,6 +283,7 @@ impl Backend for NdArrayBackend {
                 let res = ndarray::Zip::from(&x).and(&y).map_collect(|&x, &y| x <= y);
                 from_f32(res.mapv(|x| x as u32 as f32))
             }
+            F16(_) | BF16(_) => panic!("float16 is not supported by the ndarray backend"),
             U32([x, y]) => {
                 let x = x.unwrap_u32();
                 let y = y.unwrap_u32();
@@ -258,6 +302,7 @@ impl Backend for NdArrayBackend {
                 let res = ndarray::Zip::from(&x).and(&y).map_collect(|&x, &y| x == y);
                 from_f32(res.mapv(|x| x as u32 as f32))
             }
+            F16(_) | BF16(_) => panic!("float16 is not supported by the ndarray backend"),
             U32([x, y]) => {
                 let x = x.unwrap_u32();
                 let y = y.unwrap_u32();
@@ -280,6 +325,7 @@ impl Backend for NdArrayBackend {
                     .map_collect(|&m, &x, &y| if m > 0.0 { x } else { y });
                 from_f32(res)
             }
+            F16(_) | BF16(_) => panic!("float16 is not supported by the ndarray backend"),
             U32([mask, x, y]) => {
                 let mask = mask.unwrap_u32();
                 let x = x.unwrap_u32();
@@ -297,6 +343,7 @@ impl Backend for NdArrayBackend {
         use TaggedTensorTuple::*;
         match x {
             F32([arr]) => from_f32(Self::neg_f32(arr.unwrap_f32())),
+            F16(_) | BF16(_) => panic!("float16 is not supported by the ndarray backend"),
             U32([arr]) => from_u32(Self::neg_u32(arr.unwrap_u32())),
         }
     }
@@ -337,6 +384,7 @@ impl Backend for NdArrayBackend {
         use TaggedTensorTuple::*;
         match x {
             F32([arr]) => from_f32(Self::max_f32(arr.unwrap_f32())),
+            F16(_) | BF16(_) => panic!("float16 is not supported by the ndarray backend"),
             U32([arr]) => from_u32(Self::max_u32(arr.unwrap_u32())),
         }
     }
@@ -345,6 +393,7 @@ impl Backend for NdArrayBackend {
         use TaggedTensorTuple::*;
         match x {
             F32([arr]) => from_f32(Self::sum(arr.unwrap_f32())),
+            F16(_) | BF16(_) => panic!("float16 is not supported by the ndarray backend"),
             U32([arr]) => from_u32(Self::sum(arr.unwrap_u32())),
         }
     }
@@ -353,6 +402,7 @@ impl Backend for NdArrayBackend {
         use TaggedTensorTuple::*;
         match x {
             F32([arr]) => from_u32(Self::argmax_f32(arr.unwrap_f32())),
+            F16(_) | BF16(_) => panic!("float16 is not supported by the ndarray backend"),
             U32([arr]) => from_u32(Self::argmax_u32(arr.unwrap_u32())),
         }
     }
@@ -364,6 +414,7 @@ impl Backend for NdArrayBackend {
                 let (values, indices) = Self::topk_f32(arr.unwrap_f32(), k);
                 (from_f32(values), from_u32(indices))
             }
+            F16(_) | BF16(_) => panic!("float16 is not supported by the ndarray backend"),
             _ => panic!("Unsupported type for topk"),
         }
     }
@@ -372,6 +423,7 @@ impl Backend for NdArrayBackend {
         use TaggedTensorTuple::*;
         match x {
             F32([arr]) => from_f32(Self::broadcast_ndarray(arr.unwrap_f32(), shape)),
+            F16(_) | BF16(_) => panic!("float16 is not supported by the ndarray backend"),
             U32([arr]) => from_u32(Self::broadcast_ndarray(arr.unwrap_u32(), shape)),
         }
     }
@@ -380,6 +432,7 @@ impl Backend for NdArrayBackend {
         use TaggedTensorTuple::*;
         match x {
             F32([arr]) => from_f32(Self::transpose_ndarray(arr.unwrap_f32(), dim0, dim1)),
+            F16(_) | BF16(_) => panic!("float16 is not supported by the ndarray backend"),
             U32([arr]) => from_u32(Self::transpose_ndarray(arr.unwrap_u32(), dim0, dim1)),
         }
     }
@@ -397,6 +450,9 @@ impl Backend for NdArrayBackend {
                 dim,
                 indices.unwrap_u32(),
             )),
+            (F16(_), _) | (BF16(_), _) => {
+                panic!("float16 is not supported by the ndarray backend")
+            }
             (U32([arr]), U32([indices])) => from_u32(Self::index_ndarray(
                 arr.unwrap_u32(),
                 dim,
@@ -416,6 +472,7 @@ impl Backend for NdArrayBackend {
         use TaggedTensorTuple::*;
         match x {
             F32([arr]) => from_f32(Self::slice_ndarray(arr.unwrap_f32(), dim, start, len)),
+            F16(_) | BF16(_) => panic!("float16 is not supported by the ndarray backend"),
             U32([arr]) => from_u32(Self::slice_ndarray(arr.unwrap_u32(), dim, start, len)),
         }
     }
@@ -424,6 +481,7 @@ impl Backend for NdArrayBackend {
         use TaggedTensorTuple::*;
         match x {
             F32([arr]) => from_f32(Self::reshape_ndarray(arr.unwrap_f32(), new_shape)),
+            F16(_) | BF16(_) => panic!("float16 is not supported by the ndarray backend"),
             U32([arr]) => from_u32(Self::reshape_ndarray(arr.unwrap_u32(), new_shape)),
         }
     }
@@ -439,6 +497,9 @@ impl Backend for NdArrayBackend {
             (F32([a]), F32([b])) => {
                 from_f32(Self::concat_ndarray(a.unwrap_f32(), b.unwrap_f32(), dim))
             }
+            (F16(_), F16(_)) | (BF16(_), BF16(_)) => {
+                panic!("float16 is not supported by the ndarray backend")
+            }
             (U32([a]), U32([b])) => {
                 from_u32(Self::concat_ndarray(a.unwrap_u32(), b.unwrap_u32(), dim))
             }
@@ -450,6 +511,7 @@ impl Backend for NdArrayBackend {
         use TaggedTensorTuple::*;
         match x {
             F32([a, b]) => a == b,
+            F16(_) | BF16(_) => panic!("float16 is not supported by the ndarray backend"),
             U32([a, b]) => a == b,
         }
     }

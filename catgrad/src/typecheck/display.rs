@@ -119,6 +119,8 @@ impl Display for Dtype {
     fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
         match self {
             Dtype::F32 => write!(f, "f32"),
+            Dtype::F16 => write!(f, "f16"),
+            Dtype::BF16 => write!(f, "bf16"),
             Dtype::U32 => write!(f, "u32"),
         }
     }

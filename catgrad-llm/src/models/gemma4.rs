@@ -264,14 +264,14 @@ impl LLMModel for Gemma4Model {
     }
 
     fn dtype(&self) -> Dtype {
-        self.dtype.clone()
+        self.dtype
     }
 
     fn empty_state_type(&self) -> Vec<(Dtype, Shape)> {
         let dtype = self.dtype();
         vec![
             (
-                dtype.clone(),
+                dtype,
                 Shape(vec![
                     self.sliding_cache_layers,
                     1,
@@ -281,7 +281,7 @@ impl LLMModel for Gemma4Model {
                 ]),
             ),
             (
-                dtype.clone(),
+                dtype,
                 Shape(vec![
                     self.sliding_cache_layers,
                     1,
@@ -291,7 +291,7 @@ impl LLMModel for Gemma4Model {
                 ]),
             ),
             (
-                dtype.clone(),
+                dtype,
                 Shape(vec![
                     self.full_cache_layers,
                     1,

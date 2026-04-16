@@ -92,7 +92,7 @@ impl LLMModel for OlmoModel {
     }
 
     fn dtype(&self) -> Dtype {
-        self.dtype.clone()
+        self.dtype
     }
 
     fn extra_nat_input(&self, seq_len: usize) -> Option<usize> {
@@ -103,7 +103,7 @@ impl LLMModel for OlmoModel {
         let dtype = self.dtype();
         vec![
             (
-                dtype.clone(),
+                dtype,
                 Shape(vec![
                     self.config.num_kv_layers(),
                     1,
@@ -113,7 +113,7 @@ impl LLMModel for OlmoModel {
                 ]),
             ),
             (
-                dtype.clone(),
+                dtype,
                 Shape(vec![
                     self.config.num_kv_layers(),
                     1,
@@ -123,7 +123,7 @@ impl LLMModel for OlmoModel {
                 ]),
             ),
             (
-                dtype.clone(),
+                dtype,
                 Shape(vec![
                     self.num_linear_layers,
                     1,

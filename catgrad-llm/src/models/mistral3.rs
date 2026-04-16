@@ -67,7 +67,7 @@ impl LLMModel for Mistral3Model {
     }
 
     fn dtype(&self) -> Dtype {
-        self.dtype.clone()
+        self.dtype
     }
 }
 

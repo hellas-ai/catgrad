@@ -49,7 +49,7 @@ impl LLMModel for GPT2Model {
     }
 
     fn dtype(&self) -> Dtype {
-        self.dtype.clone()
+        self.dtype
     }
 }
 
@@ -100,8 +100,7 @@ impl GPT2Model {
 
     fn mlp(&self, builder: &Builder, dim: usize, p: Path, x: Var) -> Var {
         let x = Self::gpt_linear(builder, dim, dim * 4, p.extend(["c_fc"]).unwrap(), x);
-        // let x = gelu(builder, x);
-        let x = Gelu.call(builder, [x]);
+        let x = gelu(builder, x);
         Self::gpt_linear(builder, dim * 4, dim, p.extend(["c_proj"]).unwrap(), x)
     }
 

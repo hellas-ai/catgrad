@@ -141,8 +141,8 @@ impl ModelEngine {
     pub fn new(model_name: &str, use_kv_cache: bool, dtype: Dtype) -> Result<Self> {
         let backend = CandleBackend::new();
         let (parameter_values, parameter_types, config_json, tokenizer, tokenizer_config, _) =
-            load_model(model_name, "main", &backend, dtype.clone())?;
-        let model = get_model(&config_json, 1, None, dtype.clone())?;
+            load_model(model_name, "main", &backend, dtype)?;
+        let model = get_model(&config_json, 1, None, dtype)?;
         let chat_template = get_model_chat_template(model_name, "main")?;
         let chat_template = chat_template
             .replace("{% generation %}", "")
@@ -311,7 +311,7 @@ impl ModelRunner {
             &engine.inner.config_json,
             max_sequence_length,
             prepared.multimodal.runtime_context.as_ref(),
-            engine.inner.dtype.clone(),
+            engine.inner.dtype,
         )?;
         post_process_model_weights(
             model.as_ref(),

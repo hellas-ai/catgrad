@@ -400,6 +400,7 @@ version = "0.2.1"
 dependencies = [
  "candle-core",
  "graphviz-rust",
+ "half",
  "ndarray",
  "open-hypergraphs",
  "open-hypergraphs-dot",

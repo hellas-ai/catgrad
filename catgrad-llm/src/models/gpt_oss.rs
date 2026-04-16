@@ -65,7 +65,7 @@ impl LLMModel for GPTOssModel {
     }
 
     fn dtype(&self) -> Dtype {
-        self.dtype.clone()
+        self.dtype
     }
 }
 

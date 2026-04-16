@@ -55,6 +55,9 @@ struct Args {
     /// Enable typecheck
     #[arg(short = 't', long)]
     typecheck: bool,
+    /// Floating-point dtype to use for model weights and activations
+    #[arg(long, default_value = "f32", value_parser = parse_model_dtype)]
+    dtype: Dtype,
     /// Backend to use
     #[arg(short = 'b', long, value_enum, default_value_t = BackendChoice::Candle)]
     backend: BackendChoice,
@@ -88,6 +91,23 @@ impl BackendChoice {
             Self::Ndarray => "Ndarray",
             Self::Candle => "Candle",
         }
+    }
+}
+
+fn parse_model_dtype(s: &str) -> Result<Dtype, String> {
+    let dtype: Dtype = s.parse()?;
+    match dtype {
+        Dtype::F32 | Dtype::F16 | Dtype::BF16 => Ok(dtype),
+        Dtype::U32 => Err("model dtype must be f32, f16, or bf16".to_string()),
+    }
+}
+
+fn dtype_size_bytes(dtype: Dtype) -> usize {
+    match dtype {
+        Dtype::F32 => 4,
+        Dtype::F16 => 2,
+        Dtype::BF16 => 2,
+        Dtype::U32 => 4,
     }
 }
 
@@ -131,6 +151,14 @@ fn get_app_config(args: &Args) -> Result<AppConfig> {
 fn main() -> Result<()> {
     env_logger::init();
     let args = Args::parse();
+    if matches!(
+        (args.backend, args.dtype),
+        (BackendChoice::Ndarray, Dtype::F16 | Dtype::BF16)
+    ) {
+        return Err(anyhow::anyhow!(
+            "--dtype f16 and bf16 currently require the candle backend"
+        ));
+    }
     let app_config = get_app_config(&args)?;
     if args.list_models {
         for (model, alias) in get_models(&app_config) {
@@ -170,7 +198,7 @@ fn run_with_backend<B: interpreter::Backend>(
     backend: B,
 ) -> Result<()> {
     let model_name = get_model_name(args, app_config);
-    let model_dtype = Dtype::F32;
+    let model_dtype = args.dtype;
 
     let start_load = std::time::Instant::now();
     let (
@@ -180,7 +208,7 @@ fn run_with_backend<B: interpreter::Backend>(
         tokenizer,
         tokenizer_config,
         total_params,
-    ) = load_model(&model_name, &args.revision, &backend, model_dtype.clone())?;
+    ) = load_model(&model_name, &args.revision, &backend, model_dtype)?;
     let elapsed_load = start_load.elapsed();
 
     eprintln!(
@@ -336,16 +364,21 @@ fn run_with_backend<B: interpreter::Backend>(
                 "Loading cached image features from: {}",
                 cache_path.display()
             );
-            interpreter::tensor(
+            interpreter::float_tensor(
                 &interpreter.backend,
                 Shape(vec![1, mm.mm_tokens_per_image, mm.hidden_size]),
                 cached,
+                model_dtype,
             )
             .map_err(|e| anyhow::anyhow!("BackendError: {:?}", e))?
         } else {
-            let image_tensor =
-                interpreter::tensor(&interpreter.backend, Shape(image_shape), image_data)
-                    .map_err(|e| anyhow::anyhow!("BackendError: {:?}", e))?;
+            let image_tensor = interpreter::float_tensor(
+                &interpreter.backend,
+                Shape(image_shape),
+                image_data,
+                model_dtype,
+            )
+            .map_err(|e| anyhow::anyhow!("BackendError: {:?}", e))?;
             let vision_term = vision_model
                 .term()
                 .ok_or_else(|| anyhow::anyhow!("failed to build vision model term"))?;
@@ -422,8 +455,8 @@ fn run_with_backend<B: interpreter::Backend>(
 
     let elapsed_gen = start_gen.elapsed();
     if benchmarking {
-        // hardcode size multiplier as 4.0 since we only load in F32
-        let size_gib = (total_params as f64 * 4.0) / (1024.0 * 1024.0 * 1024.0);
+        let size_gib = (total_params as f64 * dtype_size_bytes(args.dtype) as f64)
+            / (1024.0 * 1024.0 * 1024.0);
         let params_m = total_params as f64 / 1_000_000.0;
         print_bench_table(
             &model_name,
@@ -454,6 +487,8 @@ fn to_f32_vec<B: interpreter::Backend>(
     match value.clone() {
         interpreter::Value::Tensor(arr) => match backend.to_vec(arr) {
             interpreter::TaggedVec::F32(v) => Ok(v),
+            interpreter::TaggedVec::F16(v) => Ok(v.into_iter().map(|x| x.to_f32()).collect()),
+            interpreter::TaggedVec::BF16(v) => Ok(v.into_iter().map(|x| x.to_f32()).collect()),
             _ => Err(anyhow::anyhow!("Unexpected output dtype")),
         },
         t => Err(anyhow::anyhow!("Output was not a tensor: {:?}", t)),
@@ -516,10 +551,11 @@ fn run_interpreter<B: interpreter::Backend>(
             use_image_embeddings,
         } => {
             input_seq_len = input_tokens.len();
-            let empty_image_embeddings = interpreter::tensor(
+            let empty_image_embeddings = interpreter::float_tensor(
                 &interpreter.backend,
                 Shape(vec![1, 0, hidden_size]),
                 Vec::<f32>::new(),
+                model.dtype(),
             )
             .map_err(|err| anyhow::anyhow!("empty image tensor error: {:?}", err))?;
 
