@@ -89,7 +89,7 @@ impl LLMModel for Phi3Model {
     }
 
     fn dtype(&self) -> Dtype {
-        self.dtype.clone()
+        self.dtype
     }
 }
 

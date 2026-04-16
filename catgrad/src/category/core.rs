@@ -19,10 +19,26 @@ pub struct NdArrayType {
 }
 
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Dtype {
     F32,
+    F16,
+    BF16,
     U32,
+}
+
+impl std::str::FromStr for Dtype {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "f32" => Ok(Self::F32),
+            "f16" => Ok(Self::F16),
+            "bf16" => Ok(Self::BF16),
+            "u32" => Ok(Self::U32),
+            _ => Err(format!("unsupported dtype `{s}`")),
+        }
+    }
 }
 
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]

@@ -9,12 +9,6 @@ pub struct ShapeOnlyBackend;
 #[derive(Clone, Debug)]
 pub struct ShapeOnly(Shape);
 
-impl ShapeOnly {
-    pub fn shape(&self) -> Shape {
-        self.0.clone()
-    }
-}
-
 impl BackendTensorOps for ShapeOnly {
     fn shape(&self) -> Shape {
         self.0.clone()
@@ -27,6 +21,8 @@ impl Backend for ShapeOnlyBackend {
     fn zeros(&self, shape: Shape, target_dtype: Dtype) -> TaggedTensor<Self> {
         match target_dtype {
             Dtype::F32 => TaggedTensor::F32([ShapeOnly(shape)]),
+            Dtype::F16 => TaggedTensor::F16([ShapeOnly(shape)]),
+            Dtype::BF16 => TaggedTensor::BF16([ShapeOnly(shape)]),
             Dtype::U32 => TaggedTensor::U32([ShapeOnly(shape)]),
         }
     }
@@ -39,6 +35,22 @@ impl Backend for ShapeOnlyBackend {
         Ok(TaggedTensor::F32([ShapeOnly(shape)]))
     }
 
+    fn ndarray_from_vec_f16(
+        &self,
+        _data: Vec<half::f16>,
+        shape: Shape,
+    ) -> Result<TaggedTensor<Self>, BackendError> {
+        Ok(TaggedTensor::F16([ShapeOnly(shape)]))
+    }
+
+    fn ndarray_from_vec_bf16(
+        &self,
+        _data: Vec<half::bf16>,
+        shape: Shape,
+    ) -> Result<TaggedTensor<Self>, BackendError> {
+        Ok(TaggedTensor::BF16([ShapeOnly(shape)]))
+    }
+
     fn ndarray_from_vec_u32(
         &self,
         _data: Vec<u32>,
@@ -47,14 +59,34 @@ impl Backend for ShapeOnlyBackend {
         Ok(TaggedTensor::U32([ShapeOnly(shape)]))
     }
 
-    fn cast(&self, x: TaggedTensor<Self>, _target_dtype: Dtype) -> TaggedTensor<Self> {
-        x
+    fn cast(&self, x: TaggedTensor<Self>, target_dtype: Dtype) -> TaggedTensor<Self> {
+        use TaggedTensorTuple::*;
+        match (x, target_dtype) {
+            (F32([shape]), Dtype::F32) => F32([shape]),
+            (F32([shape]), Dtype::F16) => F16([shape]),
+            (F32([shape]), Dtype::BF16) => BF16([shape]),
+            (F32([shape]), Dtype::U32) => U32([shape]),
+            (F16([shape]), Dtype::F32) => F32([shape]),
+            (F16([shape]), Dtype::F16) => F16([shape]),
+            (F16([shape]), Dtype::BF16) => BF16([shape]),
+            (BF16([shape]), Dtype::F32) => F32([shape]),
+            (BF16([shape]), Dtype::F16) => F16([shape]),
+            (BF16([shape]), Dtype::BF16) => BF16([shape]),
+            (BF16([shape]), Dtype::U32) => U32([shape]),
+            (F16([shape]), Dtype::U32) => U32([shape]),
+            (U32([shape]), Dtype::F32) => F32([shape]),
+            (U32([shape]), Dtype::F16) => F16([shape]),
+            (U32([shape]), Dtype::BF16) => BF16([shape]),
+            (U32([shape]), Dtype::U32) => U32([shape]),
+        }
     }
 
     fn matmul(&self, lhs: TaggedTensorTuple<Self, 2>) -> TaggedTensor<Self> {
         use TaggedTensorTuple::*;
         match lhs {
             F32([x, y]) => F32([Self::matmul_shape(x, y)]),
+            F16([x, y]) => F16([Self::matmul_shape(x, y)]),
+            BF16([x, y]) => BF16([Self::matmul_shape(x, y)]),
             U32([x, y]) => U32([Self::matmul_shape(x, y)]),
         }
     }
@@ -107,6 +139,16 @@ impl Backend for ShapeOnlyBackend {
                 Self::exact_shape_match(x.clone(), y);
                 F32([x])
             }
+            F16([mask, x, y]) => {
+                Self::exact_shape_match(mask, x.clone());
+                Self::exact_shape_match(x.clone(), y);
+                F16([x])
+            }
+            BF16([mask, x, y]) => {
+                Self::exact_shape_match(mask, x.clone());
+                Self::exact_shape_match(x.clone(), y);
+                BF16([x])
+            }
             U32([mask, x, y]) => {
                 Self::exact_shape_match(mask, x.clone());
                 Self::exact_shape_match(x.clone(), y);
@@ -139,16 +181,19 @@ impl Backend for ShapeOnlyBackend {
         use TaggedTensorTuple::*;
         match x {
             F32([arr]) => F32([Self::broadcast(arr, shape)]),
+            F16([arr]) => F16([Self::broadcast(arr, shape)]),
+            BF16([arr]) => BF16([Self::broadcast(arr, shape)]),
             U32([arr]) => U32([Self::broadcast(arr, shape)]),
         }
     }
 
     fn reshape(&self, _x: TaggedTensor<Self>, new_shape: Shape) -> TaggedTensor<Self> {
         use TaggedTensorTuple::*;
-        let arr = ShapeOnly(new_shape);
         match _x {
-            F32(_) => F32([arr]),
-            U32(_) => U32([arr]),
+            F32(_) => F32([ShapeOnly(new_shape)]),
+            F16(_) => F16([ShapeOnly(new_shape)]),
+            BF16(_) => BF16([ShapeOnly(new_shape)]),
+            U32(_) => U32([ShapeOnly(new_shape)]),
         }
     }
 
@@ -159,6 +204,8 @@ impl Backend for ShapeOnlyBackend {
 
         match x {
             F32(_) => F32([ShapeOnly(shape)]),
+            F16(_) => F16([ShapeOnly(shape)]),
+            BF16(_) => BF16([ShapeOnly(shape)]),
             U32(_) => U32([ShapeOnly(shape)]),
         }
     }
@@ -167,6 +214,8 @@ impl Backend for ShapeOnlyBackend {
         use TaggedTensorTuple::*;
         match x {
             F32([arr]) => F32([Self::reduce_last_dim(arr)]),
+            F16([arr]) => F16([Self::reduce_last_dim(arr)]),
+            BF16([arr]) => BF16([Self::reduce_last_dim(arr)]),
             U32([arr]) => U32([Self::reduce_last_dim(arr)]),
         }
     }
@@ -175,6 +224,8 @@ impl Backend for ShapeOnlyBackend {
         use TaggedTensorTuple::*;
         match x {
             F32([arr]) => F32([Self::reduce_last_dim(arr)]),
+            F16([arr]) => F16([Self::reduce_last_dim(arr)]),
+            BF16([arr]) => BF16([Self::reduce_last_dim(arr)]),
             U32([arr]) => U32([Self::reduce_last_dim(arr)]),
         }
     }
@@ -183,6 +234,8 @@ impl Backend for ShapeOnlyBackend {
         use TaggedTensorTuple::*;
         match x {
             F32([arr]) => U32([Self::reduce_last_dim(arr)]),
+            F16([arr]) => U32([Self::reduce_last_dim(arr)]),
+            BF16([arr]) => U32([Self::reduce_last_dim(arr)]),
             U32([arr]) => U32([Self::reduce_last_dim(arr)]),
         }
     }
@@ -196,7 +249,24 @@ impl Backend for ShapeOnlyBackend {
                 let indices = TaggedTensor::U32([new_shape]);
                 (values, indices)
             }
-            _ => panic!("Unsupported type for topk"),
+            F16([arr]) => {
+                let new_shape = Self::topk(arr, k);
+                let values = TaggedTensor::F16([new_shape.clone()]);
+                let indices = TaggedTensor::U32([new_shape]);
+                (values, indices)
+            }
+            BF16([arr]) => {
+                let new_shape = Self::topk(arr, k);
+                let values = TaggedTensor::BF16([new_shape.clone()]);
+                let indices = TaggedTensor::U32([new_shape]);
+                (values, indices)
+            }
+            U32([arr]) => {
+                let new_shape = Self::topk(arr, k);
+                let values = TaggedTensor::U32([new_shape.clone()]);
+                let indices = TaggedTensor::U32([new_shape]);
+                (values, indices)
+            }
         }
     }
 
@@ -204,6 +274,8 @@ impl Backend for ShapeOnlyBackend {
         use TaggedTensorTuple::*;
         match x {
             F32([a, b]) => a.0 == b.0,
+            F16([a, b]) => a.0 == b.0,
+            BF16([a, b]) => a.0 == b.0,
             U32([a, b]) => a.0 == b.0,
         }
     }
@@ -230,6 +302,16 @@ impl Backend for ShapeOnlyBackend {
                 s[dim] = a[dim] + b[dim];
                 F32([ShapeOnly(s)])
             }
+            (F16([ShapeOnly(a)]), F16([ShapeOnly(b)])) => {
+                let mut s = a.clone();
+                s[dim] = a[dim] + b[dim];
+                F16([ShapeOnly(s)])
+            }
+            (BF16([ShapeOnly(a)]), BF16([ShapeOnly(b)])) => {
+                let mut s = a.clone();
+                s[dim] = a[dim] + b[dim];
+                BF16([ShapeOnly(s)])
+            }
             (U32([ShapeOnly(a)]), U32([ShapeOnly(b)])) => {
                 let mut s = a.clone();
                 s[dim] = a[dim] + b[dim];
@@ -248,6 +330,8 @@ impl Backend for ShapeOnlyBackend {
         use TaggedTensorTuple::*;
         let shape = &match indices {
             F32([shape]) => shape,
+            F16([shape]) => shape,
+            BF16([shape]) => shape,
             U32([shape]) => shape,
         }
         .0;
@@ -258,6 +342,14 @@ impl Backend for ShapeOnlyBackend {
             F32([ShapeOnly(mut s)]) => {
                 s[dim] = n;
                 F32([ShapeOnly(s)])
+            }
+            F16([ShapeOnly(mut s)]) => {
+                s[dim] = n;
+                F16([ShapeOnly(s)])
+            }
+            BF16([ShapeOnly(mut s)]) => {
+                s[dim] = n;
+                BF16([ShapeOnly(s)])
             }
             U32([ShapeOnly(mut s)]) => {
                 s[dim] = n;
@@ -278,6 +370,14 @@ impl Backend for ShapeOnlyBackend {
             F32([ShapeOnly(mut s)]) => {
                 s[dim] = len;
                 F32([ShapeOnly(s)])
+            }
+            F16([ShapeOnly(mut s)]) => {
+                s[dim] = len;
+                F16([ShapeOnly(s)])
+            }
+            BF16([ShapeOnly(mut s)]) => {
+                s[dim] = len;
+                BF16([ShapeOnly(s)])
             }
             U32([ShapeOnly(mut s)]) => {
                 s[dim] = len;
@@ -326,6 +426,8 @@ impl ShapeOnlyBackend {
         use TaggedTensorTuple::*;
         match lhs {
             F32([x, y]) => F32([Self::exact_shape_match(x, y)]),
+            F16([x, y]) => F16([Self::exact_shape_match(x, y)]),
+            BF16([x, y]) => BF16([Self::exact_shape_match(x, y)]),
             U32([x, y]) => U32([Self::exact_shape_match(x, y)]),
         }
     }
@@ -366,6 +468,10 @@ impl ShapeOnlyBackend {
 mod tests {
     use super::*;
 
+    fn f32_shape(dims: &[usize]) -> ShapeOnly {
+        ShapeOnly(Shape(dims.to_vec()))
+    }
+
     #[test]
     fn test_zeros() {
         let backend = ShapeOnlyBackend;
@@ -401,8 +507,8 @@ mod tests {
 
     #[test]
     fn test_exact_shape_match_same_shapes() {
-        let x = ShapeOnly(Shape(vec![2, 3]));
-        let y = ShapeOnly(Shape(vec![2, 3]));
+        let x = f32_shape(&[2, 3]);
+        let y = f32_shape(&[2, 3]);
         let result = ShapeOnlyBackend::exact_shape_match(x, y);
         assert_eq!(result.0, Shape(vec![2, 3]));
     }
@@ -410,16 +516,16 @@ mod tests {
     #[test]
     #[should_panic(expected = "Shape mismatch")]
     fn test_exact_shape_match_different_shapes() {
-        let x = ShapeOnly(Shape(vec![2, 3]));
-        let y = ShapeOnly(Shape(vec![3, 2]));
+        let x = f32_shape(&[2, 3]);
+        let y = f32_shape(&[3, 2]);
         ShapeOnlyBackend::exact_shape_match(x, y);
     }
 
     #[test]
     fn test_add_same_shapes() {
         let backend = ShapeOnlyBackend;
-        let x = ShapeOnly(Shape(vec![2, 3]));
-        let y = ShapeOnly(Shape(vec![2, 3]));
+        let x = f32_shape(&[2, 3]);
+        let y = f32_shape(&[2, 3]);
         let lhs = TaggedTensorTuple::F32([x, y]);
 
         let result = backend.add(lhs);
@@ -430,8 +536,8 @@ mod tests {
     #[should_panic(expected = "Shape mismatch")]
     fn test_add_different_shapes() {
         let backend = ShapeOnlyBackend;
-        let x = ShapeOnly(Shape(vec![2, 3]));
-        let y = ShapeOnly(Shape(vec![3, 2]));
+        let x = f32_shape(&[2, 3]);
+        let y = f32_shape(&[3, 2]);
         let lhs = TaggedTensorTuple::F32([x, y]);
 
         backend.add(lhs);
@@ -439,16 +545,16 @@ mod tests {
 
     #[test]
     fn test_matmul_2d() {
-        let lhs = ShapeOnly(Shape(vec![3, 4]));
-        let rhs = ShapeOnly(Shape(vec![4, 5]));
+        let lhs = f32_shape(&[3, 4]);
+        let rhs = f32_shape(&[4, 5]);
         let result = ShapeOnlyBackend::matmul_shape(lhs, rhs);
         assert_eq!(result.shape(), Shape(vec![3, 5]));
     }
 
     #[test]
     fn test_matmul_batched() {
-        let lhs = ShapeOnly(Shape(vec![2, 3, 4]));
-        let rhs = ShapeOnly(Shape(vec![2, 4, 5]));
+        let lhs = f32_shape(&[2, 3, 4]);
+        let rhs = f32_shape(&[2, 4, 5]);
         let result = ShapeOnlyBackend::matmul_shape(lhs, rhs);
         assert_eq!(result.shape(), Shape(vec![2, 3, 5]));
     }
@@ -456,14 +562,14 @@ mod tests {
     #[test]
     #[should_panic(expected = "inner dimensions must match")]
     fn test_matmul_incompatible() {
-        let lhs = ShapeOnly(Shape(vec![3, 4]));
-        let rhs = ShapeOnly(Shape(vec![5, 6]));
+        let lhs = f32_shape(&[3, 4]);
+        let rhs = f32_shape(&[5, 6]);
         ShapeOnlyBackend::matmul_shape(lhs, rhs);
     }
 
     #[test]
     fn test_broadcast_with_prefix() {
-        let arr = ShapeOnly(Shape(vec![3, 4]));
+        let arr = f32_shape(&[3, 4]);
         let shape = Shape(vec![2, 5, 3, 4]);
         let result = ShapeOnlyBackend::broadcast(arr, shape);
         assert_eq!(result.shape(), Shape(vec![2, 5, 3, 4]));
@@ -471,21 +577,21 @@ mod tests {
 
     #[test]
     fn test_reduce_last_dim() {
-        let arr = ShapeOnly(Shape(vec![2, 3, 4]));
+        let arr = f32_shape(&[2, 3, 4]);
         let result = ShapeOnlyBackend::reduce_last_dim(arr);
         assert_eq!(result.shape(), Shape(vec![2, 3, 1]));
     }
 
     #[test]
     fn test_reduce_last_dim_1d() {
-        let arr = ShapeOnly(Shape(vec![5]));
+        let arr = f32_shape(&[5]);
         let result = ShapeOnlyBackend::reduce_last_dim(arr);
         assert_eq!(result.shape(), Shape(vec![1]));
     }
 
     #[test]
     fn test_reduce_last_dim_scalar() {
-        let arr = ShapeOnly(Shape(vec![]));
+        let arr = f32_shape(&[]);
         let result = ShapeOnlyBackend::reduce_last_dim(arr);
         assert_eq!(result.shape(), Shape(vec![]));
     }
@@ -493,7 +599,7 @@ mod tests {
     #[test]
     fn test_reshape() {
         let backend = ShapeOnlyBackend;
-        let x = ShapeOnly(Shape(vec![2, 3]));
+        let x = f32_shape(&[2, 3]);
         let tagged_x = TaggedTensorTuple::F32([x]);
         let new_shape = Shape(vec![6]);
 
@@ -504,7 +610,7 @@ mod tests {
     #[test]
     fn test_neg() {
         let backend = ShapeOnlyBackend;
-        let x = ShapeOnly(Shape(vec![2, 3]));
+        let x = f32_shape(&[2, 3]);
         let tagged_x = TaggedTensorTuple::F32([x]);
 
         let result = backend.neg(tagged_x);
@@ -514,7 +620,7 @@ mod tests {
     #[test]
     fn test_sum() {
         let backend = ShapeOnlyBackend;
-        let x = ShapeOnly(Shape(vec![2, 3, 4]));
+        let x = f32_shape(&[2, 3, 4]);
         let tagged_x = TaggedTensorTuple::F32([x]);
 
         let result = backend.sum(tagged_x);
@@ -524,7 +630,7 @@ mod tests {
     #[test]
     fn test_max() {
         let backend = ShapeOnlyBackend;
-        let x = ShapeOnly(Shape(vec![2, 3, 4]));
+        let x = f32_shape(&[2, 3, 4]);
         let tagged_x = TaggedTensorTuple::F32([x]);
 
         let result = backend.max(tagged_x);
@@ -534,8 +640,8 @@ mod tests {
     #[test]
     fn test_compare_same_shapes() {
         let backend = ShapeOnlyBackend;
-        let x = ShapeOnly(Shape(vec![2, 3]));
-        let y = ShapeOnly(Shape(vec![2, 3]));
+        let x = f32_shape(&[2, 3]);
+        let y = f32_shape(&[2, 3]);
         let lhs = TaggedTensorTuple::F32([x, y]);
 
         assert!(backend.compare(lhs));
@@ -544,8 +650,8 @@ mod tests {
     #[test]
     fn test_compare_different_shapes() {
         let backend = ShapeOnlyBackend;
-        let x = ShapeOnly(Shape(vec![2, 3]));
-        let y = ShapeOnly(Shape(vec![3, 2]));
+        let x = f32_shape(&[2, 3]);
+        let y = f32_shape(&[3, 2]);
         let lhs = TaggedTensorTuple::F32([x, y]);
 
         assert!(!backend.compare(lhs));
@@ -554,7 +660,7 @@ mod tests {
     #[test]
     fn test_cast() {
         let backend = ShapeOnlyBackend;
-        let x = ShapeOnly(Shape(vec![2, 3]));
+        let x = f32_shape(&[2, 3]);
         let tagged_x = TaggedTensorTuple::F32([x]);
 
         let result = backend.cast(tagged_x, Dtype::U32);
@@ -564,7 +670,7 @@ mod tests {
     #[test]
     fn test_topk_shapes() {
         let backend = ShapeOnlyBackend;
-        let input = TaggedTensor::F32([ShapeOnly(Shape(vec![2, 5]))]);
+        let input = TaggedTensor::F32([f32_shape(&[2, 5])]);
         let (values, indices) = backend.topk(input, 3);
         assert_eq!(values.shape(), Shape(vec![2, 3]));
         assert_eq!(indices.shape(), Shape(vec![2, 3]));

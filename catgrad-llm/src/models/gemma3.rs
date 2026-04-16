@@ -182,7 +182,7 @@ impl LLMModel for Gemma3Model {
     }
 
     fn dtype(&self) -> Dtype {
-        self.dtype.clone()
+        self.dtype
     }
 
     fn multimodal_metadata(&self) -> Option<MultimodalMetadata> {

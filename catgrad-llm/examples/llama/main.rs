@@ -180,7 +180,7 @@ fn run_with_backend<B: interpreter::Backend>(
         tokenizer,
         tokenizer_config,
         total_params,
-    ) = load_model(&model_name, &args.revision, &backend, model_dtype.clone())?;
+    ) = load_model(&model_name, &args.revision, &backend, model_dtype)?;
     let elapsed_load = start_load.elapsed();
 
     eprintln!(

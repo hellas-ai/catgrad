@@ -244,21 +244,26 @@ pub(crate) fn try_into_tagged_ndarrays<B: Backend, const N: usize>(
 
     // Collect each tag into its own typed array
     let mut f32_arrays = Vec::new();
+    let mut f16_arrays = Vec::new();
+    let mut bf16_arrays = Vec::new();
     let mut u32_arrays = Vec::new();
     for x in tensors {
-        match x {
-            TaggedTensorTuple::F32([x]) => f32_arrays.push(x),
-            TaggedTensorTuple::U32([x]) => u32_arrays.push(x),
+        if x.dtype() != dtype {
+            return Err(InterpreterError::TypeError(ssa.edge_id));
         }
 
-        // early exit: if one dtype didn't match, we bail. (only happens when product is nonzeroD)
-        if f32_arrays.len().min(u32_arrays.len()) > 0 {
-            return Err(InterpreterError::TypeError(ssa.edge_id));
+        match x {
+            TaggedTensorTuple::F32([x]) => f32_arrays.push(x),
+            TaggedTensorTuple::F16([x]) => f16_arrays.push(x),
+            TaggedTensorTuple::BF16([x]) => bf16_arrays.push(x),
+            TaggedTensorTuple::U32([x]) => u32_arrays.push(x),
         }
     }
 
     Ok(match dtype {
         Dtype::F32 => f32_arrays.try_into().ok().map(TaggedTensorTuple::F32),
+        Dtype::F16 => f16_arrays.try_into().ok().map(TaggedTensorTuple::F16),
+        Dtype::BF16 => bf16_arrays.try_into().ok().map(TaggedTensorTuple::BF16),
         Dtype::U32 => u32_arrays.try_into().ok().map(TaggedTensorTuple::U32),
     }
     .unwrap()) // unwrap OK: we already checked arity!

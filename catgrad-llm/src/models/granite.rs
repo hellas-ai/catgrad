@@ -75,7 +75,7 @@ impl LLMModel for GraniteModel {
     }
 
     fn dtype(&self) -> Dtype {
-        self.dtype.clone()
+        self.dtype
     }
 }
 

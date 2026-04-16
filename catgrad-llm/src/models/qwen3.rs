@@ -83,7 +83,7 @@ impl LLMModel for Qwen3Model {
     }
 
     fn dtype(&self) -> Dtype {
-        self.dtype.clone()
+        self.dtype
     }
 }
 

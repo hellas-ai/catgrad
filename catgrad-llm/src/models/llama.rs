@@ -81,7 +81,7 @@ impl LLMModel for LlamaModel {
     }
 
     fn dtype(&self) -> Dtype {
-        self.dtype.clone()
+        self.dtype
     }
 }
 

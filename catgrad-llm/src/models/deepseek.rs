@@ -108,7 +108,7 @@ impl LLMModel for DeepSeekModel {
     }
 
     fn dtype(&self) -> Dtype {
-        self.dtype.clone()
+        self.dtype
     }
 
     fn weight_post_process(&self) -> WeightPostProcess {

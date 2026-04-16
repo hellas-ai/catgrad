@@ -27,7 +27,7 @@ pub fn llm_type(config: &dyn LLMConfig, dtype: Dtype) -> (Vec<Type>, Vec<Type>) 
     let v_head_dim = NatExpr::Constant(config.get_v_head_dim());
 
     let t_k = Type::Tensor(TypeExpr::NdArrayType(NdArrayType {
-        dtype: DtypeExpr::Constant(dtype.clone()),
+        dtype: DtypeExpr::Constant(dtype),
         shape: ShapeExpr::Shape(vec![
             num_layers.clone(),
             batch_size.clone(),
@@ -38,7 +38,7 @@ pub fn llm_type(config: &dyn LLMConfig, dtype: Dtype) -> (Vec<Type>, Vec<Type>) 
     }));
 
     let t_v = Type::Tensor(TypeExpr::NdArrayType(NdArrayType {
-        dtype: DtypeExpr::Constant(dtype.clone()),
+        dtype: DtypeExpr::Constant(dtype),
         shape: ShapeExpr::Shape(vec![
             num_layers.clone(),
             batch_size.clone(),
@@ -50,7 +50,7 @@ pub fn llm_type(config: &dyn LLMConfig, dtype: Dtype) -> (Vec<Type>, Vec<Type>) 
 
     let out_cache_len = NatExpr::Add(vec![cache_len, seq_len]);
     let t_k_out = Type::Tensor(TypeExpr::NdArrayType(NdArrayType {
-        dtype: DtypeExpr::Constant(dtype.clone()),
+        dtype: DtypeExpr::Constant(dtype),
         shape: ShapeExpr::Shape(vec![
             num_layers.clone(),
             batch_size.clone(),
@@ -119,7 +119,7 @@ pub trait LLMModel: DynModule {
             0,
             config.get_v_head_dim(),
         ]);
-        vec![(dtype.clone(), k_shape), (dtype, v_shape)]
+        vec![(dtype, k_shape), (dtype, v_shape)]
     }
 
     fn weight_post_process(&self) -> WeightPostProcess {

@@ -1,5 +1,6 @@
 use super::types::*;
 use crate::category::core::{Dtype, Shape};
+use half::{bf16, f16};
 use std::fmt::Debug;
 
 /// Default backend: only perform shape computations.
@@ -28,6 +29,18 @@ pub trait Backend: Clone + Debug {
     fn ndarray_from_vec_f32(
         &self,
         data: Vec<f32>,
+        shape: Shape,
+    ) -> Result<TaggedTensor<Self>, BackendError>;
+
+    fn ndarray_from_vec_f16(
+        &self,
+        data: Vec<f16>,
+        shape: Shape,
+    ) -> Result<TaggedTensor<Self>, BackendError>;
+
+    fn ndarray_from_vec_bf16(
+        &self,
+        data: Vec<bf16>,
         shape: Shape,
     ) -> Result<TaggedTensor<Self>, BackendError>;
 
@@ -91,6 +104,8 @@ pub trait Backend: Clone + Debug {
     fn format_tensor(&self, tensor: &TaggedTensor<Self>) -> String {
         match tensor {
             TaggedTensor::F32([x]) => format!("{x:?}"),
+            TaggedTensor::F16([x]) => format!("{x:?}"),
+            TaggedTensor::BF16([x]) => format!("{x:?}"),
             TaggedTensor::U32([x]) => format!("{x:?}"),
         }
     }

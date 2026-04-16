@@ -486,7 +486,7 @@ pub fn load_model_weights<B: interpreter::Backend>(
     backend: &B,
     dtype: Dtype,
 ) -> Result<(interpreter::Parameters<B>, typecheck::Parameters, usize)> {
-    if dtype != Dtype::F32 {
+    if !matches!(dtype, Dtype::F32 | Dtype::F16 | Dtype::BF16) {
         return Err(LLMError::UnsupportedDtype(format!("{dtype:?}")));
     }
 
@@ -505,26 +505,69 @@ pub fn load_model_weights<B: interpreter::Backend>(
             let tensor_data = view.data();
 
             use catgrad::typecheck::*;
-            // Convert dtype and load tensor data
-            let data: Vec<f32> = match view.dtype() {
-                safetensors::Dtype::F32 => tensor_data
-                    .par_chunks_exact(4)
-                    .map(|b| f32::from_le_bytes(b.try_into().unwrap()))
-                    .collect(),
-                safetensors::Dtype::BF16 => tensor_data
-                    .par_chunks_exact(2)
-                    .map(|b| half::bf16::from_le_bytes(b.try_into().unwrap()).to_f32())
-                    .collect(),
-                _ => {
-                    return Err(LLMError::UnsupportedDtype(format!("{:?}", view.dtype())));
+            let tensor = match dtype {
+                Dtype::F32 => {
+                    let data: Vec<f32> = match view.dtype() {
+                        safetensors::Dtype::F32 => tensor_data
+                            .par_chunks_exact(4)
+                            .map(|b| f32::from_le_bytes(b.try_into().unwrap()))
+                            .collect(),
+                        safetensors::Dtype::BF16 => tensor_data
+                            .par_chunks_exact(2)
+                            .map(|b| half::bf16::from_le_bytes(b.try_into().unwrap()).to_f32())
+                            .collect(),
+                        _ => {
+                            return Err(LLMError::UnsupportedDtype(format!("{:?}", view.dtype())));
+                        }
+                    };
+                    total_params += data.len();
+                    interpreter::tensor(backend, interpreter::Shape(shape.clone()), data)
                 }
-            };
-            total_params += data.len();
-
-            let tensor = interpreter::tensor(backend, interpreter::Shape(shape.clone()), data)
-                .map_err(|err| {
-                    LLMError::InvalidModelConfig(format!("failed to create tensor {name}: {err:?}"))
-                })?;
+                Dtype::F16 => {
+                    let data: Vec<half::f16> = match view.dtype() {
+                        safetensors::Dtype::F32 => tensor_data
+                            .par_chunks_exact(4)
+                            .map(|b| half::f16::from_f32(f32::from_le_bytes(b.try_into().unwrap())))
+                            .collect(),
+                        safetensors::Dtype::BF16 => tensor_data
+                            .par_chunks_exact(2)
+                            .map(|b| {
+                                half::f16::from_f32(
+                                    half::bf16::from_le_bytes(b.try_into().unwrap()).to_f32(),
+                                )
+                            })
+                            .collect(),
+                        _ => {
+                            return Err(LLMError::UnsupportedDtype(format!("{:?}", view.dtype())));
+                        }
+                    };
+                    total_params += data.len();
+                    interpreter::tensor(backend, interpreter::Shape(shape.clone()), data)
+                }
+                Dtype::BF16 => {
+                    let data: Vec<half::bf16> = match view.dtype() {
+                        safetensors::Dtype::F32 => tensor_data
+                            .par_chunks_exact(4)
+                            .map(|b| {
+                                half::bf16::from_f32(f32::from_le_bytes(b.try_into().unwrap()))
+                            })
+                            .collect(),
+                        safetensors::Dtype::BF16 => tensor_data
+                            .par_chunks_exact(2)
+                            .map(|b| half::bf16::from_le_bytes(b.try_into().unwrap()))
+                            .collect(),
+                        _ => {
+                            return Err(LLMError::UnsupportedDtype(format!("{:?}", view.dtype())));
+                        }
+                    };
+                    total_params += data.len();
+                    interpreter::tensor(backend, interpreter::Shape(shape.clone()), data)
+                }
+                Dtype::U32 => unreachable!(),
+            }
+            .map_err(|err| {
+                LLMError::InvalidModelConfig(format!("failed to create tensor {name}: {err:?}"))
+            })?;
             let key = path(name.split(".").collect()).map_err(|err| {
                 LLMError::InvalidModelConfig(format!("invalid param path {name}: {}", err.0))
             })?;
@@ -532,7 +575,7 @@ pub fn load_model_weights<B: interpreter::Backend>(
 
             let vne = shape.into_iter().map(NatExpr::Constant).collect();
             let tensor_type = Type::Tensor(TypeExpr::NdArrayType(NdArrayType {
-                dtype: DtypeExpr::Constant(Dtype::F32),
+                dtype: DtypeExpr::Constant(dtype),
                 shape: ShapeExpr::Shape(vne),
             }));
             type_map.insert(key, tensor_type);
@@ -629,19 +672,10 @@ pub fn empty_state_cache<B: interpreter::Backend>(
     let typ = model.empty_state_type();
 
     typ.iter()
-        .map(|(dtype, shape)| match dtype {
-            Dtype::F32 => {
-                let data = vec![0.0f32; shape.0.iter().product()];
-                interpreter::tensor(backend, shape.clone(), data).map_err(|err| {
-                    LLMError::InvalidModelConfig(format!("state tensor error: {:?}", err))
-                })
-            }
-            Dtype::U32 => {
-                let data = vec![0u32; shape.0.iter().product()];
-                interpreter::tensor(backend, shape.clone(), data).map_err(|err| {
-                    LLMError::InvalidModelConfig(format!("state tensor error: {:?}", err))
-                })
-            }
+        .map(|(dtype, shape)| {
+            Ok(interpreter::Value::Tensor(
+                backend.zeros(shape.clone(), *dtype),
+            ))
         })
         .collect()
 }

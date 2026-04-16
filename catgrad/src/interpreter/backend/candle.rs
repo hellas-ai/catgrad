@@ -40,6 +40,12 @@ pub struct CandleBackend {
 }
 
 impl CandleBackend {
+    fn ensure_dtype_supported(&self, dtype: DType) {
+        if dtype == DType::BF16 && !self.device.supports_bf16() {
+            panic!("BF16 is only supported by Candle on CUDA/Metal devices");
+        }
+    }
+
     pub fn new() -> Self {
         Self {
             device: Device::Cpu,
@@ -76,6 +82,10 @@ impl Backend for CandleBackend {
     fn to_vec(&self, vec: TaggedTensor<Self>) -> TaggedVec {
         match vec {
             TaggedTensor::F32([x]) => TaggedVec::F32(x.0.flatten_all().unwrap().to_vec1().unwrap()),
+            TaggedTensor::F16([x]) => TaggedVec::F16(x.0.flatten_all().unwrap().to_vec1().unwrap()),
+            TaggedTensor::BF16([x]) => {
+                TaggedVec::BF16(x.0.flatten_all().unwrap().to_vec1().unwrap())
+            }
             TaggedTensor::U32([x]) => TaggedVec::U32(x.0.flatten_all().unwrap().to_vec1().unwrap()),
         }
     }
@@ -83,6 +93,8 @@ impl Backend for CandleBackend {
     fn format_tensor(&self, tensor: &TaggedTensor<Self>) -> String {
         match tensor {
             TaggedTensor::F32([x]) => format!("{}", &x.0),
+            TaggedTensor::F16([x]) => format!("{}", &x.0),
+            TaggedTensor::BF16([x]) => format!("{}", &x.0),
             TaggedTensor::U32([x]) => format!("{}", &x.0),
         }
     }
@@ -93,6 +105,15 @@ impl Backend for CandleBackend {
             Dtype::F32 => {
                 let tensor = Tensor::zeros(dims, DType::F32, &self.device).unwrap();
                 TaggedTensor::F32([CandleTensor(tensor)])
+            }
+            Dtype::F16 => {
+                let tensor = Tensor::zeros(dims, DType::F16, &self.device).unwrap();
+                TaggedTensor::F16([CandleTensor(tensor)])
+            }
+            Dtype::BF16 => {
+                self.ensure_dtype_supported(DType::BF16);
+                let tensor = Tensor::zeros(dims, DType::BF16, &self.device).unwrap();
+                TaggedTensor::BF16([CandleTensor(tensor)])
             }
             Dtype::U32 => {
                 let tensor = Tensor::zeros(dims, DType::U32, &self.device).unwrap();
@@ -112,6 +133,29 @@ impl Backend for CandleBackend {
         Ok(TaggedTensor::F32([CandleTensor(tensor)]))
     }
 
+    fn ndarray_from_vec_f16(
+        &self,
+        data: Vec<half::f16>,
+        shape: Shape,
+    ) -> Result<TaggedTensor<Self>, BackendError> {
+        let dims: &[usize] = &shape.0;
+        let tensor =
+            Tensor::from_vec(data, dims, &self.device).map_err(|_| BackendError::ShapeError)?;
+        Ok(TaggedTensor::F16([CandleTensor(tensor)]))
+    }
+
+    fn ndarray_from_vec_bf16(
+        &self,
+        data: Vec<half::bf16>,
+        shape: Shape,
+    ) -> Result<TaggedTensor<Self>, BackendError> {
+        self.ensure_dtype_supported(DType::BF16);
+        let dims: &[usize] = &shape.0;
+        let tensor =
+            Tensor::from_vec(data, dims, &self.device).map_err(|_| BackendError::ShapeError)?;
+        Ok(TaggedTensor::BF16([CandleTensor(tensor)]))
+    }
+
     fn ndarray_from_vec_u32(
         &self,
         data: Vec<u32>,
@@ -124,17 +168,30 @@ impl Backend for CandleBackend {
     }
 
     fn cast(&self, x: TaggedTensor<Self>, target_dtype: Dtype) -> TaggedTensor<Self> {
-        match (&x, target_dtype) {
-            (TaggedTensor::F32(arr), Dtype::U32) => {
-                let result = arr[0].0.to_dtype(DType::U32).unwrap();
-                TaggedTensor::U32([CandleTensor(result)])
-            }
-            (TaggedTensor::U32(arr), Dtype::F32) => {
-                let result = arr[0].0.to_dtype(DType::F32).unwrap();
-                TaggedTensor::F32([CandleTensor(result)])
-            }
-            (TaggedTensor::F32(_), Dtype::F32) => x,
-            (TaggedTensor::U32(_), Dtype::U32) => x,
+        if x.dtype() == target_dtype {
+            return x;
+        }
+
+        let tensor = match x {
+            TaggedTensor::F32([arr])
+            | TaggedTensor::F16([arr])
+            | TaggedTensor::BF16([arr])
+            | TaggedTensor::U32([arr]) => arr.0,
+        };
+        let target_dtype = match target_dtype {
+            Dtype::F32 => DType::F32,
+            Dtype::F16 => DType::F16,
+            Dtype::BF16 => DType::BF16,
+            Dtype::U32 => DType::U32,
+        };
+        self.ensure_dtype_supported(target_dtype);
+        let tensor = CandleTensor(tensor.to_dtype(target_dtype).unwrap());
+        match target_dtype {
+            DType::F32 => TaggedTensor::F32([tensor]),
+            DType::F16 => TaggedTensor::F16([tensor]),
+            DType::BF16 => TaggedTensor::BF16([tensor]),
+            DType::U32 => TaggedTensor::U32([tensor]),
+            _ => unreachable!(),
         }
     }
 
@@ -142,6 +199,8 @@ impl Backend for CandleBackend {
         use TaggedTensorTuple::*;
         match lhs {
             F32([x, y]) => F32([CandleTensor(Self::batched_matmul(x.0, y.0))]),
+            F16([x, y]) => F16([CandleTensor(Self::batched_matmul(x.0, y.0))]),
+            BF16([x, y]) => BF16([CandleTensor(Self::batched_matmul(x.0, y.0))]),
             U32([x, y]) => U32([CandleTensor(Self::batched_matmul(x.0, y.0))]),
         }
     }
@@ -150,6 +209,8 @@ impl Backend for CandleBackend {
         use TaggedTensorTuple::*;
         match lhs {
             F32([x, y]) => F32([Self::add(x, y)]),
+            F16([x, y]) => F16([Self::add(x, y)]),
+            BF16([x, y]) => BF16([Self::add(x, y)]),
             U32([x, y]) => U32([Self::add(x, y)]),
         }
     }
@@ -158,6 +219,8 @@ impl Backend for CandleBackend {
         use TaggedTensorTuple::*;
         match lhs {
             F32([x, y]) => F32([Self::sub(x, y)]),
+            F16([x, y]) => F16([Self::sub(x, y)]),
+            BF16([x, y]) => BF16([Self::sub(x, y)]),
             U32([x, y]) => U32([Self::sub(x, y)]),
         }
     }
@@ -166,6 +229,8 @@ impl Backend for CandleBackend {
         use TaggedTensorTuple::*;
         match lhs {
             F32([x, y]) => F32([Self::mul(x, y)]),
+            F16([x, y]) => F16([Self::mul(x, y)]),
+            BF16([x, y]) => BF16([Self::mul(x, y)]),
             U32([x, y]) => U32([Self::mul(x, y)]),
         }
     }
@@ -174,6 +239,8 @@ impl Backend for CandleBackend {
         use TaggedTensorTuple::*;
         match lhs {
             F32([x, y]) => F32([Self::div(x, y)]),
+            F16([x, y]) => F16([Self::div(x, y)]),
+            BF16([x, y]) => BF16([Self::div(x, y)]),
             U32([x, y]) => U32([Self::div(x, y)]),
         }
     }
@@ -182,6 +249,8 @@ impl Backend for CandleBackend {
         use TaggedTensorTuple::*;
         match lhs {
             F32([x, y]) => F32([Self::lt(x, y)]),
+            F16([x, y]) => F16([Self::lt(x, y)]),
+            BF16([x, y]) => BF16([Self::lt(x, y)]),
             U32([x, y]) => U32([Self::lt(x, y)]),
         }
     }
@@ -190,6 +259,8 @@ impl Backend for CandleBackend {
         use TaggedTensorTuple::*;
         match lhs {
             F32([x, y]) => F32([Self::gt(x, y)]),
+            F16([x, y]) => F16([Self::gt(x, y)]),
+            BF16([x, y]) => BF16([Self::gt(x, y)]),
             U32([x, y]) => U32([Self::gt(x, y)]),
         }
     }
@@ -198,6 +269,8 @@ impl Backend for CandleBackend {
         use TaggedTensorTuple::*;
         match lhs {
             F32([x, y]) => F32([Self::gte(x, y)]),
+            F16([x, y]) => F16([Self::gte(x, y)]),
+            BF16([x, y]) => BF16([Self::gte(x, y)]),
             U32([x, y]) => U32([Self::gte(x, y)]),
         }
     }
@@ -206,6 +279,8 @@ impl Backend for CandleBackend {
         use TaggedTensorTuple::*;
         match lhs {
             F32([x, y]) => F32([Self::lte(x, y)]),
+            F16([x, y]) => F16([Self::lte(x, y)]),
+            BF16([x, y]) => BF16([Self::lte(x, y)]),
             U32([x, y]) => U32([Self::lte(x, y)]),
         }
     }
@@ -214,6 +289,8 @@ impl Backend for CandleBackend {
         use TaggedTensorTuple::*;
         match lhs {
             F32([x, y]) => F32([Self::eq(x, y)]),
+            F16([x, y]) => F16([Self::eq(x, y)]),
+            BF16([x, y]) => BF16([Self::eq(x, y)]),
             U32([x, y]) => U32([Self::eq(x, y)]),
         }
     }
@@ -222,6 +299,8 @@ impl Backend for CandleBackend {
         use TaggedTensorTuple::*;
         match args {
             F32([mask, x, y]) => F32([Self::where_cond(mask, x, y)]),
+            F16([mask, x, y]) => F16([Self::where_cond(mask, x, y)]),
+            BF16([mask, x, y]) => BF16([Self::where_cond(mask, x, y)]),
             U32([mask, x, y]) => U32([Self::where_cond(mask, x, y)]),
         }
     }
@@ -230,6 +309,8 @@ impl Backend for CandleBackend {
         use TaggedTensorTuple::*;
         match lhs {
             F32([x, y]) => F32([Self::pow(x, y)]),
+            F16([x, y]) => F16([Self::pow(x, y)]),
+            BF16([x, y]) => BF16([Self::pow(x, y)]),
             U32([x, y]) => U32([Self::pow(x, y)]),
         }
     }
@@ -238,6 +319,8 @@ impl Backend for CandleBackend {
         use TaggedTensorTuple::*;
         match x {
             F32([arr]) => F32([Self::neg(arr)]),
+            F16([arr]) => F16([Self::neg(arr)]),
+            BF16([arr]) => BF16([Self::neg(arr)]),
             U32([arr]) => U32([Self::neg(arr)]),
         }
     }
@@ -246,6 +329,8 @@ impl Backend for CandleBackend {
         use TaggedTensorTuple::*;
         match x {
             F32([arr]) => F32([Self::sin(arr)]),
+            F16([arr]) => F16([Self::sin(arr)]),
+            BF16([arr]) => BF16([Self::sin(arr)]),
             _ => panic!("Invalid type for sin"),
         }
     }
@@ -254,6 +339,8 @@ impl Backend for CandleBackend {
         use TaggedTensorTuple::*;
         match x {
             F32([arr]) => F32([Self::cos(arr)]),
+            F16([arr]) => F16([Self::cos(arr)]),
+            BF16([arr]) => BF16([Self::cos(arr)]),
             _ => panic!("Invalid type for cos"),
         }
     }
@@ -262,6 +349,8 @@ impl Backend for CandleBackend {
         use TaggedTensorTuple::*;
         match x {
             F32([arr]) => F32([Self::log(arr)]),
+            F16([arr]) => F16([Self::log(arr)]),
+            BF16([arr]) => BF16([Self::log(arr)]),
             _ => panic!("Invalid type for log"),
         }
     }
@@ -270,6 +359,8 @@ impl Backend for CandleBackend {
         use TaggedTensorTuple::*;
         match x {
             F32([arr]) => F32([Self::floor(arr)]),
+            F16([arr]) => F16([Self::floor(arr)]),
+            BF16([arr]) => BF16([Self::floor(arr)]),
             _ => panic!("Invalid type for floor"),
         }
     }
@@ -278,6 +369,8 @@ impl Backend for CandleBackend {
         use TaggedTensorTuple::*;
         match x {
             F32([arr]) => F32([Self::max(arr)]),
+            F16([arr]) => F16([Self::max(arr)]),
+            BF16([arr]) => BF16([Self::max(arr)]),
             U32([arr]) => U32([Self::max(arr)]),
         }
     }
@@ -286,6 +379,8 @@ impl Backend for CandleBackend {
         use TaggedTensorTuple::*;
         match x {
             F32([arr]) => F32([Self::sum(arr)]),
+            F16([arr]) => F16([Self::sum(arr)]),
+            BF16([arr]) => BF16([Self::sum(arr)]),
             U32([arr]) => U32([Self::sum(arr)]),
         }
     }
@@ -294,6 +389,8 @@ impl Backend for CandleBackend {
         use TaggedTensorTuple::*;
         match x {
             F32([arr]) => U32([Self::argmax(arr)]),
+            F16([arr]) => U32([Self::argmax(arr)]),
+            BF16([arr]) => U32([Self::argmax(arr)]),
             U32([arr]) => U32([Self::argmax(arr)]),
         }
     }
@@ -305,6 +402,14 @@ impl Backend for CandleBackend {
                 let (values, indices) = Self::topk_f32(arr.0, k);
                 (F32([CandleTensor(values)]), U32([CandleTensor(indices)]))
             }
+            F16([arr]) => {
+                let (values, indices) = Self::topk_f32(arr.0, k);
+                (F16([CandleTensor(values)]), U32([CandleTensor(indices)]))
+            }
+            BF16([arr]) => {
+                let (values, indices) = Self::topk_f32(arr.0, k);
+                (BF16([CandleTensor(values)]), U32([CandleTensor(indices)]))
+            }
             _ => panic!("Unsupported type for topk"),
         }
     }
@@ -313,6 +418,8 @@ impl Backend for CandleBackend {
         use TaggedTensorTuple::*;
         match x {
             F32([arr]) => F32([CandleTensor(Self::broadcast_tensor(arr.0, shape))]),
+            F16([arr]) => F16([CandleTensor(Self::broadcast_tensor(arr.0, shape))]),
+            BF16([arr]) => BF16([CandleTensor(Self::broadcast_tensor(arr.0, shape))]),
             U32([arr]) => U32([CandleTensor(Self::broadcast_tensor(arr.0, shape))]),
         }
     }
@@ -321,6 +428,8 @@ impl Backend for CandleBackend {
         use TaggedTensorTuple::*;
         match x {
             F32([arr]) => F32([CandleTensor(Self::reshape_tensor(arr.0, new_shape))]),
+            F16([arr]) => F16([CandleTensor(Self::reshape_tensor(arr.0, new_shape))]),
+            BF16([arr]) => BF16([CandleTensor(Self::reshape_tensor(arr.0, new_shape))]),
             U32([arr]) => U32([CandleTensor(Self::reshape_tensor(arr.0, new_shape))]),
         }
     }
@@ -329,6 +438,8 @@ impl Backend for CandleBackend {
         use TaggedTensorTuple::*;
         match x {
             F32([arr]) => F32([CandleTensor(Self::transpose_tensor(arr.0, dim0, dim1))]),
+            F16([arr]) => F16([CandleTensor(Self::transpose_tensor(arr.0, dim0, dim1))]),
+            BF16([arr]) => BF16([CandleTensor(Self::transpose_tensor(arr.0, dim0, dim1))]),
             U32([arr]) => U32([CandleTensor(Self::transpose_tensor(arr.0, dim0, dim1))]),
         }
     }
@@ -341,6 +452,22 @@ impl Backend for CandleBackend {
     fn to_bool(&self, x: TaggedTensor<Self>) -> bool {
         match x {
             TaggedTensor::F32([x]) => {
+                x.0.gt(0.0)
+                    .ok()
+                    .and_then(|t| t.max_all().ok())
+                    .and_then(|m| m.to_scalar::<u8>().ok())
+                    .map(|s| s == 1)
+                    .unwrap_or(false)
+            }
+            TaggedTensor::F16([x]) => {
+                x.0.gt(0.0)
+                    .ok()
+                    .and_then(|t| t.max_all().ok())
+                    .and_then(|m| m.to_scalar::<u8>().ok())
+                    .map(|s| s == 1)
+                    .unwrap_or(false)
+            }
+            TaggedTensor::BF16([x]) => {
                 x.0.gt(0.0)
                     .ok()
                     .and_then(|t| t.max_all().ok())
@@ -370,6 +497,12 @@ impl Backend for CandleBackend {
             (F32([arr]), U32([indices])) => {
                 F32([CandleTensor(Self::index_tensor(arr.0, dim, indices.0))])
             }
+            (F16([arr]), U32([indices])) => {
+                F16([CandleTensor(Self::index_tensor(arr.0, dim, indices.0))])
+            }
+            (BF16([arr]), U32([indices])) => {
+                BF16([CandleTensor(Self::index_tensor(arr.0, dim, indices.0))])
+            }
             (U32([arr]), U32([indices])) => {
                 U32([CandleTensor(Self::index_tensor(arr.0, dim, indices.0))])
             }
@@ -387,6 +520,8 @@ impl Backend for CandleBackend {
         use TaggedTensorTuple::*;
         match x {
             F32([arr]) => F32([CandleTensor(Self::slice_tensor(arr.0, dim, start, len))]),
+            F16([arr]) => F16([CandleTensor(Self::slice_tensor(arr.0, dim, start, len))]),
+            BF16([arr]) => BF16([CandleTensor(Self::slice_tensor(arr.0, dim, start, len))]),
             U32([arr]) => U32([CandleTensor(Self::slice_tensor(arr.0, dim, start, len))]),
         }
     }
@@ -395,6 +530,8 @@ impl Backend for CandleBackend {
         use TaggedTensorTuple::*;
         match x {
             F32([a, b]) => Self::compare_tensors(&a.0, &b.0),
+            F16([a, b]) => Self::compare_tensors(&a.0, &b.0),
+            BF16([a, b]) => Self::compare_tensors(&a.0, &b.0),
             U32([a, b]) => Self::compare_tensors(&a.0, &b.0),
         }
     }
@@ -408,6 +545,8 @@ impl Backend for CandleBackend {
         use TaggedTensorTuple::*;
         match (x, y) {
             (F32([a]), F32([b])) => F32([CandleTensor(Self::concat_tensors(&a.0, &b.0, dim))]),
+            (F16([a]), F16([b])) => F16([CandleTensor(Self::concat_tensors(&a.0, &b.0, dim))]),
+            (BF16([a]), BF16([b])) => BF16([CandleTensor(Self::concat_tensors(&a.0, &b.0, dim))]),
             (U32([a]), U32([b])) => U32([CandleTensor(Self::concat_tensors(&a.0, &b.0, dim))]),
             _ => panic!("Incompatible types for concatenation"),
         }
@@ -415,6 +554,16 @@ impl Backend for CandleBackend {
 }
 
 impl CandleBackend {
+    fn float_tensor_to_f32_vec(tensor: Tensor) -> Vec<f32> {
+        let tensor = match tensor.dtype() {
+            DType::F32 => tensor,
+            DType::F16 | DType::BF16 => tensor.to_dtype(DType::F32).unwrap(),
+            dtype => panic!("Unsupported float tensor dtype {dtype:?}"),
+        };
+
+        tensor.flatten_all().unwrap().to_vec1().unwrap()
+    }
+
     // ============================================================================
     //              TENSOR COMPARISON: CANDLE vs NDARRAY DESIGN DIFFERENCES
     // ============================================================================
@@ -550,16 +699,17 @@ impl CandleBackend {
     }
 
     fn eq(x: CandleTensor, y: CandleTensor) -> CandleTensor {
+        let dtype = x.0.dtype();
         if x.0.dims() != y.0.dims() {
             panic!("Shape mismatch in operation");
         }
 
-        CandleTensor((x.0.eq(&y.0)).unwrap())
+        CandleTensor(x.0.eq(&y.0).unwrap().to_dtype(dtype).unwrap())
     }
 
     fn where_cond(mask: CandleTensor, x: CandleTensor, y: CandleTensor) -> CandleTensor {
         let mask = match mask.0.dtype() {
-            DType::F32 => mask.0.gt(0.).unwrap(),
+            DType::F32 | DType::F16 | DType::BF16 => mask.0.gt(0.).unwrap(),
             DType::U32 => mask.0.ne(0u32).unwrap(),
             _ => mask.0, // already U8 (boolean) or other type
         };
@@ -594,9 +744,13 @@ impl CandleBackend {
             panic!("Shape mismatch in operation");
         }
 
+        let dtype = x.0.dtype();
+        let shape = x.0.dims().to_vec();
+        let device = x.0.device().clone();
+
         // Convert tensors to vectors for element-wise powf operation
-        let x_vec: Vec<f32> = x.0.flatten_all().unwrap().to_vec1().unwrap();
-        let y_vec: Vec<f32> = y.0.flatten_all().unwrap().to_vec1().unwrap();
+        let x_vec = Self::float_tensor_to_f32_vec(x.0);
+        let y_vec = Self::float_tensor_to_f32_vec(y.0);
 
         // Perform element-wise powf
         let result_vec: Vec<f32> = x_vec
@@ -606,8 +760,12 @@ impl CandleBackend {
             .collect();
 
         // Convert back to tensor with original shape
-        let shape = x.0.dims();
-        let result_tensor = Tensor::from_vec(result_vec, shape, x.0.device()).unwrap();
+        let result_tensor = Tensor::from_vec(result_vec, shape, &device).unwrap();
+        let result_tensor = if dtype == DType::F32 {
+            result_tensor
+        } else {
+            result_tensor.to_dtype(dtype).unwrap()
+        };
         CandleTensor(result_tensor)
     }
 
