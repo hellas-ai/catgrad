@@ -431,14 +431,16 @@ pub(crate) fn concat_moe_experts<B: interpreter::Backend>(
                 layer_idx, proj_name
             );
             let new_key = path(new_key_str.split(".").collect()).expect("invalid param path");
+            let concatenated_dtype = concatenated.dtype();
 
+            println!("concatenated dtype: {:?}", concatenated_dtype);
             parameter_values
                 .0
                 .insert(new_key.clone(), interpreter::Value::Tensor(concatenated));
 
             let vne: Vec<NatExpr> = new_shape_dims.into_iter().map(NatExpr::Constant).collect();
             let tensor_type = typecheck::Type::Tensor(TypeExpr::NdArrayType(NdArrayType {
-                dtype: DtypeExpr::Constant(Dtype::F32),
+                dtype: DtypeExpr::Constant(concatenated_dtype),
                 shape: ShapeExpr::Shape(vne),
             }));
             parameter_types.0.insert(new_key, tensor_type);
