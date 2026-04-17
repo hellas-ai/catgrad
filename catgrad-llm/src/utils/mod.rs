@@ -190,7 +190,7 @@ fn prepare_multimodal_input_from_image(
                 runtime_context: None,
             })
         }
-        "Qwen3_5ForConditionalGeneration" => {
+        "Qwen3_5ForConditionalGeneration" | "Qwen3_5MoeForConditionalGeneration" => {
             let prepared = models::qwen3_5::prepare_qwen3_5_image_input(image, config_json)?;
             Ok(PreparedMultimodalInput {
                 image: Some(PreparedImageInput {
@@ -221,14 +221,18 @@ pub fn interpolate_multimodal_prompt(
 ) -> Result<String> {
     let arch = get_model_architecture(config_json)?;
     let interpolated = match arch {
-        "Qwen3_5ForConditionalGeneration" => models::qwen3_5::interpolate_qwen3_5_prompt(
-            config_json,
-            match runtime_context {
-                Some(ModelRuntimeContext::Qwen3_5Vision(runtime_vision)) => Some(runtime_vision),
-                _ => None,
-            },
-            prompt,
-        )?,
+        "Qwen3_5ForConditionalGeneration" | "Qwen3_5MoeForConditionalGeneration" => {
+            models::qwen3_5::interpolate_qwen3_5_prompt(
+                config_json,
+                match runtime_context {
+                    Some(ModelRuntimeContext::Qwen3_5Vision(runtime_vision)) => {
+                        Some(runtime_vision)
+                    }
+                    _ => None,
+                },
+                prompt,
+            )?
+        }
         _ => {
             let model = get_model(config_json, 1, runtime_context, Dtype::F32)?;
             if !model.is_multimodal() {
@@ -278,72 +282,75 @@ pub fn get_model(
 ) -> Result<Box<dyn LLMModel>> {
     let arch = get_model_architecture(config_json)?;
 
-    let model: Box<dyn LLMModel> = match arch {
-        "Gemma2ForCausalLM" | "Gemma3ForCausalLM" => Box::new(models::gemma3::Gemma3Model::new(
-            "model",
-            config_json,
-            dtype,
-        )?),
-        "Gemma3ForConditionalGeneration" | "PaliGemmaForConditionalGeneration" => Box::new(
-            models::gemma3::Gemma3Model::new("language_model.model", config_json, dtype)?,
-        ),
-        "Gemma4ForConditionalGeneration" => Box::new(models::gemma4::Gemma4Model::new(
-            "model.language_model",
-            config_json,
-            match runtime_context {
-                Some(ModelRuntimeContext::Gemma4Vision(runtime_vision)) => Some(runtime_vision),
-                _ => None,
-            },
-            dtype,
-        )?),
-        "Mistral3ForConditionalGeneration" => Box::new(models::mistral3::Mistral3Model::new(
-            "language_model",
-            config_json,
-            dtype,
-        )?),
-        "MistralForCausalLM" | "LlamaForCausalLM" | "SmolLM3ForCausalLM" => {
-            Box::new(models::llama::LlamaModel::new("", config_json, dtype)?)
-        }
-        "NemotronHForCausalLM" => {
-            Box::new(models::nemotron::NemotronModel::new(config_json, dtype)?)
-        }
-        "SmolVLMForConditionalGeneration" => {
-            Box::new(models::smolvlm2::SmolVLM2Model::new(config_json, dtype)?)
-        }
-        "Phi3ForCausalLM" | "Phi4MMForCausalLM" => {
-            Box::new(models::phi3::Phi3Model::new(config_json, dtype)?)
-        }
-        "Olmo2ForCausalLM" | "Olmo3ForCausalLM" | "OlmoHybridForCausalLM" => Box::new(
-            models::olmo::OlmoModel::new(config_json, max_sequence_length, dtype)?,
-        ),
-        "Qwen3ForCausalLM" | "Qwen3MoeForCausalLM" => {
-            Box::new(models::qwen3::Qwen3Model::new(config_json, dtype)?)
-        }
-        "Qwen3_5ForConditionalGeneration" => Box::new(models::qwen3_5::Qwen3_5Model::new(
-            config_json,
-            max_sequence_length,
-            match runtime_context {
-                Some(ModelRuntimeContext::Qwen3_5Vision(runtime_vision)) => Some(runtime_vision),
-                _ => None,
-            },
-            dtype,
-        )?),
-        "GraniteForCausalLM" | "GraniteMoeForCausalLM" | "GraniteMoeHybridForCausalLM" => {
-            Box::new(models::granite::GraniteModel::new(config_json, dtype)?)
-        }
-        "DeepseekV3ForCausalLM" => {
-            Box::new(models::deepseek::DeepSeekModel::new(config_json, dtype)?)
-        }
-        "GptOssForCausalLM" => Box::new(models::gpt_oss::GPTOssModel::new(config_json, dtype)?),
-        "Lfm2ForCausalLM" => Box::new(models::lfm2::Lfm2Model::new(config_json, dtype)?),
-        "GPT2LMHeadModel" => Box::new(models::gpt2::GPT2Model::new(config_json, dtype)?),
-        _ => {
-            return Err(LLMError::InvalidModelConfig(format!(
-                "Unsupported model architecture: {}",
-                arch
-            )));
-        }
-    };
+    let model: Box<dyn LLMModel> =
+        match arch {
+            "Gemma2ForCausalLM" | "Gemma3ForCausalLM" => Box::new(
+                models::gemma3::Gemma3Model::new("model", config_json, dtype)?,
+            ),
+            "Gemma3ForConditionalGeneration" | "PaliGemmaForConditionalGeneration" => Box::new(
+                models::gemma3::Gemma3Model::new("language_model.model", config_json, dtype)?,
+            ),
+            "Gemma4ForConditionalGeneration" => Box::new(models::gemma4::Gemma4Model::new(
+                "model.language_model",
+                config_json,
+                match runtime_context {
+                    Some(ModelRuntimeContext::Gemma4Vision(runtime_vision)) => Some(runtime_vision),
+                    _ => None,
+                },
+                dtype,
+            )?),
+            "Mistral3ForConditionalGeneration" => Box::new(models::mistral3::Mistral3Model::new(
+                "language_model",
+                config_json,
+                dtype,
+            )?),
+            "MistralForCausalLM" | "LlamaForCausalLM" | "SmolLM3ForCausalLM" => {
+                Box::new(models::llama::LlamaModel::new("", config_json, dtype)?)
+            }
+            "NemotronHForCausalLM" => {
+                Box::new(models::nemotron::NemotronModel::new(config_json, dtype)?)
+            }
+            "SmolVLMForConditionalGeneration" => {
+                Box::new(models::smolvlm2::SmolVLM2Model::new(config_json, dtype)?)
+            }
+            "Phi3ForCausalLM" | "Phi4MMForCausalLM" => {
+                Box::new(models::phi3::Phi3Model::new(config_json, dtype)?)
+            }
+            "Olmo2ForCausalLM" | "Olmo3ForCausalLM" | "OlmoHybridForCausalLM" => Box::new(
+                models::olmo::OlmoModel::new(config_json, max_sequence_length, dtype)?,
+            ),
+            "Qwen3ForCausalLM" | "Qwen3MoeForCausalLM" => {
+                Box::new(models::qwen3::Qwen3Model::new(config_json, dtype)?)
+            }
+            "Qwen3_5ForConditionalGeneration" | "Qwen3_5MoeForConditionalGeneration" => {
+                Box::new(models::qwen3_5::Qwen3_5Model::new(
+                    config_json,
+                    max_sequence_length,
+                    match runtime_context {
+                        Some(ModelRuntimeContext::Qwen3_5Vision(runtime_vision)) => {
+                            Some(runtime_vision)
+                        }
+                        _ => None,
+                    },
+                    dtype,
+                )?)
+            }
+            "GraniteForCausalLM" | "GraniteMoeForCausalLM" | "GraniteMoeHybridForCausalLM" => {
+                Box::new(models::granite::GraniteModel::new(config_json, dtype)?)
+            }
+            "DeepseekV3ForCausalLM" => {
+                Box::new(models::deepseek::DeepSeekModel::new(config_json, dtype)?)
+            }
+            "GptOssForCausalLM" => Box::new(models::gpt_oss::GPTOssModel::new(config_json, dtype)?),
+            "Lfm2ForCausalLM" => Box::new(models::lfm2::Lfm2Model::new(config_json, dtype)?),
+            "GPT2LMHeadModel" => Box::new(models::gpt2::GPT2Model::new(config_json, dtype)?),
+            _ => {
+                return Err(LLMError::InvalidModelConfig(format!(
+                    "Unsupported model architecture: {}",
+                    arch
+                )));
+            }
+        };
     Ok(model)
 }
 

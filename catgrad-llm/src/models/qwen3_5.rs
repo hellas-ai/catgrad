@@ -385,6 +385,14 @@ struct Qwen3_5TextConfig {
     linear_value_head_dim: usize,
     linear_num_value_heads: usize,
     #[serde(default)]
+    moe_intermediate_size: usize,
+    #[serde(default)]
+    shared_expert_intermediate_size: usize,
+    #[serde(default)]
+    num_experts_per_tok: usize,
+    #[serde(default)]
+    num_experts: usize,
+    #[serde(default)]
     rope_parameters: Qwen3_5RopeParameters,
     rms_norm_eps: f32,
     tie_word_embeddings: bool,
@@ -941,29 +949,110 @@ impl Qwen3_5Model {
         (cos(builder, emb.clone()), sin(builder, emb))
     }
 
-    fn mlp(&self, builder: &Builder, p: Path, x: Var) -> Var {
+    fn swiglu_mlp(&self, builder: &Builder, p: Path, intermediate_size: usize, x: Var) -> Var {
         let gate = linear_no_bias(
             builder,
             self.config.hidden_size,
-            self.config.intermediate_size,
+            intermediate_size,
             p.extend(["gate_proj"]).unwrap(),
             x.clone(),
         );
         let up = linear_no_bias(
             builder,
             self.config.hidden_size,
-            self.config.intermediate_size,
+            intermediate_size,
             p.extend(["up_proj"]).unwrap(),
             x,
         );
         let x = silu(builder, gate) * up;
         linear_no_bias(
             builder,
-            self.config.intermediate_size,
+            intermediate_size,
             self.config.hidden_size,
             p.extend(["down_proj"]).unwrap(),
             x,
         )
+    }
+
+    fn mlp(&self, builder: &Builder, p: Path, x: Var) -> Var {
+        self.swiglu_mlp(builder, p, self.config.intermediate_size, x)
+    }
+
+    fn moe(&self, builder: &Builder, p: Path, x: Var) -> Var {
+        let [batch_size, seq_len, hidden_size] = unpack::<3>(builder, shape(builder, x.clone()));
+
+        let routed = linear_no_bias(
+            builder,
+            self.config.hidden_size,
+            self.config.num_experts,
+            p.extend(["gate"]).unwrap(),
+            x.clone(),
+        );
+        let routed = softmax(builder, routed);
+
+        let num_tokens = batch_size.clone() * seq_len.clone();
+        let (mut top_k_weights, top_k_index) =
+            topk(builder, self.config.num_experts_per_tok, routed);
+        let top_k_shape = shape!(builder, num_tokens, self.config.num_experts_per_tok);
+        top_k_weights = reshape(builder, top_k_shape.clone(), top_k_weights);
+        let top_k_index = reshape(builder, top_k_shape.clone(), top_k_index);
+        let top_k_sum = sum(builder, top_k_weights.clone());
+        let top_k_sum = broadcast(builder, top_k_shape, top_k_sum);
+        top_k_weights = top_k_weights / top_k_sum;
+
+        let fullx_shape = shape!(builder, num_tokens, 1, hidden_size);
+        let fullx = reshape(builder, fullx_shape.clone(), x.clone());
+        let gate_up_proj = param(builder, &p.extend(["experts", "gate_up_proj"]).unwrap());
+        let down_proj = param(builder, &p.extend(["experts", "down_proj"]).unwrap());
+        let mut sumk = constant(builder, 0.0, &fullx_shape);
+        sumk = cast(builder, sumk, dtype(builder, fullx.clone()));
+
+        for i in 0..self.config.num_experts_per_tok {
+            let idx = get(builder, 1, i, top_k_index.clone());
+            let idx = squeeze::<2, 1>(builder, 1, idx);
+            let val = get(builder, 1, i, top_k_weights.clone());
+
+            let gate_up = index(builder, 0, idx.clone(), gate_up_proj.clone());
+            let gate_up = transpose(builder, 1, 2, gate_up);
+            let down = index(builder, 0, idx, down_proj.clone());
+            let down = transpose(builder, 1, 2, down);
+
+            let gate_up = matmul(builder, fullx.clone(), gate_up);
+            let [gate, up]: [Var; 2] =
+                chunk(builder, 2, 2, self.config.moe_intermediate_size, gate_up)
+                    .try_into()
+                    .unwrap();
+            let x = silu(builder, gate) * up;
+            let x = matmul(builder, x, down);
+
+            let val = unsqueeze::<2, 3>(builder, 2, val);
+            let val = broadcast(builder, shape(builder, x.clone()), val);
+            sumk = sumk + x * val;
+        }
+
+        let expert_output = reshape(
+            builder,
+            shape!(builder, batch_size, seq_len, hidden_size),
+            sumk,
+        );
+
+        let shared_expert = self.swiglu_mlp(
+            builder,
+            p.extend(["shared_expert"]).unwrap(),
+            self.config.shared_expert_intermediate_size,
+            x.clone(),
+        );
+        let shared_gate = linear_no_bias(
+            builder,
+            self.config.hidden_size,
+            1,
+            p.extend(["shared_expert_gate"]).unwrap(),
+            x,
+        );
+        let shared_gate = sigmoid(builder, shared_gate);
+        let shared_gate = broadcast(builder, shape(builder, shared_expert.clone()), shared_gate);
+
+        expert_output + shared_expert * shared_gate
     }
 
     fn full_attention(
@@ -1367,7 +1456,11 @@ impl Qwen3_5Model {
             p.extend(["post_attention_layernorm"]).unwrap(),
             x,
         );
-        let x = self.mlp(builder, p.extend(["mlp"]).unwrap(), x);
+        let x = if self.config.num_experts > 0 {
+            self.moe(builder, p.extend(["mlp"]).unwrap(), x)
+        } else {
+            self.mlp(builder, p.extend(["mlp"]).unwrap(), x)
+        };
         x + res
     }
 
