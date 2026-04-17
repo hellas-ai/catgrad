@@ -151,6 +151,7 @@ impl GPTOssModel {
         let fullx_sh = shape!(builder, num_tokens, 1, hidden_size);
         let fullx = reshape(builder, fullx_sh.clone(), x);
         let mut sumk = constant(builder, 0.0, &fullx_sh);
+        sumk = cast(builder, sumk, dtype(builder, fullx.clone()));
 
         for i in 0..self.config.num_experts_per_tok {
             let idx = get(builder, 1, i, indices.clone());
@@ -248,6 +249,7 @@ impl GPTOssModel {
         let attn = matmul(builder, q, tk);
         let sh = shape(builder, attn.clone());
         let denom = constant(builder, f32::sqrt(head_dim as f32), &sh);
+        let denom = cast(builder, denom, dtype(builder, attn.clone()));
         let mut attn = attn / denom;
 
         let mask = broadcast(builder, sh, attention_mask);
@@ -338,8 +340,11 @@ impl DynModule for GPTOssModel {
         let mut x = embeddings(builder, root.extend(["model", "embed_tokens"]).unwrap(), x);
         let [_b, s, _] = unpack::<3>(builder, shape(builder, x.clone()));
         let full_attention_mask = causal_mask(builder, s.clone(), pos.clone());
+        let full_attention_mask = cast(builder, full_attention_mask, dtype(builder, x.clone()));
         let sliding_attention_mask =
             sliding_window_mask(builder, s, pos.clone(), self.config.sliding_window);
+        let sliding_attention_mask =
+            cast(builder, sliding_attention_mask, dtype(builder, x.clone()));
 
         for i in 0..self.config.num_hidden_layers {
             let attention_mask = if self.is_sliding_attention_layer(i) {

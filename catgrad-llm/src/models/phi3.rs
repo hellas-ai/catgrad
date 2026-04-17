@@ -230,8 +230,10 @@ impl Phi3Model {
         let attn = matmul(builder, q, tk);
         let sh = shape(builder, attn.clone());
         let denom = constant(builder, f32::sqrt(head_dim as f32), &sh);
+        let denom = cast(builder, denom, dtype(builder, attn.clone()));
         let mut attn = attn / denom;
 
+        let attention_mask = cast(builder, attention_mask, dtype(builder, attn.clone()));
         let mask = broadcast(builder, sh, attention_mask);
         attn = attn + mask;
 

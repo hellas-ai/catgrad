@@ -141,6 +141,7 @@ impl GPT2Model {
         let attn = matmul(builder, q, tk);
         let sh = shape(builder, attn.clone());
         let denom = constant(builder, f32::sqrt(head_dim as f32), &sh);
+        let denom = cast(builder, denom, dtype(builder, attn.clone()));
         let mut attn = attn / denom;
 
         let mask = broadcast(builder, sh, attention_mask);
@@ -206,6 +207,7 @@ impl DynModule for GPT2Model {
         let mut x = self.embeddings(builder, root.clone(), pos.clone(), x);
         let [_b, s, _] = unpack::<3>(builder, shape(builder, x.clone()));
         let attention_mask = causal_mask(builder, s, pos);
+        let attention_mask = cast(builder, attention_mask, dtype(builder, x.clone()));
 
         for i in 0..self.config.num_hidden_layers {
             x = self.layer(
