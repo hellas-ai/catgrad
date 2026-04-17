@@ -4,8 +4,28 @@ These examples work with safetensor weights as found on [Huggingface Hub](https:
 
 ### Supported architectures: ###
 
-**GPT-2**, **Llama-3**, **Mistral**, **Qwen2**, **Qwen3**, **Qwen3-MoE**, **Qwen-3.5**, **OLMo-2**, **OLMo-3**, **Gemma-3**, **Gemma-4**, **Gemma-4-MoE**, **Phi-3**, **GPT-OSS**, **SmolLM3-3B**, **Nemotron-H**, **Granite-3**
+**GPT-2**, **Llama-3**, **SmolLM3-3B**, **Mistral**, **Ministral3**,
 
+**Qwen2**, **Qwen3**, **Qwen3-MoE**, **Qwen-3.5**, **Qwen3.5-MoE**,
+
+**OLMo-2**, **OLMo-3**, **OLMo-Hybrid**,
+
+**Gemma-3**, **Gemma-4**, **Gemma-4-MoE**,
+
+**Phi-3**,
+
+**GPT-OSS**,
+
+**Nemotron-H**,
+
+**Granite-3**, **Granite-4-dense**
+
+You can see a list of example models configured by default in `catgrad-llm/examples/llama/llm_config.default.toml` by running
+```
+cargo run --release --example llama -- --list-models
+```
+
+A local llm_config.toml can be used to override or complement the built-in list of models and aliases.
 
 ### LLM example ###
 
@@ -30,41 +50,3 @@ Tool calling can be tested with a few models:
 ```
 uv run catgrad-llm/scripts/llm.py -m Qwen/Qwen3-0.6B --tool-use -p 'What is 13 multiplied by 7?' -s 64
 ```
-
-Here are links to some supported models to test the `llm` example with. All are chat models except GPT2.
-
-<https://huggingface.co/openai-community/gpt2>
-
-<https://huggingface.co/meta-llama/Llama-3.2-1B-Instruct>
-
-<https://huggingface.co/meta-llama/Llama-3.2-3B-Instruct>
-
-<https://huggingface.co/mistralai/Mistral-7B-Instruct-v0.3>
-
-<https://huggingface.co/mistralai/Ministral-8B-Instruct-2410>
-
-<https://huggingface.co/HuggingFaceTB/SmolLM2-135M-Instruct>
-
-<https://huggingface.co/HuggingFaceTB/SmolLM3-3B>
-
-<https://huggingface.co/Qwen/Qwen2.5-0.5B>
-
-<https://huggingface.co/LLM360/K2-Think>
-
-<https://huggingface.co/Qwen/Qwen3-0.6B>
-
-<https://huggingface.co/Qwen/Qwen3-30B-A3B-Instruct-2507>
-
-<https://huggingface.co/unsloth/gpt-oss-20b-BF16>
-
-<https://huggingface.co/google/gemma-3-1b-it>
-
-<https://huggingface.co/microsoft/Phi-3-mini-4k-instruct>
-
-<https://huggingface.co/microsoft/Phi-4-mini-instruct>
-
-<https://huggingface.co/allenai/OLMo-2-0425-1B-Instruct>
-
-<https://huggingface.co/allenai/Olmo-3-7B-Instruct>
-
-<https://huggingface.co/ibm-granite/granite-3.3-2b-instruct>

@@ -8,6 +8,7 @@ pub const GATED_DELTA_CHUNK_SIZE: usize = 64;
 pub fn softplus(builder: &Builder, x: Var) -> Var {
     let sh = shape(builder, x.clone());
     let one = constant(builder, 1.0, &sh);
+    let one = cast(builder, one, dtype(builder, x.clone()));
     log(builder, one + exp(builder, x))
 }
 
@@ -24,7 +25,7 @@ fn pad_sequence<const N: usize>(builder: &Builder, x: Var, padded_seq_len: usize
     let mut sh = unpack::<N>(builder, shape(builder, x.clone()));
     sh[2] = padded_seq_len.to_nat(builder);
     let sh = pack(builder, sh);
-    let zeros = zeros(builder, &sh);
+    let zeros = zeros(builder, &sh, dtype(builder, x.clone()));
     let x = concat(builder, 2, x, zeros);
     slice(builder, 2, 0, padded_seq_len, x)
 }
@@ -46,6 +47,12 @@ pub fn chunk_gated_delta_rule(
         max_num_chunks > 0,
         "chunked prefill requires at least one chunk"
     );
+    let out_dtype = dtype(builder, value.clone());
+    let query = cast(builder, query, Dtype::F32);
+    let key = cast(builder, key, Dtype::F32);
+    let value = cast(builder, value, Dtype::F32);
+    let g = cast(builder, g, Dtype::F32);
+    let beta = cast(builder, beta, Dtype::F32);
     let query = l2norm(builder, query, 1e-6);
     let key = l2norm(builder, key, 1e-6);
 
@@ -139,7 +146,7 @@ pub fn chunk_gated_delta_rule(
         builder,
         lower_mask,
         decay_mask,
-        zeros(builder, &decay_shape),
+        zeros(builder, &decay_shape, Dtype::F32),
     );
 
     let flat_bhc = batch_size.clone() * num_heads.clone() * max_num_chunks.to_nat(builder);
@@ -235,7 +242,7 @@ pub fn chunk_gated_delta_rule(
 
     let [_, _, _, _, value_head_dim] = unpack::<5>(builder, shape(builder, value.clone()));
     let state_shape = shape!(builder, batch_size, num_heads, k_head_dim, value_head_dim);
-    let mut last_recurrent_state = zeros(builder, &state_shape);
+    let mut last_recurrent_state = zeros(builder, &state_shape, Dtype::F32);
 
     let mask_diag1 = triu_mask(builder, chunk_size_nat, 1);
     let mut out_chunks = Vec::with_capacity(max_num_chunks);
@@ -298,7 +305,10 @@ pub fn chunk_gated_delta_rule(
     let core_attn_out = slice(builder, 2, 0, padded_seq_len, core_attn_out);
     let core_attn_out = transpose(builder, 1, 2, core_attn_out);
     let core_attn_out = slice(builder, 1, 0, original_seq_len, core_attn_out);
-    (core_attn_out, last_recurrent_state)
+    (
+        cast(builder, core_attn_out, out_dtype.clone()),
+        cast(builder, last_recurrent_state, out_dtype),
+    )
 }
 
 // Delta rule for recurrent stage
@@ -313,6 +323,13 @@ pub fn recurrent_gated_delta_rule(
     initial_state: Var,
     head_k_dim: usize,
 ) -> (Var, Var) {
+    let out_dtype = dtype(builder, value.clone());
+    let query = cast(builder, query, Dtype::F32);
+    let key = cast(builder, key, Dtype::F32);
+    let value = cast(builder, value, Dtype::F32);
+    let g = cast(builder, g, Dtype::F32);
+    let beta = cast(builder, beta, Dtype::F32);
+    let initial_state = cast(builder, initial_state, Dtype::F32);
     let query = l2norm(builder, query, 1e-6);
     let key = l2norm(builder, key, 1e-6);
 
@@ -338,6 +355,7 @@ pub fn recurrent_gated_delta_rule(
             sequence_length,
             value_head_dim
         ),
+        Dtype::F32,
     );
     let mut last_recurrent_state = initial_state;
 
@@ -410,5 +428,8 @@ pub fn recurrent_gated_delta_rule(
     let first_pos = unsqueeze::<3, 4>(builder, 3, first_pos);
     let core_attn_out = where_broadcast(builder, first_pos, core_attn_step, core_attn_out);
     let core_attn_out = transpose(builder, 1, 2, core_attn_out);
-    (core_attn_out, last_recurrent_state)
+    (
+        cast(builder, core_attn_out, out_dtype.clone()),
+        cast(builder, last_recurrent_state, out_dtype),
+    )
 }

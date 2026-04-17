@@ -243,8 +243,10 @@ impl Lfm2Model {
         let attn = matmul(builder, q, tk);
         let sh = shape(builder, attn.clone());
         let denom = constant(builder, f32::sqrt(head_dim as f32), &sh);
+        let denom = cast(builder, denom, dtype(builder, attn.clone()));
         let mut attn = attn / denom;
 
+        let attention_mask = cast(builder, attention_mask, dtype(builder, attn.clone()));
         let mask = broadcast(builder, sh, attention_mask);
         attn = attn + mask;
 
@@ -356,7 +358,11 @@ impl Lfm2Model {
                 );
 
                 // `conv_state = nn.functional.pad(Bx, (self.L_cache - Bx.shape[-1], 0))`
-                let zeros_prefill_state = zeros(b, &shape!(b, batch_size, hidden_dim, cache_len));
+                let zeros_prefill_state = zeros(
+                    b,
+                    &shape!(b, batch_size, hidden_dim, cache_len),
+                    dtype(b, bx.clone()),
+                );
                 let x_padded_prefill_state = concat(b, 2, zeros_prefill_state, bx);
                 let out_linear_state_prefill = slice(b, 2, s, cache_len, x_padded_prefill_state);
 

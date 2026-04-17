@@ -385,6 +385,14 @@ struct Qwen3_5TextConfig {
     linear_value_head_dim: usize,
     linear_num_value_heads: usize,
     #[serde(default)]
+    moe_intermediate_size: usize,
+    #[serde(default)]
+    shared_expert_intermediate_size: usize,
+    #[serde(default)]
+    num_experts_per_tok: usize,
+    #[serde(default)]
+    num_experts: usize,
+    #[serde(default)]
     rope_parameters: Qwen3_5RopeParameters,
     rms_norm_eps: f32,
     tie_word_embeddings: bool,
@@ -571,8 +579,10 @@ fn apply_rope_with_tables(builder: &Builder, cos: Var, sin: Var, head_dim: usize
     let sh = shape(builder, x.clone());
     let cos = broadcast(builder, sh.clone(), cos);
     let sin = broadcast(builder, sh, sin);
+    let x_dtype = dtype(builder, x.clone());
+    let x = cast(builder, x, Dtype::F32);
     let rotated = rotate_half_rank4(builder, head_dim, x.clone());
-    cos * x + sin * rotated
+    cast(builder, cos * x + sin * rotated, x_dtype)
 }
 
 impl LLMConfig for Qwen3_5TextConfig {
@@ -939,29 +949,110 @@ impl Qwen3_5Model {
         (cos(builder, emb.clone()), sin(builder, emb))
     }
 
-    fn mlp(&self, builder: &Builder, p: Path, x: Var) -> Var {
+    fn swiglu_mlp(&self, builder: &Builder, p: Path, intermediate_size: usize, x: Var) -> Var {
         let gate = linear_no_bias(
             builder,
             self.config.hidden_size,
-            self.config.intermediate_size,
+            intermediate_size,
             p.extend(["gate_proj"]).unwrap(),
             x.clone(),
         );
         let up = linear_no_bias(
             builder,
             self.config.hidden_size,
-            self.config.intermediate_size,
+            intermediate_size,
             p.extend(["up_proj"]).unwrap(),
             x,
         );
         let x = silu(builder, gate) * up;
         linear_no_bias(
             builder,
-            self.config.intermediate_size,
+            intermediate_size,
             self.config.hidden_size,
             p.extend(["down_proj"]).unwrap(),
             x,
         )
+    }
+
+    fn mlp(&self, builder: &Builder, p: Path, x: Var) -> Var {
+        self.swiglu_mlp(builder, p, self.config.intermediate_size, x)
+    }
+
+    fn moe(&self, builder: &Builder, p: Path, x: Var) -> Var {
+        let [batch_size, seq_len, hidden_size] = unpack::<3>(builder, shape(builder, x.clone()));
+
+        let routed = linear_no_bias(
+            builder,
+            self.config.hidden_size,
+            self.config.num_experts,
+            p.extend(["gate"]).unwrap(),
+            x.clone(),
+        );
+        let routed = softmax(builder, routed);
+
+        let num_tokens = batch_size.clone() * seq_len.clone();
+        let (mut top_k_weights, top_k_index) =
+            topk(builder, self.config.num_experts_per_tok, routed);
+        let top_k_shape = shape!(builder, num_tokens, self.config.num_experts_per_tok);
+        top_k_weights = reshape(builder, top_k_shape.clone(), top_k_weights);
+        let top_k_index = reshape(builder, top_k_shape.clone(), top_k_index);
+        let top_k_sum = sum(builder, top_k_weights.clone());
+        let top_k_sum = broadcast(builder, top_k_shape, top_k_sum);
+        top_k_weights = top_k_weights / top_k_sum;
+
+        let fullx_shape = shape!(builder, num_tokens, 1, hidden_size);
+        let fullx = reshape(builder, fullx_shape.clone(), x.clone());
+        let gate_up_proj = param(builder, &p.extend(["experts", "gate_up_proj"]).unwrap());
+        let down_proj = param(builder, &p.extend(["experts", "down_proj"]).unwrap());
+        let mut sumk = constant(builder, 0.0, &fullx_shape);
+        sumk = cast(builder, sumk, dtype(builder, fullx.clone()));
+
+        for i in 0..self.config.num_experts_per_tok {
+            let idx = get(builder, 1, i, top_k_index.clone());
+            let idx = squeeze::<2, 1>(builder, 1, idx);
+            let val = get(builder, 1, i, top_k_weights.clone());
+
+            let gate_up = index(builder, 0, idx.clone(), gate_up_proj.clone());
+            let gate_up = transpose(builder, 1, 2, gate_up);
+            let down = index(builder, 0, idx, down_proj.clone());
+            let down = transpose(builder, 1, 2, down);
+
+            let gate_up = matmul(builder, fullx.clone(), gate_up);
+            let [gate, up]: [Var; 2] =
+                chunk(builder, 2, 2, self.config.moe_intermediate_size, gate_up)
+                    .try_into()
+                    .unwrap();
+            let x = silu(builder, gate) * up;
+            let x = matmul(builder, x, down);
+
+            let val = unsqueeze::<2, 3>(builder, 2, val);
+            let val = broadcast(builder, shape(builder, x.clone()), val);
+            sumk = sumk + x * val;
+        }
+
+        let expert_output = reshape(
+            builder,
+            shape!(builder, batch_size, seq_len, hidden_size),
+            sumk,
+        );
+
+        let shared_expert = self.swiglu_mlp(
+            builder,
+            p.extend(["shared_expert"]).unwrap(),
+            self.config.shared_expert_intermediate_size,
+            x.clone(),
+        );
+        let shared_gate = linear_no_bias(
+            builder,
+            self.config.hidden_size,
+            1,
+            p.extend(["shared_expert_gate"]).unwrap(),
+            x,
+        );
+        let shared_gate = sigmoid(builder, shared_gate);
+        let shared_gate = broadcast(builder, shape(builder, shared_expert.clone()), shared_gate);
+
+        expert_output + shared_expert * shared_gate
     }
 
     fn full_attention(
@@ -1057,8 +1148,10 @@ impl Qwen3_5Model {
         let attn = matmul(builder, q, tk);
         let sh = shape(builder, attn.clone());
         let denom = constant(builder, f32::sqrt(head_dim as f32), &sh);
+        let denom = cast(builder, denom, dtype(builder, attn.clone()));
         let mut attn = attn / denom;
 
+        let attention_mask = cast(builder, attention_mask, dtype(builder, attn.clone()));
         let mask = broadcast(builder, sh, attention_mask);
         attn = attn + mask;
 
@@ -1159,7 +1252,11 @@ impl Qwen3_5Model {
                     ),
                 );
 
-                let zeros_prefill_state = zeros(b, &shape!(b, batch_size, conv_dim, cache_len));
+                let zeros_prefill_state = zeros(
+                    b,
+                    &shape!(b, batch_size, conv_dim, cache_len),
+                    dtype(b, mixed_qkv.clone()),
+                );
                 let x_padded_prefill_state = concat(b, 2, zeros_prefill_state, mixed_qkv);
                 let out_conv_state_prefill =
                     slice(b, 2, seq_len, cache_len, x_padded_prefill_state);
@@ -1223,6 +1320,8 @@ impl Qwen3_5Model {
         let a_log = param(builder, &p.extend(["A_log"]).unwrap());
         let a_log = unsqueeze::<1, 2>(builder, 0, a_log);
         let a_log = broadcast(builder, shape(builder, a.clone()), a_log);
+        let a = cast(builder, a, Dtype::F32);
+        let a_log = cast(builder, a_log, Dtype::F32);
         let g = -exp(builder, a_log) * softplus(builder, a);
 
         let rep = num_v_heads / num_k_heads;
@@ -1357,7 +1456,11 @@ impl Qwen3_5Model {
             p.extend(["post_attention_layernorm"]).unwrap(),
             x,
         );
-        let x = self.mlp(builder, p.extend(["mlp"]).unwrap(), x);
+        let x = if self.config.num_experts > 0 {
+            self.moe(builder, p.extend(["mlp"]).unwrap(), x)
+        } else {
+            self.mlp(builder, p.extend(["mlp"]).unwrap(), x)
+        };
         x + res
     }
 
@@ -1669,10 +1772,12 @@ fn qwen_vision_interpolate_pos_embed(
     target_grid_width: usize,
     pos: Var,
 ) -> Var {
+    let pos_dtype = dtype(builder, pos.clone());
     let [_, dim] = unpack::<2>(builder, shape(builder, pos.clone()));
     if target_grid_height == base_grid_size && target_grid_width == base_grid_size {
         return pos;
     }
+    let pos = cast(builder, pos, Dtype::F32);
 
     let row = qwen_vision_interp_axis(builder, target_grid_height, base_grid_size);
     let col = qwen_vision_interp_axis(builder, target_grid_width, base_grid_size);
@@ -1809,10 +1914,11 @@ fn qwen_vision_interpolate_pos_embed(
     let w10 = broadcast(builder, shape!(builder, target_tokens, dim), w10);
     let w11 = broadcast(builder, shape!(builder, target_tokens, dim), w11);
 
-    index(builder, 0, idx00, pos.clone()) * w00
+    let pos = index(builder, 0, idx00, pos.clone()) * w00
         + index(builder, 0, idx01, pos.clone()) * w01
         + index(builder, 0, idx10, pos.clone()) * w10
-        + index(builder, 0, idx11, pos) * w11
+        + index(builder, 0, idx11, pos) * w11;
+    cast(builder, pos, pos_dtype)
 }
 
 fn qwen_vision_embeddings(
@@ -1935,11 +2041,9 @@ fn qwen_vision_attention(
 
     let tk = transpose(builder, 2, 3, k);
     let attn = matmul(builder, q, tk);
-    let denom = constant(
-        builder,
-        (head_dim as f32).sqrt(),
-        &shape(builder, attn.clone()),
-    );
+    let sh = shape(builder, attn.clone());
+    let denom = constant(builder, (head_dim as f32).sqrt(), &sh);
+    let denom = cast(builder, denom, dtype(builder, attn.clone()));
     let attn = softmax(builder, attn / denom);
     let attn = matmul(builder, attn, v);
     let attn = transpose(builder, 1, 2, attn);

@@ -483,13 +483,25 @@ impl OlmoModel {
                     depthwise_conv1d_no_bias_param(b, v_w, cache_len, cache_len - 1, v.clone()),
                 );
 
-                let q_zeros = zeros(b, &shape!(b, batch_size, key_dim, cache_len));
+                let q_zeros = zeros(
+                    b,
+                    &shape!(b, batch_size, key_dim, cache_len),
+                    dtype(b, q.clone()),
+                );
                 let q_state_out = slice(b, 2, seq_len.clone(), cache_len, concat(b, 2, q_zeros, q));
 
-                let k_zeros = zeros(b, &shape!(b, batch_size, key_dim, cache_len));
+                let k_zeros = zeros(
+                    b,
+                    &shape!(b, batch_size, key_dim, cache_len),
+                    dtype(b, k.clone()),
+                );
                 let k_state_out = slice(b, 2, seq_len.clone(), cache_len, concat(b, 2, k_zeros, k));
 
-                let v_zeros = zeros(b, &shape!(b, batch_size, value_dim, cache_len));
+                let v_zeros = zeros(
+                    b,
+                    &shape!(b, batch_size, value_dim, cache_len),
+                    dtype(b, v.clone()),
+                );
                 let v_state_out = slice(b, 2, seq_len, cache_len, concat(b, 2, v_zeros, v));
 
                 vec![q_out, k_out, v_out, q_state_out, k_state_out, v_state_out]
@@ -553,6 +565,7 @@ impl OlmoModel {
         let mut beta = sigmoid(builder, b);
         if self.config.linear_allow_neg_eigval {
             let scale = constant(builder, 2.0, &shape(builder, beta.clone()));
+            let scale = cast(builder, scale, dtype(builder, beta.clone()));
             beta = beta * scale;
         }
         let dt_bias = param(builder, &p.extend(["dt_bias"]).unwrap());

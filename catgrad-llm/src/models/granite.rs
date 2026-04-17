@@ -158,6 +158,7 @@ impl GraniteModel {
         let fullx_sh = shape!(builder, num_tokens, 1, hidden_size);
         let fullx = reshape(builder, fullx_sh.clone(), x);
         let mut sumk = constant(builder, 0., &fullx_sh);
+        sumk = cast(builder, sumk, dtype(builder, fullx.clone()));
 
         for i in 0..self.config.num_experts_per_tok {
             let idx = get(builder, 1, i, indices.clone());
@@ -254,8 +255,10 @@ impl GraniteModel {
         let attn = matmul(builder, q, tk);
         let sh = shape(builder, attn.clone());
         let mul = constant(builder, self.config.attention_multiplier, &sh);
+        let mul = cast(builder, mul, dtype(builder, attn.clone()));
         let mut attn = attn * mul;
 
+        let attention_mask = cast(builder, attention_mask, dtype(builder, attn.clone()));
         let mask = broadcast(builder, sh, attention_mask);
         attn = attn + mask;
 
@@ -298,6 +301,7 @@ impl GraniteModel {
 
         let sh = shape(builder, x.clone());
         let mul = constant(builder, self.config.residual_multiplier, &sh);
+        let mul = cast(builder, mul, dtype(builder, x.clone()));
 
         let x = res + x * mul.clone();
         let res = x.clone();
@@ -343,6 +347,7 @@ impl DynModule for GraniteModel {
 
         let sh = shape(builder, emb.clone());
         let mul = constant(builder, self.config.embedding_multiplier, &sh);
+        let mul = cast(builder, mul, dtype(builder, emb.clone()));
         let mut x = mul * emb;
         let [_b, s, _] = unpack::<3>(builder, shape(builder, x.clone()));
         let attention_mask = causal_mask(builder, s, pos.clone());

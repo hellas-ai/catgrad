@@ -45,6 +45,7 @@ pub fn depthwise_conv1d_param(
     let x_padded = if padding_size > 0 {
         let pad_shape = shape!(builder, b, h, padding_size);
         let pad = constant(builder, 0.0, &pad_shape);
+        let pad = cast(builder, pad, dtype(builder, x.clone()));
         concat(builder, 2, pad, x)
     } else {
         x
