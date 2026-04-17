@@ -8,6 +8,7 @@ pub const GATED_DELTA_CHUNK_SIZE: usize = 64;
 pub fn softplus(builder: &Builder, x: Var) -> Var {
     let sh = shape(builder, x.clone());
     let one = constant(builder, 1.0, &sh);
+    let one = cast(builder, one, dtype(builder, x.clone()));
     log(builder, one + exp(builder, x))
 }
 
@@ -46,6 +47,12 @@ pub fn chunk_gated_delta_rule(
         max_num_chunks > 0,
         "chunked prefill requires at least one chunk"
     );
+    let out_dtype = dtype(builder, value.clone());
+    let query = cast(builder, query, Dtype::F32);
+    let key = cast(builder, key, Dtype::F32);
+    let value = cast(builder, value, Dtype::F32);
+    let g = cast(builder, g, Dtype::F32);
+    let beta = cast(builder, beta, Dtype::F32);
     let query = l2norm(builder, query, 1e-6);
     let key = l2norm(builder, key, 1e-6);
 
@@ -298,7 +305,10 @@ pub fn chunk_gated_delta_rule(
     let core_attn_out = slice(builder, 2, 0, padded_seq_len, core_attn_out);
     let core_attn_out = transpose(builder, 1, 2, core_attn_out);
     let core_attn_out = slice(builder, 1, 0, original_seq_len, core_attn_out);
-    (core_attn_out, last_recurrent_state)
+    (
+        cast(builder, core_attn_out, out_dtype.clone()),
+        cast(builder, last_recurrent_state, out_dtype),
+    )
 }
 
 // Delta rule for recurrent stage
@@ -313,6 +323,13 @@ pub fn recurrent_gated_delta_rule(
     initial_state: Var,
     head_k_dim: usize,
 ) -> (Var, Var) {
+    let out_dtype = dtype(builder, value.clone());
+    let query = cast(builder, query, Dtype::F32);
+    let key = cast(builder, key, Dtype::F32);
+    let value = cast(builder, value, Dtype::F32);
+    let g = cast(builder, g, Dtype::F32);
+    let beta = cast(builder, beta, Dtype::F32);
+    let initial_state = cast(builder, initial_state, Dtype::F32);
     let query = l2norm(builder, query, 1e-6);
     let key = l2norm(builder, key, 1e-6);
 
@@ -411,5 +428,8 @@ pub fn recurrent_gated_delta_rule(
     let first_pos = unsqueeze::<3, 4>(builder, 3, first_pos);
     let core_attn_out = where_broadcast(builder, first_pos, core_attn_step, core_attn_out);
     let core_attn_out = transpose(builder, 1, 2, core_attn_out);
-    (core_attn_out, last_recurrent_state)
+    (
+        cast(builder, core_attn_out, out_dtype.clone()),
+        cast(builder, last_recurrent_state, out_dtype),
+    )
 }

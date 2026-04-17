@@ -571,8 +571,10 @@ fn apply_rope_with_tables(builder: &Builder, cos: Var, sin: Var, head_dim: usize
     let sh = shape(builder, x.clone());
     let cos = broadcast(builder, sh.clone(), cos);
     let sin = broadcast(builder, sh, sin);
+    let x_dtype = dtype(builder, x.clone());
+    let x = cast(builder, x, Dtype::F32);
     let rotated = rotate_half_rank4(builder, head_dim, x.clone());
-    cos * x + sin * rotated
+    cast(builder, cos * x + sin * rotated, x_dtype)
 }
 
 impl LLMConfig for Qwen3_5TextConfig {
@@ -1057,8 +1059,10 @@ impl Qwen3_5Model {
         let attn = matmul(builder, q, tk);
         let sh = shape(builder, attn.clone());
         let denom = constant(builder, f32::sqrt(head_dim as f32), &sh);
+        let denom = cast(builder, denom, dtype(builder, attn.clone()));
         let mut attn = attn / denom;
 
+        let attention_mask = cast(builder, attention_mask, dtype(builder, attn.clone()));
         let mask = broadcast(builder, sh, attention_mask);
         attn = attn + mask;
 
@@ -1227,6 +1231,8 @@ impl Qwen3_5Model {
         let a_log = param(builder, &p.extend(["A_log"]).unwrap());
         let a_log = unsqueeze::<1, 2>(builder, 0, a_log);
         let a_log = broadcast(builder, shape(builder, a.clone()), a_log);
+        let a = cast(builder, a, Dtype::F32);
+        let a_log = cast(builder, a_log, Dtype::F32);
         let g = -exp(builder, a_log) * softplus(builder, a);
 
         let rep = num_v_heads / num_k_heads;
@@ -1673,10 +1679,12 @@ fn qwen_vision_interpolate_pos_embed(
     target_grid_width: usize,
     pos: Var,
 ) -> Var {
+    let pos_dtype = dtype(builder, pos.clone());
     let [_, dim] = unpack::<2>(builder, shape(builder, pos.clone()));
     if target_grid_height == base_grid_size && target_grid_width == base_grid_size {
         return pos;
     }
+    let pos = cast(builder, pos, Dtype::F32);
 
     let row = qwen_vision_interp_axis(builder, target_grid_height, base_grid_size);
     let col = qwen_vision_interp_axis(builder, target_grid_width, base_grid_size);
@@ -1813,10 +1821,11 @@ fn qwen_vision_interpolate_pos_embed(
     let w10 = broadcast(builder, shape!(builder, target_tokens, dim), w10);
     let w11 = broadcast(builder, shape!(builder, target_tokens, dim), w11);
 
-    index(builder, 0, idx00, pos.clone()) * w00
+    let pos = index(builder, 0, idx00, pos.clone()) * w00
         + index(builder, 0, idx01, pos.clone()) * w01
         + index(builder, 0, idx10, pos.clone()) * w10
-        + index(builder, 0, idx11, pos) * w11
+        + index(builder, 0, idx11, pos) * w11;
+    cast(builder, pos, pos_dtype)
 }
 
 fn qwen_vision_embeddings(
@@ -1939,11 +1948,9 @@ fn qwen_vision_attention(
 
     let tk = transpose(builder, 2, 3, k);
     let attn = matmul(builder, q, tk);
-    let denom = constant(
-        builder,
-        (head_dim as f32).sqrt(),
-        &shape(builder, attn.clone()),
-    );
+    let sh = shape(builder, attn.clone());
+    let denom = constant(builder, (head_dim as f32).sqrt(), &sh);
+    let denom = cast(builder, denom, dtype(builder, attn.clone()));
     let attn = softmax(builder, attn / denom);
     let attn = matmul(builder, attn, v);
     let attn = transpose(builder, 1, 2, attn);

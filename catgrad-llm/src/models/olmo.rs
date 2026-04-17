@@ -565,6 +565,7 @@ impl OlmoModel {
         let mut beta = sigmoid(builder, b);
         if self.config.linear_allow_neg_eigval {
             let scale = constant(builder, 2.0, &shape(builder, beta.clone()));
+            let scale = cast(builder, scale, dtype(builder, beta.clone()));
             beta = beta * scale;
         }
         let dt_bias = param(builder, &p.extend(["dt_bias"]).unwrap());
