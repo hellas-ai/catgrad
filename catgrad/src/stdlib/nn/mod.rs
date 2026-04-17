@@ -117,6 +117,7 @@ impl NNModule for Softmax {
 pub fn sqrt(builder: &Builder, x: Var) -> Var {
     let sh = shape(builder, x.clone());
     let e = constant(builder, 0.5, &sh);
+    let e = cast(builder, e, dtype(builder, x.clone()));
     pow(builder, x, e)
 }
 
@@ -139,12 +140,18 @@ pub fn tanh(builder: &Builder, x: Var) -> Var {
     let sh = shape(builder, x.clone());
     let one = constant(builder, 1.0, &sh);
     let two = constant(builder, 2.0, &sh);
+    let x_dtype = dtype(builder, x.clone());
+    let one = cast(builder, one, x_dtype.clone());
+    let two = cast(builder, two, x_dtype);
 
     two.clone() * sigmoid(builder, two * x) - one
 }
 
 pub fn silu(builder: &Builder, x: Var) -> Var {
-    x.clone() * sigmoid(builder, x)
+    let x_dtype = dtype(builder, x.clone());
+    let x = cast(builder, x, Dtype::F32);
+    let x = x.clone() * sigmoid(builder, x);
+    cast(builder, x, x_dtype)
 }
 
 // approx GELU(x) ≈ 0.5 * x * (1 + tanh(sqrt(2/π) * (x + 0.044715 * x^3)))
@@ -155,11 +162,19 @@ pub fn gelu(builder: &Builder, x: Var) -> Var {
     let three = constant(builder, 3.0, &sh);
     let half = constant(builder, 0.5, &sh);
     let k = constant(builder, 0.044715, &sh);
+    let x_dtype = dtype(builder, x.clone());
+    let c = cast(builder, c, x_dtype.clone());
+    let one = cast(builder, one, x_dtype.clone());
+    let three = cast(builder, three, x_dtype.clone());
+    let half = cast(builder, half, x_dtype.clone());
+    let k = cast(builder, k, x_dtype);
 
     half * x.clone() * (one + tanh(builder, c * (x.clone() + k * (pow(builder, x, three)))))
 }
 
 pub fn softmax(builder: &Builder, x: Var) -> Var {
+    let x_dtype = dtype(builder, x.clone());
+    let x = cast(builder, x, Dtype::F32);
     let x_shape = shape(builder, x.clone());
     let m = max(builder, x.clone());
     let bmax = broadcast(builder, x_shape.clone(), m);
@@ -167,7 +182,7 @@ pub fn softmax(builder: &Builder, x: Var) -> Var {
     let ex = exp(builder, x);
     let s = sum(builder, ex.clone());
     let bsum = broadcast(builder, x_shape, s);
-    ex / bsum
+    cast(builder, ex / bsum, x_dtype)
 }
 
 /// Generic linear layer with optional bias with already loaded parameters given as vars

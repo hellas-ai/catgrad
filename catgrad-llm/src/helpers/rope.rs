@@ -442,10 +442,12 @@ pub fn apply_rope_embedding(
     let sin = slice(builder, 0, pos, seq_len, sin);
     let cos = broadcast(builder, sh.clone(), cos);
     let sin = broadcast(builder, sh, sin);
+    let x_dtype = dtype(builder, x.clone());
+    let x = cast(builder, x, Dtype::F32);
 
     let rotated_x = rotate_half(builder, head_dim, x.clone());
 
-    cos * x + sin * rotated_x
+    cast(builder, cos * x + sin * rotated_x, x_dtype)
 }
 
 /// Apply RoPE to the rotary prefix of the head dimension and leave the tail unchanged.
@@ -485,10 +487,12 @@ pub fn apply_rope_embedding_positions(
     let sin = reshape(builder, shape!(builder, 1, seq_len, 1, head_dim), sin);
     let cos = broadcast(builder, sh.clone(), cos);
     let sin = broadcast(builder, sh, sin);
+    let x_dtype = dtype(builder, x.clone());
+    let x = cast(builder, x, Dtype::F32);
 
     let rotated_x = rotate_half(builder, head_dim, x.clone());
 
-    cos * x + sin * rotated_x
+    cast(builder, cos * x + sin * rotated_x, x_dtype)
 }
 
 /// Apply RoPE (Rotary Positional Embedding) to the input tensor by calculating the tables

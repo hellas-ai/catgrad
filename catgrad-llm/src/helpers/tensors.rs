@@ -43,12 +43,14 @@ pub fn unsqueeze<const N: usize, const M: usize>(builder: &Builder, dim: usize, 
 }
 
 pub fn layernorm_raw(builder: &Builder, eps: f32, x: Var) -> Var {
+    let x_dtype = dtype(builder, x.clone());
     let x_shape = shape(builder, x.clone());
     let [_, _, n] = unpack::<3>(builder, x_shape.clone());
+    let x = cast(builder, x, Dtype::F32);
     let s = sum(builder, x.clone());
 
     let constn = nat_to_u32(builder, n);
-    let constn = cast(builder, constn, dtype(builder, x.clone()));
+    let constn = cast(builder, constn, Dtype::F32);
     let sh = shape(builder, s.clone());
     let constn = broadcast(builder, sh, constn);
 
@@ -58,10 +60,11 @@ pub fn layernorm_raw(builder: &Builder, eps: f32, x: Var) -> Var {
     let var = sum(builder, nom.clone() * nom.clone()) / constn;
     let sh = shape(builder, var.clone());
     let epsilon = constant(builder, eps, &sh);
+    let epsilon = cast(builder, epsilon, Dtype::F32);
     let stddev = sqrt(builder, var + epsilon);
     let denom = broadcast(builder, x_shape, stddev);
 
-    nom / denom
+    cast(builder, nom / denom, x_dtype)
 }
 
 pub fn layernorm(builder: &Builder, eps: f32, p: Path, x: Var) -> Var {
@@ -77,22 +80,25 @@ pub fn layernorm(builder: &Builder, eps: f32, p: Path, x: Var) -> Var {
 }
 
 pub fn rmsnorm_raw<const N: usize>(builder: &Builder, eps: f32, x: Var) -> Var {
+    let x_dtype = dtype(builder, x.clone());
     let x_shape = shape(builder, x.clone());
     let u = unpack::<N>(builder, x_shape.clone());
     let n = u[N - 1].clone();
+    let x = cast(builder, x, Dtype::F32);
     let s = sum(builder, x.clone() * x.clone());
 
     let constn = nat_to_u32(builder, n);
-    let constn = cast(builder, constn, dtype(builder, x.clone()));
+    let constn = cast(builder, constn, Dtype::F32);
     let sh = shape(builder, s.clone());
     let constn = broadcast(builder, sh, constn);
 
     let mean = s / constn;
 
     let epsilon = constant(builder, eps, &shape(builder, mean.clone()));
+    let epsilon = cast(builder, epsilon, Dtype::F32);
     let rms = sqrt(builder, mean + epsilon);
     let denom = broadcast(builder, x_shape, rms);
-    x / denom
+    cast(builder, x / denom, x_dtype)
 }
 
 // rmsnorm(x) = x / √(E[x²] + ε) × γ
@@ -106,12 +112,15 @@ pub fn rmsnorm<const N: usize>(builder: &Builder, eps: f32, p: Path, x: Var) -> 
 
 // A variant of RMSNorm used by Gemma 3 and Qwen 3.5
 pub fn rmsnorm_gemma<const N: usize>(builder: &Builder, eps: f32, p: Path, x: Var) -> Var {
-    let gamma = param(builder, &p.extend(["weight"]).unwrap());
+    let x_dtype = dtype(builder, x.clone());
     let lr = rmsnorm_raw::<N>(builder, eps, x);
+    let lr = cast(builder, lr, Dtype::F32);
     let sh = shape(builder, lr.clone());
     let one = constant(builder, 1.0, &sh);
+    let gamma = param(builder, &p.extend(["weight"]).unwrap());
+    let gamma = cast(builder, gamma, Dtype::F32);
     let gamma = broadcast(builder, sh, gamma);
-    lr * (gamma + one)
+    cast(builder, lr * (gamma + one), x_dtype)
 }
 
 // Repeat elements along a dimension
