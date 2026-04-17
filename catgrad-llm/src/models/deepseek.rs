@@ -150,7 +150,9 @@ impl DeepSeekModel {
     }
 
     fn moe_topk_router(&self, builder: &Builder, p: Path, x: Var) -> (Var, Var) {
-        let [_, seq_len, _] = unpack::<3>(builder, shape(builder, x.clone()));
+        let [batch_size, seq_len, _] = unpack::<3>(builder, shape(builder, x.clone()));
+        let num_tokens = batch_size * seq_len;
+        let x_dtype = dtype(builder, x.clone());
 
         let routed = linear_no_bias(
             builder,
@@ -159,32 +161,33 @@ impl DeepSeekModel {
             p.clone(),
             x,
         );
+        let routed = cast(builder, routed, Dtype::F32);
         let routed = sigmoid(builder, routed);
-
+        let routed_sh = shape!(builder, num_tokens, self.config.num_local_experts);
+        let routed = reshape(builder, routed_sh.clone(), routed);
         let bias = param(builder, &p.extend(["e_score_correction_bias"]).unwrap());
-        let routed_sh = shape(builder, routed.clone());
+        let bias = cast(builder, bias, Dtype::F32);
         let bias = broadcast(builder, routed_sh.clone(), bias);
         let scores_for_choice = routed + bias;
 
         let n_groups = self.config.n_group;
         let experts_per_group = self.config.num_local_experts / n_groups;
 
-        let sh = shape!(builder, seq_len, n_groups, experts_per_group);
+        let sh = shape!(builder, num_tokens, n_groups, experts_per_group);
         let group_scores = reshape(builder, sh, scores_for_choice.clone());
 
         let group_scores = topk(builder, 2, group_scores).0;
         let group_scores = sum(builder, group_scores);
-        let sh = shape!(builder, seq_len, n_groups);
+        let sh = shape!(builder, num_tokens, n_groups);
         let group_scores = reshape(builder, sh, group_scores);
 
         let group_idx = topk(builder, self.config.topk_group, group_scores).1;
-        let sh = shape!(builder, seq_len, experts_per_group, 1);
-        let group_idx = reshape(builder, sh, group_idx);
+        let group_idx = unsqueeze::<2, 3>(builder, 2, group_idx);
 
         // group_mask.scatter_(1, group_idx, 1)
         //
         let cols = arange(builder, n_groups);
-        let sh = shape!(builder, seq_len, experts_per_group, n_groups);
+        let sh = shape!(builder, num_tokens, self.config.topk_group, n_groups);
         let cols = broadcast(builder, sh.clone(), cols);
 
         let group_idx = broadcast(builder, sh, group_idx);
@@ -193,7 +196,7 @@ impl DeepSeekModel {
         let matches = transpose(builder, 1, 2, matches);
         let mask = sum(builder, matches);
 
-        let sh = shape!(builder, seq_len, n_groups, experts_per_group);
+        let sh = shape!(builder, num_tokens, n_groups, experts_per_group);
         let mask = broadcast(builder, sh, mask);
         let mask = reshape(builder, routed_sh, mask);
         let mask = cast(builder, mask, Dtype::F32);
@@ -202,8 +205,7 @@ impl DeepSeekModel {
         let vi = topk(builder, self.config.num_experts_per_tok, scores_for_choice);
         let values = vi.0;
         let indices = vi.1;
-
-        let sh = shape!(builder, seq_len, self.config.num_experts_per_tok);
+        let sh = shape!(builder, num_tokens, self.config.num_experts_per_tok);
         let indices = reshape(builder, sh.clone(), indices);
         let mut values = reshape(builder, sh.clone(), values);
 
@@ -214,17 +216,18 @@ impl DeepSeekModel {
             let sv = sv + eps;
             let sv = broadcast(builder, sh, sv);
             values = values / sv;
-            let scale_sh = shape(builder, values.clone());
-            let scale = constant(builder, self.config.routed_scaling_factor, &scale_sh);
-            values = values * scale;
         }
+        let scale_sh = shape(builder, values.clone());
+        let scale = constant(builder, self.config.routed_scaling_factor, &scale_sh);
+        values = values * scale;
 
-        (values, indices)
+        (cast(builder, values, x_dtype), indices)
     }
 
     fn moe(&self, builder: &Builder, p: Path, x: Var) -> Var {
         let res = x.clone();
-        let [_, _seq_len, _] = unpack::<3>(builder, shape(builder, x.clone()));
+        let [batch_size, seq_len, hidden_size] = unpack::<3>(builder, shape(builder, x.clone()));
+        let num_tokens = batch_size.clone() * seq_len.clone();
 
         let (values, indices) =
             self.moe_topk_router(builder, p.extend(["gate"]).unwrap(), x.clone());
@@ -242,12 +245,14 @@ impl DeepSeekModel {
             &p.extend(["experts", "down_proj", "weight"]).unwrap(),
         );
 
-        let fullx = transpose(builder, 0, 1, x);
-        let sh = shape(builder, fullx.clone());
-        let mut sumk = constant(builder, 0.0, &sh);
+        let fullx_sh = shape!(builder, num_tokens, 1, hidden_size);
+        let fullx = reshape(builder, fullx_sh.clone(), x);
+        let mut sumk = constant(builder, 0.0, &fullx_sh);
+        sumk = cast(builder, sumk, dtype(builder, fullx.clone()));
 
         for i in 0..self.config.num_experts_per_tok {
             let idx = get(builder, 1, i, indices.clone());
+            let idx = squeeze::<2, 1>(builder, 1, idx);
             let val = get(builder, 1, i, values.clone());
 
             let gate = index(builder, 0, idx.clone(), gate_all.clone());
@@ -271,7 +276,11 @@ impl DeepSeekModel {
             sumk = sumk + x * v;
         }
 
-        let sumk = transpose(builder, 0, 1, sumk);
+        let sumk = reshape(
+            builder,
+            shape!(builder, batch_size, seq_len, hidden_size),
+            sumk,
+        );
 
         // Add shared experts
         let shared = self.mlp(builder, p.extend(["shared_experts"]).unwrap(), res);
@@ -420,8 +429,10 @@ impl DeepSeekModel {
         let attn = matmul(builder, q, tk);
         let sh = shape(builder, attn.clone());
         let denom = constant(builder, f32::sqrt(qk_head_dim as f32), &sh);
+        let denom = cast(builder, denom, dtype(builder, attn.clone()));
         let mut attn = attn / denom;
 
+        let attention_mask = cast(builder, attention_mask, dtype(builder, attn.clone()));
         let mask = broadcast(builder, sh, attention_mask);
         attn = attn + mask;
 
