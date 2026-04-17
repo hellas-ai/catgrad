@@ -308,6 +308,7 @@ impl DynModule for VisionEmbeddings {
         let scale = (self.config.projection_dim as f32).sqrt();
         let sh = shape(builder, x.clone());
         let scale = constant(builder, scale, &sh);
+        let scale = cast(builder, scale, dtype(builder, x.clone()));
         let x = x / scale;
         vec![x]
     }
@@ -494,12 +495,14 @@ impl Gemma3Model {
     fn normalize(&self, builder: &Builder, x: Var) -> Var {
         let sh = shape(builder, x.clone());
         let normalizer = constant(builder, f32::sqrt(self.config.hidden_size as f32), &sh);
+        let normalizer = cast(builder, normalizer, dtype(builder, x.clone()));
         x * normalizer
     }
 
     fn softcap(&self, builder: &Builder, softcap: f32, x: Var) -> Var {
         let sh = shape(builder, x.clone());
         let s = constant(builder, softcap, &sh);
+        let s = cast(builder, s, dtype(builder, x.clone()));
         let x = x / s.clone();
         let x = tanh(builder, x);
         x * s
@@ -652,12 +655,14 @@ impl Gemma3Model {
             f32::sqrt(self.config.query_pre_attn_scalar as f32),
             &sh,
         );
+        let denom = cast(builder, denom, dtype(builder, attn.clone()));
         let mut attn = attn / denom;
 
         if let Some(softcap) = self.config.attn_logit_softcapping {
             attn = self.softcap(builder, softcap, attn);
         }
 
+        let attention_mask = cast(builder, attention_mask, dtype(builder, attn.clone()));
         let mask = broadcast(builder, sh, attention_mask);
         attn = attn + mask;
 
