@@ -144,9 +144,6 @@ impl ModelEngine {
             load_model(model_name, "main", &backend, dtype)?;
         let model = get_model(&config_json, 1, None, dtype)?;
         let chat_template = get_model_chat_template(model_name, "main")?;
-        let chat_template = chat_template
-            .replace("{% generation %}", "")
-            .replace("{% endgeneration %}", "");
         let eos_token_ids = model.config().get_eos_token_ids();
 
         Ok(Self {

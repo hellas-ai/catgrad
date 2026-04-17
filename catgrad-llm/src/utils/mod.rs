@@ -106,20 +106,24 @@ pub fn get_model_chat_template(model: &str, revision: &str) -> Result<String> {
         revision.to_string(),
     ));
 
-    if let Ok(ct) = repo.get("chat_template.jinja") {
-        Ok(std::fs::read_to_string(ct)?)
+    let chat_template = if let Ok(ct) = repo.get("chat_template.jinja") {
+        std::fs::read_to_string(ct)?
     } else {
         let tc_path = repo.get("tokenizer_config.json")?;
         let tc = std::fs::read_to_string(tc_path)?;
         let tokenizer_config: serde_json::Value = from_json_str(&tc)?;
-        Ok(tokenizer_config
+        tokenizer_config
             .get("chat_template")
             .and_then(|v| v.as_str())
             .ok_or(LLMError::InvalidModelConfig(
                 "Missing or invalid `chat_template` in tokenizer config".to_string(),
             ))?
-            .to_string())
-    }
+            .to_string()
+    };
+    // SmolLM3 specific hack
+    Ok(chat_template
+        .replace("{% generation %}", "")
+        .replace("{% endgeneration %}", ""))
 }
 
 #[derive(Debug, Clone)]
