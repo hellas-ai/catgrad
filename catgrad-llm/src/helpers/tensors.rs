@@ -188,6 +188,9 @@ pub fn clamp(builder: &Builder, x: Var, min_val: f32, max_val: f32) -> Var {
     let sh = shape(builder, x.clone());
     let min_t = constant(builder, min_val, &sh);
     let max_t = constant(builder, max_val, &sh);
+    let x_dtype = dtype(builder, x.clone());
+    let min_t = cast(builder, min_t, x_dtype.clone());
+    let max_t = cast(builder, max_t, x_dtype);
     clamp_with_tensors(builder, x, min_t, max_t)
 }
 
@@ -347,6 +350,6 @@ pub fn cumsum<const N: usize>(builder: &Builder, x: Var) -> Var {
     matmul(builder, x, lower)
 }
 
-pub fn zeros(builder: &Builder, shape: &Var) -> Var {
-    constant(builder, 0.0, shape)
+pub fn zeros(builder: &Builder, shape: &Var, dtype: impl IntoDtypeVar) -> Var {
+    cast(builder, constant(builder, 0.0, shape), dtype)
 }

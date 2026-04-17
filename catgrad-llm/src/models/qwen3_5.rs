@@ -1159,7 +1159,11 @@ impl Qwen3_5Model {
                     ),
                 );
 
-                let zeros_prefill_state = zeros(b, &shape!(b, batch_size, conv_dim, cache_len));
+                let zeros_prefill_state = zeros(
+                    b,
+                    &shape!(b, batch_size, conv_dim, cache_len),
+                    dtype(b, mixed_qkv.clone()),
+                );
                 let x_padded_prefill_state = concat(b, 2, zeros_prefill_state, mixed_qkv);
                 let out_conv_state_prefill =
                     slice(b, 2, seq_len, cache_len, x_padded_prefill_state);

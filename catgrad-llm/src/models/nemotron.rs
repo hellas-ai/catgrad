@@ -65,6 +65,7 @@ fn grouped_rmsnorm(
         x,
     );
     let gamma = param(builder, &p.extend(["weight"]).unwrap());
+    let gamma = cast(builder, gamma, dtype(builder, x.clone()));
     let gamma = broadcast(builder, shape(builder, x.clone()), gamma);
     x * gamma
 }
@@ -364,6 +365,7 @@ impl NemotronModel {
         let attn = matmul(builder, q, tk);
         let sh = shape(builder, attn.clone());
         let denom = constant(builder, (self.config.head_dim as f32).sqrt(), &sh);
+        let denom = cast(builder, denom, dtype(builder, attn.clone()));
         let mut attn = attn / denom;
         let mask = broadcast(builder, sh, attention_mask);
         attn = attn + mask;
@@ -502,8 +504,11 @@ impl NemotronModel {
                 conv_out = self.add_bias_3d(b, conv_bias, conv_out);
                 let conv_out = silu(b, conv_out);
 
-                let zeros_state =
-                    zeros(b, &shape!(b, batch_size, conv_dim, self.config.conv_kernel));
+                let zeros_state = zeros(
+                    b,
+                    &shape!(b, batch_size, conv_dim, self.config.conv_kernel),
+                    dtype(b, hidden_bc.clone()),
+                );
                 let out_conv_state = slice(
                     b,
                     2,
@@ -607,6 +612,7 @@ impl NemotronModel {
                 let a = broadcast(b, state_shape.clone(), a);
                 let d_a = exp(b, dt.clone() * a);
 
+                let recurrent_state = cast(b, recurrent_state, Dtype::F32);
                 let recurrent_state = unsqueeze::<4, 5>(b, 1, recurrent_state);
                 let recurrent_state = broadcast(b, state_shape.clone(), recurrent_state);
                 let d_b = unsqueeze::<4, 5>(b, 3, b_proj);
@@ -697,7 +703,7 @@ impl NemotronModel {
                 y = y + hidden * d_param;
                 let y = squeeze::<5, 4>(b, 4, y);
 
-                let zero_g = zeros(b, &shape!(b, batch_size, num_heads, 1));
+                let zero_g = zeros(b, &shape!(b, batch_size, num_heads, 1), dtype(b, g.clone()));
                 let g_last = slice(b, 2, seq_len.clone(), 1, concat(b, 2, zero_g, g.clone()));
                 let g_last = broadcast(b, shape(b, g.clone()), g_last);
                 let state_decay = exp(b, g_last - g);
@@ -880,6 +886,7 @@ impl DynModule for NemotronModel {
         let mut x = embeddings(builder, root.extend(["backbone", "embeddings"]).unwrap(), x);
         let [_, seq_len, _] = unpack::<3>(builder, shape(builder, x.clone()));
         let attention_mask = causal_mask(builder, seq_len, pos.clone());
+        let attention_mask = cast(builder, attention_mask, dtype(builder, x.clone()));
 
         for layer_id in 0..self.config.num_hidden_layers {
             x = self.layer(
@@ -949,7 +956,7 @@ impl DynModule for NemotronModel {
             ]),
         }));
         let t_ssm = Type::Tensor(TypeExpr::NdArrayType(NdArrayType {
-            dtype: DtypeExpr::Constant(self.dtype()),
+            dtype: DtypeExpr::Constant(Dtype::F32),
             shape: ShapeExpr::Shape(vec![
                 num_mamba_layers,
                 batch_size,

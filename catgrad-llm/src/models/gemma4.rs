@@ -453,6 +453,7 @@ impl Gemma4Model {
     fn scaled_embeddings(&self, builder: &Builder, p: Path, x: Var, scale: f32) -> Var {
         let x = embeddings(builder, p, x);
         let scale = constant(builder, scale, &shape(builder, x.clone()));
+        let scale = cast(builder, scale, dtype(builder, x.clone()));
         x * scale
     }
 
@@ -506,6 +507,7 @@ impl Gemma4Model {
             (self.config.hidden_size as f32).powf(-0.5),
             &shape(builder, projection.clone()),
         );
+        let scale = cast(builder, scale, dtype(builder, projection.clone()));
         let projection = projection * scale;
         let projection = reshape(
             builder,
@@ -534,6 +536,7 @@ impl Gemma4Model {
             2.0f32.powf(-0.5),
             &shape(builder, projection.clone()),
         );
+        let scale = cast(builder, scale, dtype(builder, projection.clone()));
         Some((projection + per_layer_inputs.unwrap()) * scale)
     }
 
@@ -585,6 +588,7 @@ impl Gemma4Model {
             (self.config.hidden_size as f32).powf(-0.5),
             &shape(builder, routed.clone()),
         );
+        let routed_scalar = cast(builder, routed_scalar, dtype(builder, routed.clone()));
         let routed = routed * routed_scale * routed_scalar;
         let routed = linear_no_bias(
             builder,
@@ -618,6 +622,7 @@ impl Gemma4Model {
         let down_proj = param(builder, &p.extend(["experts", "down_proj"]).unwrap());
         let per_expert_scale = param(builder, &p.extend(["router", "per_expert_scale"]).unwrap());
         let mut sumk = constant(builder, 0.0, &fullx_shape);
+        sumk = cast(builder, sumk, dtype(builder, fullx.clone()));
 
         for i in 0..top_k_experts {
             let idx = get(builder, 1, i, top_k_index.clone());
@@ -761,6 +766,7 @@ impl Gemma4Model {
 
         let mut attn = matmul(builder, q, transpose(builder, 2, 3, k));
         let sh = shape(builder, attn.clone());
+        let attention_mask = cast(builder, attention_mask, dtype(builder, attn.clone()));
         let mask = broadcast(builder, sh, attention_mask);
         attn = attn + mask;
 
@@ -1001,6 +1007,7 @@ impl Gemma4Model {
 
         if let Some(softcap) = self.config.final_logit_softcapping {
             let s = constant(builder, softcap, &shape(builder, x.clone()));
+            let s = cast(builder, s, dtype(builder, x.clone()));
             x = x / s.clone();
             x = tanh(builder, x);
             x = x * s;
@@ -1151,8 +1158,11 @@ impl Gemma4VisionEmbeddings {
             self.runtime_vision.patch_grid_width <= self.vision_config.position_embedding_size
         );
         let [b, s, _] = unpack::<3>(builder, shape(builder, pixels.clone()));
-        let pixels = pixels.clone() * constant(builder, 2.0f32, &shape(builder, pixels.clone()))
-            - constant(builder, 1.0f32, &shape(builder, pixels));
+        let scale = constant(builder, 2.0f32, &shape(builder, pixels.clone()));
+        let scale = cast(builder, scale, dtype(builder, pixels.clone()));
+        let shift = constant(builder, 1.0f32, &shape(builder, pixels.clone()));
+        let shift = cast(builder, shift, dtype(builder, pixels.clone()));
+        let pixels = pixels * scale - shift;
         let hidden_states = linear_no_bias(
             builder,
             3 * self.vision_config.patch_size * self.vision_config.patch_size,
@@ -1300,6 +1310,7 @@ impl Gemma4VisionEmbeddings {
 
         let mut attn = matmul(builder, q, transpose(builder, 2, 3, k));
         let sh = shape(builder, attn.clone());
+        let attention_mask = cast(builder, attention_mask, dtype(builder, attn.clone()));
         attn = attn + broadcast(builder, sh, attention_mask);
         let attn = softmax(builder, attn);
         let attn = matmul(builder, attn, v);
@@ -1476,6 +1487,7 @@ impl Gemma4VisionEmbeddings {
             (self.vision_config.hidden_size as f32).sqrt(),
             &shape(builder, x.clone()),
         );
+        let scale = cast(builder, scale, dtype(builder, x.clone()));
         x * scale
     }
 }

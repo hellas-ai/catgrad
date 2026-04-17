@@ -24,7 +24,7 @@ fn pad_sequence<const N: usize>(builder: &Builder, x: Var, padded_seq_len: usize
     let mut sh = unpack::<N>(builder, shape(builder, x.clone()));
     sh[2] = padded_seq_len.to_nat(builder);
     let sh = pack(builder, sh);
-    let zeros = zeros(builder, &sh);
+    let zeros = zeros(builder, &sh, dtype(builder, x.clone()));
     let x = concat(builder, 2, x, zeros);
     slice(builder, 2, 0, padded_seq_len, x)
 }
@@ -139,7 +139,7 @@ pub fn chunk_gated_delta_rule(
         builder,
         lower_mask,
         decay_mask,
-        zeros(builder, &decay_shape),
+        zeros(builder, &decay_shape, Dtype::F32),
     );
 
     let flat_bhc = batch_size.clone() * num_heads.clone() * max_num_chunks.to_nat(builder);
@@ -235,7 +235,7 @@ pub fn chunk_gated_delta_rule(
 
     let [_, _, _, _, value_head_dim] = unpack::<5>(builder, shape(builder, value.clone()));
     let state_shape = shape!(builder, batch_size, num_heads, k_head_dim, value_head_dim);
-    let mut last_recurrent_state = zeros(builder, &state_shape);
+    let mut last_recurrent_state = zeros(builder, &state_shape, Dtype::F32);
 
     let mask_diag1 = triu_mask(builder, chunk_size_nat, 1);
     let mut out_chunks = Vec::with_capacity(max_num_chunks);
@@ -338,6 +338,7 @@ pub fn recurrent_gated_delta_rule(
             sequence_length,
             value_head_dim
         ),
+        Dtype::F32,
     );
     let mut last_recurrent_state = initial_state;
 
