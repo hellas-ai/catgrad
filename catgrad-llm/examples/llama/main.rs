@@ -188,7 +188,7 @@ fn get_models(app_config: &AppConfig) -> Vec<(&str, &str)> {
         .iter()
         .map(|(alias, model)| (model.as_str(), alias.as_str()))
         .collect();
-    models.sort_unstable_by(|a, b| a.0.to_lowercase().cmp(&b.0.to_lowercase()));
+    models.sort_unstable_by_key(|a| a.0.to_lowercase());
     models
 }
 
