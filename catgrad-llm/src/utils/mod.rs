@@ -122,10 +122,13 @@ pub fn get_model_chat_template(model: &str, revision: &str) -> Result<String> {
             ))?
             .to_string()
     };
-    // SmolLM3 specific hack
+    // Some chat templates contain these tags that are not used for inference.
+    // If more variants show up a regex may be needed later on.
     Ok(chat_template
         .replace("{% generation %}", "")
-        .replace("{% endgeneration %}", ""))
+        .replace("{%- generation -%}", "")
+        .replace("{% endgeneration %}", "")
+        .replace("{%- endgeneration -%}", ""))
 }
 
 #[derive(Debug, Clone)]
