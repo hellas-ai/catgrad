@@ -11,7 +11,7 @@ use tiny_http::{Header, Method, Request, Response, Server, StatusCode};
 
 use catgrad_llm::LLMError;
 use catgrad_llm::run::ModelEngine;
-use catgrad_llm::types::{self, anthropic, openai, plain};
+use catgrad_llm::types::{anthropic, openai, plain};
 use catgrad_llm::utils::from_json_slice;
 
 // Known limitations of this demo server:
@@ -233,24 +233,13 @@ where
 fn serve_openai(request: Request, engine: &InferenceEngine, req: openai::ChatCompletionRequest) {
     let model = engine.model_name.clone();
     let max_tokens = req.max_tokens;
-    let enable_thinking = req
-        .reasoning_effort
-        .is_some_and(|effort| effort != openai::ReasoningEffort::None);
     let stream = req.stream == Some(true);
     let stream_include_usage = req
         .stream_options
         .as_ref()
         .and_then(|opts| opts.include_usage)
         .unwrap_or(false);
-    let messages: Vec<types::Message> = req
-        .messages
-        .into_iter()
-        .map(|m| types::Message::OpenAI(Box::new(m)))
-        .collect();
-    let prepared = match engine
-        .engine
-        .prepare_messages_with_thinking(&messages, enable_thinking)
-    {
+    let prepared = match engine.engine.prepare_openai_chat_request(&req) {
         Ok(prepared) => prepared,
         Err(err) => {
             respond_llm_error(request, err);

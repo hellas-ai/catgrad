@@ -2,19 +2,17 @@ use anyhow::Result;
 use catgrad::interpreter::backend::candle::CandleBackend;
 use catgrad::interpreter::backend::ndarray::NdArrayBackend;
 use catgrad::prelude::*;
-use catgrad_llm::helpers::LLMModel;
-use catgrad_llm::utils::{
-    cache_path_for_embeddings, empty_state_cache, get_model, get_model_chat_template,
-    interpolate_multimodal_prompt, load_cached_embeddings, load_model, post_process_model_weights,
-    prepare_multimodal_input, print_bench_table, render_chat_template, save_cached_embeddings,
-    split_image_tokens,
-};
+use catgrad_llm::helpers::{LLMModel, ToolCall, ToolUseStep};
+use catgrad_llm::utils::*;
 use clap::{Parser, ValueEnum};
+use minijinja::{Value, context};
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
+
+mod tools;
 
 #[derive(Parser, Debug)]
 struct Args {
@@ -77,6 +75,9 @@ struct Args {
         value_names = ["PP", "TG"]
     )]
     bench: Option<Vec<usize>>,
+    /// Enable simple tool use for models whose chat template exposes a supported format.
+    #[arg(long)]
+    tool_use: bool,
 }
 
 #[derive(Copy, Clone, Debug, ValueEnum)]
@@ -155,10 +156,15 @@ fn main() -> Result<()> {
         (args.backend, args.dtype),
         (BackendChoice::Ndarray, Dtype::F16 | Dtype::BF16)
     ) {
-        return Err(anyhow::anyhow!(
-            "--dtype f16 and bf16 currently require the candle backend"
-        ));
+        anyhow::bail!("--dtype f16 and bf16 currently require the candle backend");
     }
+    if args.tool_use && args.raw {
+        anyhow::bail!("--tool-use does not support --raw");
+    }
+    if args.tool_use && args.bench.is_some() {
+        anyhow::bail!("--tool-use does not support --bench");
+    }
+
     let app_config = get_app_config(&args)?;
     if args.list_models {
         for (model, alias) in get_models(&app_config) {
@@ -192,6 +198,112 @@ fn get_models(app_config: &AppConfig) -> Vec<(&str, &str)> {
     models
 }
 
+fn user_message(prompt: &str, has_image: bool) -> Value {
+    if has_image {
+        let content = vec![
+            context!(type => "text", text => prompt),
+            context!(type => "image"),
+        ];
+        context!(role => "user", content => content)
+    } else {
+        context!(role => "user", content => prompt)
+    }
+}
+
+fn assistant_message(content: String) -> Value {
+    context!(role => "assistant", content => content)
+}
+
+fn tool_call_id(index: usize) -> String {
+    format!("call_{}", index + 1)
+}
+
+fn assistant_tool_message(content: String, tool_calls: &[ToolCall]) -> Value {
+    let tool_calls: Vec<_> = tool_calls
+        .iter()
+        .enumerate()
+        .map(|(index, tool_call)| {
+            context!(
+                id => tool_call_id(index),
+                type => "function",
+                function => context!(
+                    name => &tool_call.name,
+                    arguments => &tool_call.arguments,
+                )
+            )
+        })
+        .collect();
+    context!(role => "assistant", content => content, tool_calls => tool_calls)
+}
+
+fn tool_message(index: usize, tool_call: &ToolCall, content: String) -> Value {
+    context!(
+        role => "tool",
+        name => &tool_call.name,
+        tool_call_id => tool_call_id(index),
+        content => content,
+    )
+}
+
+fn render_tool_prompt(
+    chat_template: &str,
+    tokenizer_config: &serde_json::Value,
+    prompt: &str,
+    tools: &[Value],
+    enable_thinking: bool,
+) -> Result<String> {
+    Ok(render_chat_template_values(
+        chat_template,
+        tokenizer_config,
+        &[user_message(prompt, false)],
+        RenderChatTemplateOptions {
+            enable_thinking,
+            tools: Some(tools),
+        },
+    )?)
+}
+
+fn render_tool_follow_up_prompt(
+    chat_template: &str,
+    tokenizer_config: &serde_json::Value,
+    prompt: &str,
+    tools: &[Value],
+    tool_use_step: &ToolUseStep,
+    tool_responses: &[String],
+    enable_thinking: bool,
+) -> Result<String> {
+    let assistant_message = if let Some(raw_tool_calls) = &tool_use_step.assistant_tool_calls_text {
+        assistant_message(format!(
+            "{}{}",
+            tool_use_step.assistant_content, raw_tool_calls
+        ))
+    } else {
+        assistant_tool_message(
+            tool_use_step.assistant_content.clone(),
+            &tool_use_step.tool_calls,
+        )
+    };
+
+    let mut messages = vec![user_message(prompt, false), assistant_message];
+    messages.extend(
+        tool_use_step
+            .tool_calls
+            .iter()
+            .zip(tool_responses.iter())
+            .enumerate()
+            .map(|(index, (tool_call, response))| tool_message(index, tool_call, response.clone())),
+    );
+    Ok(render_chat_template_values(
+        chat_template,
+        tokenizer_config,
+        &messages,
+        RenderChatTemplateOptions {
+            enable_thinking,
+            tools: Some(tools),
+        },
+    )?)
+}
+
 fn run_with_backend<B: interpreter::Backend>(
     args: &Args,
     app_config: &AppConfig,
@@ -217,7 +329,16 @@ fn run_with_backend<B: interpreter::Backend>(
         elapsed_load.as_secs_f64()
     );
 
-    let chat_template = get_model_chat_template(&model_name, &args.revision).unwrap_or_default();
+    let chat_template = match get_model_chat_template(&model_name, &args.revision) {
+        Ok(template) => template,
+        Err(err) if args.tool_use => return Err(err.into()),
+        Err(_) => String::new(),
+    };
+    let tool_schemas = if args.tool_use {
+        tools::tool_schemas()
+    } else {
+        Vec::new()
+    };
 
     let benchmarking = args.bench.is_some();
     let mut pp = 0;
@@ -234,6 +355,14 @@ fn run_with_backend<B: interpreter::Backend>(
             &model_name, pp, tg
         );
         "The".repeat(pp)
+    } else if args.tool_use {
+        render_tool_prompt(
+            &chat_template,
+            &tokenizer_config,
+            &args.prompt,
+            &tool_schemas,
+            args.thinking,
+        )?
     } else if chat_template.is_empty() || args.raw {
         args.prompt.clone()
     } else {
@@ -253,7 +382,7 @@ fn run_with_backend<B: interpreter::Backend>(
     };
     let runtime_context = prepared_multimodal.runtime_context.as_ref();
 
-    if !benchmarking && !use_image {
+    if !benchmarking && !use_image && !args.tool_use {
         print!("{prompt}");
     }
     let prompt = if use_image {
@@ -266,8 +395,12 @@ fn run_with_backend<B: interpreter::Backend>(
         .encode(prompt.as_str(), true)
         .map_err(|err| anyhow::anyhow!("check error {:?}", err))?;
 
-    let mut token_ids = encoding.get_ids().to_vec();
-    let max_sequence_length = max_seq_len + token_ids.len();
+    let token_ids = encoding.get_ids().to_vec();
+    let max_sequence_length = if args.tool_use {
+        token_ids.len() + (2 * max_seq_len) + 256
+    } else {
+        max_seq_len + token_ids.len()
+    };
     let model = get_model(
         &config_json,
         max_sequence_length,
@@ -334,9 +467,6 @@ fn run_with_backend<B: interpreter::Backend>(
         typecheck::check(&env, &parameter_types, typed_term.clone()).map_err(anyhow::Error::new)?;
     }
 
-    let mut generated_tokens = 0;
-    let mut start_gen = std::time::Instant::now();
-    let mut elapsed_pp = std::time::Duration::ZERO;
     let interpreter = interpreter::Interpreter::new(backend, env, parameter_values);
 
     let mut multimodal_ctx: Option<MultimodalRuntime<B>> = None;
@@ -400,82 +530,126 @@ fn run_with_backend<B: interpreter::Backend>(
         });
     }
 
-    let eos_token_ids = model.config().get_eos_token_ids();
-
-    let mut state_cache = empty_state_cache(&interpreter.backend, model.as_ref())?;
     let use_kv_cache = args.kv_cache || use_image;
-    let mut use_image_embeddings = use_image;
-
-    // Run inference loop
-    for i in 0..max_seq_len {
-        let decode_inputs = if let Some(ctx) = multimodal_ctx.as_ref() {
-            DecodeInputs::Multimodal {
-                input_tokens: &token_ids,
-                hidden_size: ctx.hidden_size,
-                image_token_index: ctx.image_token_index,
-                visual_embeddings: &ctx.visual_embeddings,
-                use_image_embeddings,
-            }
-        } else {
-            DecodeInputs::Text {
-                input_tokens: &token_ids,
-            }
-        };
-        let (next_token_id, updated_state_cache) = run_interpreter(
+    if args.tool_use {
+        let (first_text, first_tokens, first_elapsed_pp, first_elapsed_gen) = generate_stream(
             model.as_ref(),
             &typed_term,
             &interpreter,
-            decode_inputs,
-            &state_cache,
-            max_sequence_length,
+            &tokenizer,
+            token_ids,
+            GenerationConfig {
+                max_seq_len: args.max_seq_len,
+                max_sequence_length,
+                use_kv_cache: true,
+                benchmarking: false,
+                stream_output: false,
+                multimodal_ctx: None,
+            },
         )?;
-        if i == 0 {
-            elapsed_pp = start_gen.elapsed();
-            start_gen = std::time::Instant::now();
-        }
-        generated_tokens += 1;
-        if eos_token_ids.contains(&(next_token_id as i32)) && !benchmarking {
-            break;
-        }
-        if use_kv_cache {
-            state_cache = updated_state_cache;
-            token_ids = vec![next_token_id];
-        } else {
-            token_ids.push(next_token_id);
-        }
-        if use_image && use_kv_cache {
-            use_image_embeddings = false;
-        }
-        if !benchmarking {
-            let decoded_token = tokenizer.decode(&[next_token_id], false).unwrap();
-            print!("{decoded_token}");
-            std::io::stdout().flush()?;
-        }
-    }
+        if let Some(tool_use_step) = model.parse_tool_calls(&first_text)? {
+            let mut tool_responses = Vec::with_capacity(tool_use_step.tool_calls.len());
+            for tool_call in &tool_use_step.tool_calls {
+                let tool_response = tools::execute_tool_call(tool_call)?;
+                eprintln!(
+                    "Tool {}({}) -> {}",
+                    tool_call.name,
+                    serde_json::Value::Object(tool_call.arguments.clone()),
+                    tool_response
+                );
+                tool_responses.push(tool_response);
+            }
 
-    let elapsed_gen = start_gen.elapsed();
-    if benchmarking {
-        let size_gib = (total_params as f64 * dtype_size_bytes(args.dtype) as f64)
-            / (1024.0 * 1024.0 * 1024.0);
-        let params_m = total_params as f64 / 1_000_000.0;
-        print_bench_table(
-            &model_name,
-            size_gib,
-            params_m,
-            args.backend.as_str(),
-            pp,
-            elapsed_pp,
-            tg,
-            elapsed_gen,
-        );
+            let follow_up_prompt = render_tool_follow_up_prompt(
+                &chat_template,
+                &tokenizer_config,
+                &args.prompt,
+                &tool_schemas,
+                &tool_use_step,
+                &tool_responses,
+                args.thinking,
+            )?;
+            let follow_up_ids = tokenizer
+                .encode(follow_up_prompt.as_str(), true)
+                .map_err(|err| anyhow::anyhow!("check error {:?}", err))?
+                .get_ids()
+                .to_vec();
+            let (_, second_tokens, second_elapsed_pp, second_elapsed_gen) = generate_stream(
+                model.as_ref(),
+                &typed_term,
+                &interpreter,
+                &tokenizer,
+                follow_up_ids,
+                GenerationConfig {
+                    max_seq_len: args.max_seq_len,
+                    max_sequence_length,
+                    use_kv_cache: true,
+                    benchmarking: false,
+                    stream_output: true,
+                    multimodal_ctx: None,
+                },
+            )?;
+            println!();
+            let total_tokens = first_tokens + second_tokens;
+            let total_elapsed =
+                first_elapsed_pp + first_elapsed_gen + second_elapsed_pp + second_elapsed_gen;
+            eprintln!(
+                "{} tokens generated in {} seconds. ({:.2} tps)",
+                total_tokens,
+                total_elapsed.as_secs(),
+                total_tokens as f64 / total_elapsed.as_secs_f64(),
+            );
+        } else {
+            print!("{first_text}");
+            std::io::stdout().flush()?;
+            println!();
+            let total_elapsed = first_elapsed_pp + first_elapsed_gen;
+            eprintln!(
+                "{} tokens generated in {} seconds. ({:.2} tps)",
+                first_tokens,
+                total_elapsed.as_secs(),
+                first_tokens as f64 / total_elapsed.as_secs_f64(),
+            );
+        }
     } else {
-        println!();
-        eprintln!(
-            "{} tokens generated in {} seconds. ({:.2} tps)",
-            generated_tokens,
-            (elapsed_pp + elapsed_gen).as_secs(),
-            generated_tokens as f64 / (elapsed_pp + elapsed_gen).as_secs_f64(),
-        );
+        let (_, generated_tokens, elapsed_pp, elapsed_gen) = generate_stream(
+            model.as_ref(),
+            &typed_term,
+            &interpreter,
+            &tokenizer,
+            token_ids,
+            GenerationConfig {
+                max_seq_len,
+                max_sequence_length,
+                use_kv_cache,
+                benchmarking,
+                stream_output: !benchmarking,
+                multimodal_ctx: multimodal_ctx.as_ref(),
+            },
+        )?;
+        if benchmarking {
+            let size_gib = (total_params as f64 * dtype_size_bytes(args.dtype) as f64)
+                / (1024.0 * 1024.0 * 1024.0);
+            let params_m = total_params as f64 / 1_000_000.0;
+            print_bench_table(
+                &model_name,
+                size_gib,
+                params_m,
+                args.backend.as_str(),
+                pp,
+                elapsed_pp,
+                tg,
+                elapsed_gen,
+            );
+        } else {
+            println!();
+            eprintln!(
+                "{} tokens generated in {} seconds. ({:.2} tps)",
+                generated_tokens,
+                (elapsed_pp + elapsed_gen).as_secs(),
+                generated_tokens as f64 / (elapsed_pp + elapsed_gen).as_secs_f64(),
+            );
+        }
     }
     Ok(())
 }
@@ -512,6 +686,81 @@ enum DecodeInputs<'a, B: interpreter::Backend> {
         visual_embeddings: &'a interpreter::Value<B>,
         use_image_embeddings: bool,
     },
+}
+
+struct GenerationConfig<'a, B: interpreter::Backend> {
+    max_seq_len: usize,
+    max_sequence_length: usize,
+    use_kv_cache: bool,
+    benchmarking: bool,
+    stream_output: bool,
+    multimodal_ctx: Option<&'a MultimodalRuntime<B>>,
+}
+
+fn generate_stream<B: interpreter::Backend>(
+    model: &dyn LLMModel,
+    typed_term: &TypedTerm,
+    interpreter: &interpreter::Interpreter<B>,
+    tokenizer: &tokenizers::Tokenizer,
+    mut token_ids: Vec<u32>,
+    config: GenerationConfig<'_, B>,
+) -> Result<(String, usize, std::time::Duration, std::time::Duration)> {
+    let eos_token_ids = model.config().get_eos_token_ids();
+    let mut state_cache = empty_state_cache(&interpreter.backend, model)?;
+    let mut use_image_embeddings = config.multimodal_ctx.is_some();
+    let mut output = String::new();
+    let mut generated_tokens = 0;
+    let mut start_gen = std::time::Instant::now();
+    let mut elapsed_pp = std::time::Duration::ZERO;
+
+    for i in 0..config.max_seq_len {
+        let decode_inputs = if let Some(ctx) = config.multimodal_ctx {
+            DecodeInputs::Multimodal {
+                input_tokens: &token_ids,
+                hidden_size: ctx.hidden_size,
+                image_token_index: ctx.image_token_index,
+                visual_embeddings: &ctx.visual_embeddings,
+                use_image_embeddings,
+            }
+        } else {
+            DecodeInputs::Text {
+                input_tokens: &token_ids,
+            }
+        };
+        let (next_token_id, updated_state_cache) = run_interpreter(
+            model,
+            typed_term,
+            interpreter,
+            decode_inputs,
+            &state_cache,
+            config.max_sequence_length,
+        )?;
+        if i == 0 {
+            elapsed_pp = start_gen.elapsed();
+            start_gen = std::time::Instant::now();
+        }
+        generated_tokens += 1;
+        if eos_token_ids.contains(&(next_token_id as i32)) && !config.benchmarking {
+            break;
+        }
+        if config.use_kv_cache {
+            state_cache = updated_state_cache;
+            token_ids = vec![next_token_id];
+        } else {
+            token_ids.push(next_token_id);
+        }
+        if config.multimodal_ctx.is_some() && config.use_kv_cache {
+            use_image_embeddings = false;
+        }
+        let decoded_token = tokenizer.decode(&[next_token_id], false).unwrap();
+        output.push_str(&decoded_token);
+        if config.stream_output {
+            print!("{decoded_token}");
+            std::io::stdout().flush()?;
+        }
+    }
+
+    Ok((output, generated_tokens, elapsed_pp, start_gen.elapsed()))
 }
 
 fn token_tensor<B: interpreter::Backend>(
