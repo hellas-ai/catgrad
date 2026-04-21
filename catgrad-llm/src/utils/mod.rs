@@ -16,8 +16,10 @@ mod detokenize;
 pub use detokenize::{Detokenizer, detokenize_tokens};
 
 mod prompt;
-pub(crate) use prompt::render_chat_prompt_with_thinking;
-pub use prompt::{PreparedPrompt, render_chat_template};
+pub(crate) use prompt::render_chat_prompt_with_options;
+pub use prompt::{
+    PreparedPrompt, RenderChatTemplateOptions, render_chat_template, render_chat_template_values,
+};
 
 mod images;
 pub use images::*;

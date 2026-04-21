@@ -1,6 +1,7 @@
 //! OpenAI chat-completions wire format.
 use crate::LLMError;
 use serde::{Deserialize, Serialize};
+use serde_json::Value as JsonValue;
 use serde_with::skip_serializing_none;
 use typed_builder::TypedBuilder;
 
@@ -33,6 +34,12 @@ pub struct ChatMessage {
     pub role: String,
     #[builder(default)]
     pub content: Option<MessageContent>,
+    #[builder(default)]
+    pub tool_calls: Option<Vec<JsonValue>>,
+    #[builder(default)]
+    pub tool_call_id: Option<String>,
+    #[builder(default)]
+    pub name: Option<String>,
 }
 
 impl ChatMessage {
@@ -80,6 +87,8 @@ pub enum ReasoningEffort {
 pub struct ChatCompletionRequest {
     pub model: String,
     pub messages: Vec<ChatMessage>,
+    #[builder(default)]
+    pub tools: Option<Vec<JsonValue>>,
     #[builder(default)]
     pub max_tokens: Option<u32>,
     #[builder(default)]
@@ -309,8 +318,11 @@ mod tests {
                                 text: " in one sentence".to_string(),
                             },
                         ])))
+                        .tool_calls(Some(vec![]))
+                        .tool_call_id(Some("call_1".to_string()))
                         .build(),
                 ])
+                .tools(Some(vec![]))
                 .max_tokens(Some(64))
                 .reasoning_effort(Some(ReasoningEffort::Medium))
                 .stream(Some(false))

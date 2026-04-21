@@ -1,7 +1,7 @@
 use super::PreparedMultimodalInput;
 use crate::{Result, types};
 use chrono::Local;
-use minijinja::{Environment, Value, context};
+use minijinja::{Environment, Error, ErrorKind, State, Value, context};
 use minijinja_contrib::pycompat::unknown_method_callback;
 use serde_json::{Map as JsonMap, Value as JsonValue};
 use tokenizers::tokenizer::Tokenizer;
@@ -12,6 +12,12 @@ pub struct PreparedPrompt {
     pub input_ids: Vec<i32>,
     pub stop_token_ids: Vec<i32>,
     pub multimodal: PreparedMultimodalInput,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct RenderChatTemplateOptions<'a> {
+    pub enable_thinking: bool,
+    pub tools: Option<&'a [Value]>,
 }
 
 impl PreparedPrompt {
@@ -73,6 +79,25 @@ pub(crate) fn message_to_template_context(message: &types::Message) -> Result<Va
                 "content_blocks".to_string(),
                 JsonValue::Array(content_blocks),
             );
+            if let Some(tool_calls) = msg
+                .tool_calls
+                .as_ref()
+                .filter(|tool_calls| !tool_calls.is_empty())
+            {
+                map.insert(
+                    "tool_calls".to_string(),
+                    JsonValue::Array(tool_calls.iter().map(normalize_openai_tool_call).collect()),
+                );
+            }
+            if let Some(tool_call_id) = &msg.tool_call_id {
+                map.insert(
+                    "tool_call_id".to_string(),
+                    JsonValue::String(tool_call_id.clone()),
+                );
+            }
+            if let Some(name) = &msg.name {
+                map.insert("name".to_string(), JsonValue::String(name.clone()));
+            }
         }
         types::Message::Anthropic(msg) => {
             map.insert("role".to_string(), JsonValue::String(msg.role.clone()));
@@ -95,20 +120,28 @@ pub(crate) fn render_chat_prompt(
     tokenizer_config: &JsonValue,
     messages: &[types::Message],
 ) -> Result<String> {
-    render_chat_prompt_with_thinking(chat_template, tokenizer_config, messages, false)
+    render_chat_prompt_with_options(
+        chat_template,
+        tokenizer_config,
+        messages,
+        RenderChatTemplateOptions {
+            enable_thinking: false,
+            tools: None,
+        },
+    )
 }
 
-pub(crate) fn render_chat_prompt_with_thinking(
+pub(crate) fn render_chat_prompt_with_options(
     chat_template: &str,
     tokenizer_config: &JsonValue,
     messages: &[types::Message],
-    enable_thinking: bool,
+    options: RenderChatTemplateOptions<'_>,
 ) -> Result<String> {
     let messages: Vec<_> = messages
         .iter()
         .map(message_to_template_context)
         .collect::<Result<_>>()?;
-    render_chat_messages(chat_template, tokenizer_config, messages, enable_thinking)
+    render_chat_template_values(chat_template, tokenizer_config, &messages, options)
 }
 
 fn strftime_now(format_str: String) -> String {
@@ -118,11 +151,11 @@ fn strftime_now(format_str: String) -> String {
 fn render_chat_messages(
     chat_template: &str,
     tokenizer_config: &JsonValue,
-    messages: Vec<Value>,
-    enable_thinking: bool,
+    messages: Value,
+    options: RenderChatTemplateOptions<'_>,
 ) -> Result<String> {
     let mut env = Environment::new();
-    env.set_unknown_method_callback(unknown_method_callback);
+    env.set_unknown_method_callback(template_unknown_method_callback);
     env.add_function("strftime_now", strftime_now);
     env.add_template("chat", chat_template)?;
     let tmpl = env.get_template("chat")?;
@@ -132,15 +165,77 @@ fn render_chat_messages(
         .unwrap_or("");
     let prompt = tmpl.render(context!(
         messages => messages,
+        tools => options
+            .tools
+            .map(Value::from_serialize)
+            .unwrap_or(Value::UNDEFINED),
         add_generation_prompt => true,
-        enable_thinking => enable_thinking,
+        enable_thinking => options.enable_thinking,
         bos_token => bos_token
     ))?;
 
     Ok(prompt)
 }
 
-// Used by the llm example app, clean up
+fn template_unknown_method_callback(
+    state: &State,
+    value: &Value,
+    method: &str,
+    args: &[Value],
+) -> std::result::Result<Value, Error> {
+    if method == "get" {
+        if let Some(obj) = value.as_object() {
+            return match args {
+                [key] => Ok(obj.get_value(key).unwrap_or_else(|| Value::from(()))),
+                [key, default] => Ok(obj.get_value(key).unwrap_or_else(|| default.clone())),
+                [] => Err(Error::from(ErrorKind::MissingArgument)),
+                _ => Err(Error::from(ErrorKind::TooManyArguments)),
+            };
+        }
+    }
+
+    unknown_method_callback(state, value, method, args)
+}
+
+fn normalize_openai_tool_call(tool_call: &JsonValue) -> JsonValue {
+    let Some(mut tool_call) = tool_call.as_object().cloned() else {
+        return tool_call.clone();
+    };
+    let Some(function) = tool_call
+        .get_mut("function")
+        .and_then(JsonValue::as_object_mut)
+    else {
+        return JsonValue::Object(tool_call);
+    };
+    let Some(arguments) = function.get_mut("arguments") else {
+        return JsonValue::Object(tool_call);
+    };
+    let Some(encoded_arguments) = arguments.as_str() else {
+        return JsonValue::Object(tool_call);
+    };
+    let Ok(decoded_arguments) = serde_json::from_str::<JsonValue>(encoded_arguments) else {
+        return JsonValue::Object(tool_call);
+    };
+    if decoded_arguments.is_object() {
+        *arguments = decoded_arguments;
+    }
+    JsonValue::Object(tool_call)
+}
+
+pub fn render_chat_template_values(
+    chat_template: &str,
+    tokenizer_config: &JsonValue,
+    messages: &[Value],
+    options: RenderChatTemplateOptions<'_>,
+) -> Result<String> {
+    render_chat_messages(
+        chat_template,
+        tokenizer_config,
+        Value::from_serialize(messages),
+        options,
+    )
+}
+
 pub fn render_chat_template(
     chat_template: &str,
     tokenizer_config: &serde_json::Value,
@@ -153,11 +248,19 @@ pub fn render_chat_template(
             context!(type => "text", text => prompt),
             context!(type => "image"),
         ];
-        vec![context!(role => "user",content => content)]
+        vec![context!(role => "user", content => content)]
     } else {
-        vec![context!(role => "user",content => prompt)]
+        vec![context!(role => "user", content => prompt)]
     };
-    render_chat_messages(chat_template, tokenizer_config, messages, enable_thinking)
+    render_chat_template_values(
+        chat_template,
+        tokenizer_config,
+        &messages,
+        RenderChatTemplateOptions {
+            enable_thinking,
+            tools: None,
+        },
+    )
 }
 
 // HF chat templates generally expect message.content to be a plain string.

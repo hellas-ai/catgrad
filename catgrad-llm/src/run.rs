@@ -10,11 +10,7 @@
 //! to influence generation, include that history in the prepared prompt or message list.
 use crate::helpers::LLMModel;
 use crate::types;
-use crate::utils::{
-    empty_state_cache, get_model, get_model_chat_template, interpolate_multimodal_prompt,
-    load_model, post_process_model_weights, prepare_multimodal_input,
-    prepare_multimodal_input_from_bytes, render_chat_prompt_with_thinking, split_image_tokens,
-};
+use crate::utils::*;
 use crate::{Detokenizer, LLMError, PreparedPrompt, Result};
 use catgrad::interpreter::backend::candle::CandleBackend;
 use catgrad::interpreter::{self, Backend};
@@ -178,12 +174,60 @@ impl ModelEngine {
         messages: &[types::Message],
         enable_thinking: bool,
     ) -> Result<PreparedPrompt> {
+        self.prepare_chat_messages(
+            messages,
+            RenderChatTemplateOptions {
+                enable_thinking,
+                tools: None,
+            },
+        )
+    }
+
+    /// Renders an OpenAI chat-completions request through the model chat template.
+    pub fn prepare_openai_chat_request(
+        &self,
+        request: &types::openai::ChatCompletionRequest,
+    ) -> Result<PreparedPrompt> {
+        let messages: Vec<_> = request
+            .messages
+            .iter()
+            .cloned()
+            .map(types::Message::from)
+            .collect();
+        let tools = request
+            .tools
+            .as_deref()
+            .filter(|tools| !tools.is_empty())
+            .map(|tools| {
+                tools
+                    .iter()
+                    .map(minijinja::Value::from_serialize)
+                    .collect::<Vec<_>>()
+            });
+        let enable_thinking = request
+            .reasoning_effort
+            .is_some_and(|effort| effort != types::openai::ReasoningEffort::None);
+
+        self.prepare_chat_messages(
+            &messages,
+            RenderChatTemplateOptions {
+                enable_thinking,
+                tools: tools.as_deref(),
+            },
+        )
+    }
+
+    fn prepare_chat_messages(
+        &self,
+        messages: &[types::Message],
+        options: RenderChatTemplateOptions<'_>,
+    ) -> Result<PreparedPrompt> {
         let multimodal = self.prepare_multimodal_messages(messages)?;
-        let prompt = render_chat_prompt_with_thinking(
+        let prompt = render_chat_prompt_with_options(
             &self.inner.chat_template,
             &self.inner.tokenizer_config,
             messages,
-            enable_thinking,
+            options,
         )?;
         let prompt = if multimodal.image.is_some() {
             interpolate_multimodal_prompt(

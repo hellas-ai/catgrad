@@ -637,6 +637,10 @@ impl LLMModel for Qwen3_5Model {
         self.dtype
     }
 
+    fn parse_tool_calls(&self, output: &str) -> crate::Result<Option<ToolUseStep>> {
+        parse_qwen3_5_tool_calls(output)
+    }
+
     fn extra_nat_input(&self, seq_len: usize) -> Option<usize> {
         Some(seq_len.div_ceil(GATED_DELTA_CHUNK_SIZE))
     }
