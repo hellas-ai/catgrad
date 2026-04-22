@@ -21,30 +21,30 @@ logging.set_verbosity_error()
 
 
 def calculator(
-    left: float,
-    right: float,
-    operator: Literal["add", "subtract", "multiply", "divide"],
+    lhs: float,
+    rhs: float,
+    op: Literal["add", "sub", "mul", "div"],
 ) -> float:
     """
     Calculate a result from two numbers.
 
     Args:
-        left: The left-hand number.
-        right: The right-hand number.
-        operator: The operation to apply.
+        lhs: The left-hand number.
+        rhs: The right-hand number.
+        op: The operation to apply.
 
     Returns:
         The calculated result.
     """
-    if operator == "add":
-        return left + right
-    if operator == "subtract":
-        return left - right
-    if operator == "multiply":
-        return left * right
-    if right == 0:
+    if op == "add":
+        return lhs + rhs
+    if op == "sub":
+        return lhs - rhs
+    if op == "mul":
+        return lhs * rhs
+    if rhs == 0:
         raise ValueError("division by zero")
-    return left / right
+    return lhs / rhs
 
 
 def parse_scalar(text):
@@ -130,10 +130,6 @@ def generate_chat(tokenizer, model, messages, args, tools=None):
 def run_tool_chat(tokenizer, model, prompt, args):
     tools = [calculator]
     messages = [
-        {
-            "role": "system",
-            "content": "You are a helpful assistant. Use the calculator tool for arithmetic questions.",
-        },
         {"role": "user", "content": prompt},
     ]
     output = generate_chat(tokenizer, model, messages, args, tools=tools)

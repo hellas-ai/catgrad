@@ -48,5 +48,5 @@ Pass --raw for raw prompts without chat template application.
 
 Tool calling can be tested with a few models:
 ```
-uv run catgrad-llm/scripts/llm.py -m Qwen/Qwen3-0.6B --tool-use -p 'What is 13 multiplied by 7?' -s 64
+cargo run -r --example llama -- -m Qwen/Qwen3-0.6B --tool-use -p 'What is 134233 multiplied by 754345?' -s 300
 ```

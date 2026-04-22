@@ -11,6 +11,10 @@ MODELS=(
     "LiquidAI/LFM2-350M"
 )
 
+TOOL_USE_MODELS=(
+    "Qwen/Qwen3-0.6B"
+)
+
 MULTIMODAL_MODELS=(
         "HuggingFaceTB/SmolVLM2-256M-Video-Instruct"
 )
@@ -41,6 +45,9 @@ rm -rf "$OUTPUT_DIR"/*
 
 IMAGE=catgrad-llm/scripts/compare/images/cats.png
 
+PROMPT="Category theory is"
+TOOL_USE_PROMPT="What is 1353785 divided by 790489?"
+
 echo "Generating outputs of ${MAXLEN} tokens for ${#MODELS[@]} models..."
 
 if [[ "${CATGRAD_COMPARE_HF_RUN:-}" ]]; then
@@ -52,7 +59,16 @@ if [[ "${CATGRAD_COMPARE_HF_RUN:-}" ]]; then
 
         echo "Running HF Transformers for $model -> $REFERENCE_DIR/$filename"
 
-        uv run catgrad-llm/scripts/llm.py -m "$model" -p 'Category theory is' -s $MAXLEN -r > "$REFERENCE_DIR/$filename" 2>/dev/null &
+        uv run catgrad-llm/scripts/llm.py -m "$model" -p "$PROMPT" -s $MAXLEN -r > "$REFERENCE_DIR/$filename" 2>/dev/null &
+    done
+
+    for model in "${TOOL_USE_MODELS[@]}"; do
+        # Replace slashes with dashes for the filename
+        filename="${model//\//-}"_tool_use
+
+        echo "Running HF Transformers for $model -> $REFERENCE_DIR/$filename"
+
+        uv run catgrad-llm/scripts/llm.py -m "$model" -p "$TOOL_USE_PROMPT" -s 300 --tool-use > "$REFERENCE_DIR/$filename" 2>/dev/null &
     done
 
     for model in "${MULTIMODAL_MODELS[@]}"; do
@@ -76,7 +92,18 @@ for model in "${MODELS[@]}"; do
 
     TYPECHECK="-t"
 
-    ./target/release/examples/llama -m "$model" -p 'Category theory is' -s $MAXLEN --raw -k $TYPECHECK --dtype $DTYPE > "$OUTPUT_DIR/$filename" 2>/dev/null &
+    ./target/release/examples/llama -m "$model" -p "$PROMPT" -s $MAXLEN --raw -k $TYPECHECK --dtype $DTYPE > "$OUTPUT_DIR/$filename" 2>/dev/null &
+
+    [[ -z "${GITHUB_ACTIONS:-}" ]] || wait
+done
+
+for model in "${TOOL_USE_MODELS[@]}"; do
+    # Replace slashes with dashes for the filename
+    filename="${model//\//-}"_tool_use
+
+    echo "Running for $model -> $OUTPUT_DIR/$filename"
+
+    ./target/release/examples/llama -m "$model" -p "$TOOL_USE_PROMPT" -s 300 --dtype $DTYPE --tool-use > "$OUTPUT_DIR/$filename" 2>/dev/null &
 
     [[ -z "${GITHUB_ACTIONS:-}" ]] || wait
 done
@@ -94,7 +121,7 @@ done
 
 wait
 
-echo "Comparing $REFERENCE_DIR with $OUTPUT_DIR..."
+echo "Comparing $REFERENCE_DIR with $OUTPUT_DIR"
 
 for model in "${MODELS[@]}" "${MULTIMODAL_MODELS[@]}"; do
     filename="${model//\//-}"
