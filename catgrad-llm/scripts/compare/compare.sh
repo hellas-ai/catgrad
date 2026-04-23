@@ -13,6 +13,7 @@ MODELS=(
 
 TOOL_USE_MODELS=(
     "Qwen/Qwen3-0.6B"
+    "Qwen/Qwen3.5-0.8B"
 )
 
 MULTIMODAL_MODELS=(
@@ -39,6 +40,7 @@ REFERENCE_DIR=$DIR/expected/$MAXLEN
 OUTPUT_DIR=$DIR/outputs/$MAXLEN
 
 DTYPE="${CATGRAD_DTYPE:-f32}"
+CREATED_FILENAMES=()
 
 mkdir -p "$OUTPUT_DIR"
 rm -rf "$OUTPUT_DIR"/*
@@ -89,6 +91,7 @@ for model in "${MODELS[@]}"; do
     filename="${model//\//-}"
     
     echo "Running for $model -> $OUTPUT_DIR/$filename"
+    CREATED_FILENAMES+=("$filename")
 
     TYPECHECK="-t"
 
@@ -102,6 +105,7 @@ for model in "${TOOL_USE_MODELS[@]}"; do
     filename="${model//\//-}"_tool_use
 
     echo "Running for $model -> $OUTPUT_DIR/$filename"
+    CREATED_FILENAMES+=("$filename")
 
     ./target/release/examples/llama -m "$model" -p "$TOOL_USE_PROMPT" -s 300 --dtype $DTYPE --tool-use > "$OUTPUT_DIR/$filename" 2>/dev/null &
 
@@ -113,6 +117,7 @@ for model in "${MULTIMODAL_MODELS[@]}"; do
     filename="${model//\//-}"
 
     echo "Running for $model -> $OUTPUT_DIR/$filename"
+    CREATED_FILENAMES+=("$filename")
 
     ./target/release/examples/llama -m "$model" -p 'describe the image' -s $MAXLEN -i $IMAGE --dtype $DTYPE > "$OUTPUT_DIR/$filename" 2>/dev/null &
 
@@ -123,13 +128,11 @@ wait
 
 echo "Comparing $REFERENCE_DIR with $OUTPUT_DIR"
 
-for model in "${MODELS[@]}" "${MULTIMODAL_MODELS[@]}"; do
-    filename="${model//\//-}"
-
+for filename in "${CREATED_FILENAMES[@]}"; do
     echo "Diffing $REFERENCE_DIR/$filename and $OUTPUT_DIR/$filename"
 
     if ! diff -u "$REFERENCE_DIR/$filename" "$OUTPUT_DIR/$filename"; then
-        echo "Failure: Difference found for $model."
+        echo "Failure: Difference found for $filename."
         exit 1
     fi
 done
