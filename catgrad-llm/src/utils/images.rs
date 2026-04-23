@@ -104,7 +104,7 @@ fn get_aspect_ratio_preserving_size(
     Ok((target_height, target_width))
 }
 
-fn convert_image_to_patches(
+pub(crate) fn convert_image_to_patches(
     image: &[f32],
     height: usize,
     width: usize,
