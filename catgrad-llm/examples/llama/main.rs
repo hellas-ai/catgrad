@@ -336,6 +336,9 @@ fn run_with_backend<B: interpreter::Backend>(
     };
     let tool_schemas = if args.tool_use {
         tools::tool_schemas()
+            .into_iter()
+            .map(Value::from_serialize)
+            .collect()
     } else {
         Vec::new()
     };

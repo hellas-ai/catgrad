@@ -1,9 +1,8 @@
 use anyhow::{Result, anyhow};
 use catgrad_llm::helpers::ToolCall;
-use minijinja::{Value, context};
-use serde_json::{Map, Value as JsonValue};
+use serde_json::{Map, Value as JsonValue, json};
 
-pub fn tool_schemas() -> Vec<Value> {
+pub fn tool_schemas() -> Vec<JsonValue> {
     vec![calculator_schema()]
 }
 
@@ -51,21 +50,25 @@ fn required_string<'a>(arguments: &'a Map<String, JsonValue>, keys: &[&str]) -> 
         .ok_or_else(|| anyhow!("tool argument `{}` must be a string", keys[0]))
 }
 
-fn calculator_schema() -> Value {
-    context!(
-        type => "function",
-        function => context!(
-            name => "calculator",
-            description => "Calc lhs op rhs.",
-            parameters => context!(
-                type => "object",
-                properties => context!(
-                    lhs => context!(type => "number"),
-                    rhs => context!(type => "number"),
-                    op => context!(type => "string", enum => ["add", "sub", "mul", "div"]),
-                ),
-                required => ["lhs", "rhs", "op"],
-            )
-        )
-    )
+fn calculator_schema() -> JsonValue {
+    json!({
+        "type": "function",
+        "function": {
+            "name": "calculator",
+            "description": "Calculate a result from two numbers.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "lhs": { "type": "number", "description": "The left-hand number" },
+                    "rhs": { "type": "number", "description": "The right-hand number" },
+                    "op": {
+                        "type": "string",
+                        "description": "The operation to apply",
+                        "enum": ["add", "sub", "mul", "div"]
+                    }
+                },
+                "required": ["lhs", "rhs", "op"]
+            }
+        }
+    })
 }
