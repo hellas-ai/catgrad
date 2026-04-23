@@ -1,4 +1,5 @@
 import argparse
+import ast
 import json
 import re
 import sys
@@ -69,8 +70,42 @@ def normalize_tool_call(tool_call):
     return {"name": tool_call["name"], "arguments": arguments}
 
 
+def with_assistant_content(tool_call, content):
+    if tool_call is None:
+        return None
+    return {**tool_call, "assistant_content": content.strip()}
+
+
+def parse_python_tool_call(text):
+    try:
+        expression = ast.parse(text.strip(), mode="eval").body
+    except SyntaxError:
+        return None
+
+    if isinstance(expression, (ast.List, ast.Tuple)):
+        if len(expression.elts) != 1:
+            return None
+        expression = expression.elts[0]
+
+    if not isinstance(expression, ast.Call) or expression.args:
+        return None
+    if not isinstance(expression.func, ast.Name):
+        return None
+
+    arguments = {}
+    for keyword in expression.keywords:
+        if keyword.arg is None:
+            return None
+        try:
+            arguments[keyword.arg] = ast.literal_eval(keyword.value)
+        except (SyntaxError, ValueError):
+            return None
+
+    return {"name": expression.func.id, "arguments": arguments}
+
+
 def parse_tool_call(text):
-    "Parse Qwen-3 JSON and Qwen-3.5 XML tool calls from the model output."
+    "Parse Qwen, LFM2, and OLMo3 tool calls from the model output."
     if match := re.search(
         r"<tool_call>\s*<function=(?P<name>[^>\s]+)>\s*(?P<body>.*?)\s*</function>\s*</tool_call>",
         text,
@@ -96,6 +131,24 @@ def parse_tool_call(text):
         except json.JSONDecodeError:
             return None
 
+    if match := re.search(
+        r"<\|tool_call_start\|>\s*(?P<payload>.*?)\s*<\|tool_call_end\|>",
+        text,
+        flags=re.DOTALL,
+    ):
+        return with_assistant_content(
+            parse_python_tool_call(match.group("payload")), text
+        )
+
+    if match := re.search(
+        r"<function_calls>\s*(?P<payload>.*?)\s*</function_calls>",
+        text,
+        flags=re.DOTALL,
+    ):
+        return with_assistant_content(
+            parse_python_tool_call(match.group("payload")), text
+        )
+
     stripped = text.strip()
     if stripped.startswith("{") and stripped.endswith("}"):
         try:
@@ -103,7 +156,7 @@ def parse_tool_call(text):
         except json.JSONDecodeError:
             return None
 
-    return None
+    return with_assistant_content(parse_python_tool_call(stripped), stripped)
 
 
 def generate_chat(tokenizer, model, messages, args, tools=None):
@@ -142,26 +195,35 @@ def run_tool_chat(tokenizer, model, prompt, args):
         raise ValueError(f"unsupported tool call: {tool_call['name']}")
 
     tool_call_id = "call_1"
-    tool_content = json.dumps({"result": calculator(**tool_call["arguments"])})
+    tool_content = json.dumps(
+        {"result": calculator(**tool_call["arguments"])}, separators=(",", ":")
+    )
     print(
         f"Tool {tool_call['name']}({tool_call['arguments']}) -> {tool_content}",
         file=sys.stderr,
     )
     messages.extend(
         [
-            {
-                "role": "assistant",
-                "tool_calls": [
-                    {
-                        "id": tool_call_id,
-                        "type": "function",
-                        "function": {
-                            "name": tool_call["name"],
-                            "arguments": tool_call["arguments"],
-                        },
-                    }
-                ],
-            },
+            (
+                {
+                    "role": "assistant",
+                    "content": tool_call["assistant_content"],
+                }
+                if "assistant_content" in tool_call
+                else {
+                    "role": "assistant",
+                    "tool_calls": [
+                        {
+                            "id": tool_call_id,
+                            "type": "function",
+                            "function": {
+                                "name": tool_call["name"],
+                                "arguments": tool_call["arguments"],
+                            },
+                        }
+                    ],
+                }
+            ),
             {
                 "role": "tool",
                 "tool_call_id": tool_call_id,
