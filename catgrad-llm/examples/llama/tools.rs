@@ -59,16 +59,17 @@ fn calculator_schema() -> JsonValue {
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "lhs": { "type": "number", "description": "The left-hand number" },
-                    "rhs": { "type": "number", "description": "The right-hand number" },
+                    "lhs": { "type": "number", "description": "The left-hand number." },
+                    "rhs": { "type": "number", "description": "The right-hand number." },
                     "op": {
                         "type": "string",
-                        "description": "The operation to apply",
-                        "enum": ["add", "sub", "mul", "div"]
+                        "enum": ["add", "sub", "mul", "div"],
+                        "description": "The operation to apply."
                     }
                 },
                 "required": ["lhs", "rhs", "op"]
-            }
+            },
+            "return": { "type": "number", "description": "The calculated result." }
         }
     })
 }
