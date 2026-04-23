@@ -14,6 +14,7 @@ MODELS=(
 TOOL_USE_MODELS=(
     "Qwen/Qwen3-0.6B"
     "Qwen/Qwen3.5-0.8B"
+    "LiquidAI/LFM2.5-1.2B-Instruct"
 )
 
 MULTIMODAL_MODELS=(
