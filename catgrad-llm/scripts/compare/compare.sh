@@ -13,6 +13,7 @@ MODELS=(
 
 TOOL_USE_MODELS=(
     "Qwen/Qwen3-0.6B"
+    "Qwen/Qwen3.5-0.8B"
 )
 
 MULTIMODAL_MODELS=(
