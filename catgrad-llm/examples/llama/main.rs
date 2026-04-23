@@ -752,7 +752,7 @@ fn generate_stream<B: interpreter::Backend>(
         if config.multimodal_ctx.is_some() && config.use_kv_cache {
             use_image_embeddings = false;
         }
-        let decoded_token = tokenizer.decode(&[next_token_id], false).unwrap();
+        let decoded_token = tokenizer.decode(&[next_token_id], true).unwrap();
         output.push_str(&decoded_token);
         if config.stream_output {
             print!("{decoded_token}");
