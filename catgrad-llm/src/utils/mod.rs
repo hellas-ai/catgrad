@@ -22,6 +22,7 @@ pub use prompt::{
 };
 
 mod images;
+pub(crate) use images::convert_image_to_patches;
 pub use images::*;
 
 fn build_hf_api() -> Result<hf_hub::api::sync::Api> {
@@ -141,6 +142,7 @@ pub struct PreparedImageInput {
 pub enum ModelRuntimeContext {
     Qwen3_5Vision(models::qwen3_5::Qwen3_5RuntimeVisionConfig),
     Gemma4Vision(models::gemma4::Gemma4RuntimeVisionConfig),
+    Lfm2Vision(models::lfm2::Lfm2RuntimeVisionConfig),
 }
 
 #[derive(Debug, Clone, Default)]
@@ -217,6 +219,16 @@ fn prepare_multimodal_input_from_image(
                     shape: prepared.shape,
                 }),
                 runtime_context: Some(ModelRuntimeContext::Gemma4Vision(prepared.runtime_vision)),
+            })
+        }
+        "Lfm2VlForConditionalGeneration" => {
+            let prepared = models::lfm2::prepare_lfm2_image_input(image, config_json)?;
+            Ok(PreparedMultimodalInput {
+                image: Some(PreparedImageInput {
+                    data: prepared.patches,
+                    shape: prepared.shape,
+                }),
+                runtime_context: Some(ModelRuntimeContext::Lfm2Vision(prepared.runtime_vision)),
             })
         }
         _ => Ok(PreparedMultimodalInput::default()),
@@ -351,7 +363,21 @@ pub fn get_model(
                 Box::new(models::deepseek::DeepSeekModel::new(config_json, dtype)?)
             }
             "GptOssForCausalLM" => Box::new(models::gpt_oss::GPTOssModel::new(config_json, dtype)?),
-            "Lfm2ForCausalLM" => Box::new(models::lfm2::Lfm2Model::new(config_json, dtype)?),
+            "Lfm2ForCausalLM" => Box::new(models::lfm2::Lfm2Model::new(
+                "model",
+                config_json,
+                None,
+                dtype,
+            )?),
+            "Lfm2VlForConditionalGeneration" => Box::new(models::lfm2::Lfm2Model::new(
+                "model.language_model",
+                config_json,
+                match runtime_context {
+                    Some(ModelRuntimeContext::Lfm2Vision(runtime_vision)) => Some(runtime_vision),
+                    _ => None,
+                },
+                dtype,
+            )?),
             "GPT2LMHeadModel" => Box::new(models::gpt2::GPT2Model::new(config_json, dtype)?),
             _ => {
                 return Err(LLMError::InvalidModelConfig(format!(
