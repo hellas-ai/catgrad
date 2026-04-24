@@ -51,30 +51,11 @@ pub fn parse_qwen3_5_tool_calls(output: &str) -> Result<Option<ToolUseStep>> {
 }
 
 pub fn parse_lfm2_tool_calls(output: &str) -> Result<Option<ToolUseStep>> {
-    let Some(extracted) =
-        find_repeated_payloads(output, "<|tool_call_start|>", "<|tool_call_end|>")?
-    else {
-        return Ok(None);
-    };
-    build_tool_use_step(
-        extracted.assistant_content,
-        Some(extracted.raw_tool_calls_text),
-        extracted.payloads,
-        |payload| parse_lfm2_tool_call_block(payload).map(Some),
-    )
+    parse_python_tool_calls(output, "<|tool_call_start|>", "<|tool_call_end|>")
 }
 
 pub fn parse_olmo3_tool_calls(output: &str) -> Result<Option<ToolUseStep>> {
-    let Some(extracted) = find_repeated_payloads(output, "<function_calls>", "</function_calls>")?
-    else {
-        return Ok(None);
-    };
-    build_tool_use_step(
-        extracted.assistant_content,
-        None,
-        extracted.payloads,
-        |payload| parse_python_tool_call_block(payload).map(Some),
-    )
+    parse_python_tool_calls(output, "<function_calls>", "</function_calls>")
 }
 
 fn build_tool_use_step<'a, F>(
@@ -245,8 +226,16 @@ fn parse_named_block_at_start<'a>(
     )))
 }
 
-fn parse_lfm2_tool_call_block(payload: &str) -> Result<Vec<ToolCall>> {
-    parse_python_tool_call_block(payload)
+fn parse_python_tool_calls(output: &str, start: &str, end: &str) -> Result<Option<ToolUseStep>> {
+    let Some(extracted) = find_repeated_payloads(output, start, end)? else {
+        return Ok(None);
+    };
+    build_tool_use_step(
+        extracted.assistant_content,
+        Some(extracted.raw_tool_calls_text),
+        extracted.payloads,
+        |payload| parse_python_tool_call_block(payload).map(Some),
+    )
 }
 
 fn parse_python_tool_call_block(payload: &str) -> Result<Vec<ToolCall>> {
