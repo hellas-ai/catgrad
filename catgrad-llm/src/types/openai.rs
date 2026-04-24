@@ -81,6 +81,14 @@ pub enum ReasoningEffort {
     High,
 }
 
+impl ReasoningEffort {
+    /// Whether this effort level should enable the chat template's
+    /// `enable_thinking` flag. `None` disables; all other levels enable.
+    pub fn enables_thinking(self) -> bool {
+        !matches!(self, ReasoningEffort::None)
+    }
+}
+
 /// Chat-completions request.
 #[skip_serializing_none]
 #[derive(Debug, Clone, Serialize, Deserialize, TypedBuilder, PartialEq)]
