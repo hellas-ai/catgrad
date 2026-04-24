@@ -19,6 +19,7 @@ TOOL_USE_MODELS=(
 
 MULTIMODAL_MODELS=(
         "HuggingFaceTB/SmolVLM2-256M-Video-Instruct"
+        "LiquidAI/LFM2.5-VL-450M"
 )
 
 # Add more models if not in GitHub CI (they are larger and/or need a user agreement to download from HF)
