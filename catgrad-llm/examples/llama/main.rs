@@ -398,7 +398,23 @@ fn run_with_backend<B: interpreter::Backend>(
         .encode(prompt.as_str(), true)
         .map_err(|err| anyhow::anyhow!("check error {:?}", err))?;
 
-    let token_ids = encoding.get_ids().to_vec();
+    let mut token_ids = encoding.get_ids().to_vec();
+
+    // Workaround: remove duplicate BOS token if present, seen in LFM2-VL
+    if let Some(bos_token_id) = tokenizer_config
+        .get("bos_token")
+        .and_then(|bos_token| {
+            bos_token
+                .as_str()
+                .or_else(|| bos_token.get("content").and_then(serde_json::Value::as_str))
+        })
+        .and_then(|bos_token| tokenizer.token_to_id(bos_token))
+    {
+        if token_ids.starts_with(&[bos_token_id, bos_token_id]) {
+            token_ids.remove(0);
+        }
+    }
+
     let max_sequence_length = if args.tool_use {
         token_ids.len() + (2 * max_seq_len) + 256
     } else {
