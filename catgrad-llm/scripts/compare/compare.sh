@@ -19,6 +19,7 @@ TOOL_USE_MODELS=(
 
 MULTIMODAL_MODELS=(
         "HuggingFaceTB/SmolVLM2-256M-Video-Instruct"
+        "LiquidAI/LFM2.5-VL-450M"
 )
 
 # Add more models if not in GitHub CI (they are larger and/or need a user agreement to download from HF)
@@ -43,6 +44,11 @@ OUTPUT_DIR=$DIR/outputs/$MAXLEN
 DTYPE="${CATGRAD_DTYPE:-f32}"
 CREATED_FILENAMES=()
 
+PARALLEL=
+if [[ -z "${GITHUB_ACTIONS:-}" ]]; then
+    PARALLEL=1
+fi
+
 mkdir -p "$OUTPUT_DIR"
 rm -rf "$OUTPUT_DIR"/*
 
@@ -51,10 +57,10 @@ IMAGE=catgrad-llm/scripts/compare/images/cats.png
 PROMPT="Category theory is"
 TOOL_USE_PROMPT="What is 1353785 divided by 790489?"
 
-echo "Generating outputs of ${MAXLEN} tokens for ${#MODELS[@]} models..."
-
 if [[ "${CATGRAD_COMPARE_HF_RUN:-}" ]]; then
     mkdir -p $REFERENCE_DIR
+
+    echo "Generating reference outputs of ${MAXLEN} tokens for ${#MODELS[@]} models..."
 
     for model in "${MODELS[@]}"; do
         # Replace slashes with dashes for the filename
@@ -65,6 +71,10 @@ if [[ "${CATGRAD_COMPARE_HF_RUN:-}" ]]; then
         uv run catgrad-llm/scripts/llm.py -m "$model" -p "$PROMPT" -s $MAXLEN -r > "$REFERENCE_DIR/$filename" 2>/dev/null &
     done
 
+    wait
+
+    echo "Generating reference outputs of ${MAXLEN} tokens for ${#TOOL_USE_MODELS[@]} tool use models..."
+
     for model in "${TOOL_USE_MODELS[@]}"; do
         # Replace slashes with dashes for the filename
         filename="${model//\//-}"_tool_use
@@ -73,6 +83,10 @@ if [[ "${CATGRAD_COMPARE_HF_RUN:-}" ]]; then
 
         uv run catgrad-llm/scripts/llm.py -m "$model" -p "$TOOL_USE_PROMPT" -s 300 --tool-use > "$REFERENCE_DIR/$filename" 2>/dev/null &
     done
+
+    wait
+
+    echo "Generating reference outputs of ${MAXLEN} tokens for ${#MULTIMODAL_MODELS[@]} multimodal models..."
 
     for model in "${MULTIMODAL_MODELS[@]}"; do
         # Replace slashes with dashes for the filename
@@ -86,6 +100,7 @@ if [[ "${CATGRAD_COMPARE_HF_RUN:-}" ]]; then
     wait
 fi
 
+echo "Generating outputs of ${MAXLEN} tokens for ${#MODELS[@]} models..."
 
 for model in "${MODELS[@]}"; do
     # Replace slashes with dashes for the filename
@@ -98,8 +113,12 @@ for model in "${MODELS[@]}"; do
 
     ./target/release/examples/llama -m "$model" -p "$PROMPT" -s $MAXLEN --raw -k $TYPECHECK --dtype $DTYPE > "$OUTPUT_DIR/$filename" 2>/dev/null &
 
-    [[ -z "${GITHUB_ACTIONS:-}" ]] || wait
+    [[ "$PARALLEL" ]] || wait
 done
+
+wait
+
+echo "Generating outputs of ${MAXLEN} tokens for ${#TOOL_USE_MODELS[@]} tool use models..."
 
 for model in "${TOOL_USE_MODELS[@]}"; do
     # Replace slashes with dashes for the filename
@@ -110,8 +129,12 @@ for model in "${TOOL_USE_MODELS[@]}"; do
 
     ./target/release/examples/llama -m "$model" -p "$TOOL_USE_PROMPT" -s 300 --dtype $DTYPE --tool-use > "$OUTPUT_DIR/$filename" 2>/dev/null &
 
-    [[ -z "${GITHUB_ACTIONS:-}" ]] || wait
+    [[ "$PARALLEL" ]] || wait
 done
+
+wait
+
+echo "Generating outputs of ${MAXLEN} tokens for ${#MULTIMODAL_MODELS[@]} multimodal models..."
 
 for model in "${MULTIMODAL_MODELS[@]}"; do
     # Replace slashes with dashes for the filename
@@ -122,7 +145,7 @@ for model in "${MULTIMODAL_MODELS[@]}"; do
 
     ./target/release/examples/llama -m "$model" -p 'describe the image' -s $MAXLEN -i $IMAGE --dtype $DTYPE > "$OUTPUT_DIR/$filename" 2>/dev/null &
 
-    [[ -z "${GITHUB_ACTIONS:-}" ]] || wait
+    [[ "$PARALLEL" ]] || wait
 done
 
 wait
