@@ -1,8 +1,8 @@
 #![cfg(feature = "candle-backend")]
 
 use catgrad::category::core::Shape;
-use catgrad::interpreter::backend::Backend;
 use catgrad::interpreter::backend::candle::CandleBackend;
+use catgrad::interpreter::backend::{Backend, BackendTensorOps};
 use catgrad::interpreter::{TaggedTensor, TaggedTensorTuple, TaggedVec, Value};
 
 // ============================================================================
@@ -20,7 +20,7 @@ fn test_candle_backend_basic_operations() {
         TaggedTensor::F32([arr]) => arr,
         _ => panic!("Expected F32"),
     };
-    assert_eq!(zeros.0.shape().dims(), &[2, 3]);
+    assert_eq!(zeros.shape().0, &[2, 3]);
 
     // Test tensor creation from slice
     let data = vec![1.0f32, 2.0, 3.0, 4.0];
@@ -31,7 +31,7 @@ fn test_candle_backend_basic_operations() {
         TaggedTensor::F32([arr]) => arr,
         _ => panic!("Expected F32"),
     };
-    assert_eq!(tensor.0.shape().dims(), &[2, 2]);
+    assert_eq!(tensor.shape().0, &[2, 2]);
 }
 
 #[test]
@@ -61,7 +61,7 @@ fn test_candle_backend_arithmetic() {
     let result = backend.add(TaggedTensorTuple::F32([tensor1, tensor2]));
     match result {
         TaggedTensor::F32([arr]) => {
-            assert_eq!(arr.0.shape().dims(), &[2, 2]);
+            assert_eq!(arr.shape().0, &[2, 2]);
             let values = backend.to_vec(TaggedTensor::F32([arr]));
             if let TaggedVec::F32(v) = values {
                 assert_eq!(v, vec![3.0, 5.0, 7.0, 9.0]);
@@ -93,7 +93,7 @@ fn test_candle_backend_arithmetic() {
     let result = backend.mul(TaggedTensorTuple::F32([tensor3, tensor4]));
     match result {
         TaggedTensor::F32([arr]) => {
-            assert_eq!(arr.0.shape().dims(), &[2, 2]);
+            assert_eq!(arr.shape().0, &[2, 2]);
             let values = backend.to_vec(TaggedTensor::F32([arr]));
             if let TaggedVec::F32(v) = values {
                 assert_eq!(v, vec![2.0, 6.0, 12.0, 20.0]);
@@ -131,7 +131,7 @@ fn test_candle_backend_subtraction() {
     let result = backend.sub(TaggedTensorTuple::F32([tensor1, tensor2]));
     match result {
         TaggedTensor::F32([arr]) => {
-            assert_eq!(arr.0.shape().dims(), &[2, 2]);
+            assert_eq!(arr.shape().0, &[2, 2]);
             let values = backend.to_vec(TaggedTensor::F32([arr]));
             if let TaggedVec::F32(v) = values {
                 assert_eq!(v, vec![9.0, 6.0, 3.0, 0.0]);
@@ -164,7 +164,7 @@ fn test_candle_backend_subtraction() {
     let result = backend.sub(TaggedTensorTuple::U32([tensor3, tensor4]));
     match result {
         TaggedTensor::U32([arr]) => {
-            assert_eq!(arr.0.shape().dims(), &[2, 2]);
+            assert_eq!(arr.shape().0, &[2, 2]);
             let values = backend.to_vec(TaggedTensor::U32([arr]));
             if let TaggedVec::U32(v) = values {
                 assert_eq!(v, vec![9, 6, 3, 0]);
@@ -193,7 +193,7 @@ fn test_candle_backend_max() {
     let result = backend.max(TaggedTensor::F32([tensor]));
     match result {
         TaggedTensor::F32([arr]) => {
-            assert_eq!(arr.0.shape().dims(), &[2, 1]);
+            assert_eq!(arr.shape().0, &[2, 1]);
             let values = backend.to_vec(TaggedTensor::F32([arr]));
             if let TaggedVec::F32(v) = values {
                 assert_eq!(v, vec![5.0, 8.0]);
@@ -217,7 +217,7 @@ fn test_candle_backend_max() {
     let result = backend.max(TaggedTensor::U32([tensor_u32]));
     match result {
         TaggedTensor::U32([arr]) => {
-            assert_eq!(arr.0.shape().dims(), &[2, 1]);
+            assert_eq!(arr.shape().0, &[2, 1]);
             let values = backend.to_vec(TaggedTensor::U32([arr]));
             if let TaggedVec::U32(v) = values {
                 assert_eq!(v, vec![5, 3]);
@@ -247,7 +247,7 @@ fn test_candle_backend_argmax() {
     match result {
         TaggedTensor::U32([arr]) => {
             println!("argmax result: {:?}", arr);
-            assert_eq!(arr.0.shape().dims(), &[2, 1]);
+            assert_eq!(arr.shape().0, &[2, 1]);
             let values = backend.to_vec(TaggedTensor::U32([arr]));
             if let TaggedVec::U32(v) = values {
                 assert_eq!(v, vec![1, 1]);
@@ -272,7 +272,7 @@ fn test_candle_backend_argmax() {
     match result {
         TaggedTensor::U32([arr]) => {
             println!("argmax result: {:?}", arr);
-            assert_eq!(arr.0.shape().dims(), &[2, 1]);
+            assert_eq!(arr.shape().0, &[2, 1]);
             let values = backend.to_vec(TaggedTensor::U32([arr]));
             if let TaggedVec::U32(v) = values {
                 assert_eq!(v, vec![1, 0]);
@@ -301,7 +301,7 @@ fn test_candle_backend_sum() {
     let result = backend.sum(TaggedTensor::F32([tensor]));
     match result {
         TaggedTensor::F32([arr]) => {
-            assert_eq!(arr.0.shape().dims(), &[2, 1]);
+            assert_eq!(arr.shape().0, &[2, 1]);
             let values = backend.to_vec(TaggedTensor::F32([arr]));
             if let TaggedVec::F32(v) = values {
                 assert_eq!(v, vec![6.0, 15.0]);
@@ -325,7 +325,7 @@ fn test_candle_backend_sum() {
     let result = backend.sum(TaggedTensor::U32([tensor_u32]));
     match result {
         TaggedTensor::U32([arr]) => {
-            assert_eq!(arr.0.shape().dims(), &[2, 1]);
+            assert_eq!(arr.shape().0, &[2, 1]);
             let values = backend.to_vec(TaggedTensor::U32([arr]));
             if let TaggedVec::U32(v) = values {
                 assert_eq!(v, vec![6, 15]);
@@ -363,7 +363,7 @@ fn test_candle_backend_matmul() {
     let result = backend.matmul(TaggedTensorTuple::F32([tensor1, tensor2]));
     match result {
         TaggedTensor::F32([arr]) => {
-            assert_eq!(arr.0.shape().dims(), &[2, 2]);
+            assert_eq!(arr.shape().0, &[2, 2]);
             let values = backend.to_vec(TaggedTensor::F32([arr]));
             if let TaggedVec::F32(v) = values {
                 assert_eq!(v, vec![22.0, 28.0, 49.0, 64.0]);
@@ -391,7 +391,7 @@ fn test_candle_backend_reshape() {
     let reshaped = backend.reshape(TaggedTensor::F32([tensor]), Shape(vec![3, 2]));
     match reshaped {
         TaggedTensor::F32([arr]) => {
-            assert_eq!(arr.0.shape().dims(), &[3, 2]);
+            assert_eq!(arr.shape().0, &[3, 2]);
         }
         _ => panic!("Expected F32 result"),
     }
@@ -417,7 +417,7 @@ fn test_candle_backend_cast() {
     );
     match casted {
         TaggedTensor::U32([arr]) => {
-            assert_eq!(arr.0.shape().dims(), &[2, 2]);
+            assert_eq!(arr.shape().0, &[2, 2]);
             let values = backend.to_vec(TaggedTensor::U32([arr]));
             if let TaggedVec::U32(v) = values {
                 assert_eq!(v, vec![1, 2, 3, 4]);
@@ -455,7 +455,7 @@ fn test_candle_backend_division() {
     let result = backend.div(TaggedTensorTuple::F32([tensor1, tensor2]));
     match result {
         TaggedTensor::F32([arr]) => {
-            assert_eq!(arr.0.shape().dims(), &[2, 2]);
+            assert_eq!(arr.shape().0, &[2, 2]);
             let values = backend.to_vec(TaggedTensor::F32([arr]));
             if let TaggedVec::F32(v) = values {
                 assert_eq!(v, vec![3.0, 2.0, 2.0, 4.0]);
@@ -488,7 +488,7 @@ fn test_candle_backend_division() {
     let result = backend.div(TaggedTensorTuple::U32([tensor3, tensor4]));
     match result {
         TaggedTensor::U32([arr]) => {
-            assert_eq!(arr.0.shape().dims(), &[2, 2]);
+            assert_eq!(arr.shape().0, &[2, 2]);
             let values = backend.to_vec(TaggedTensor::U32([arr]));
             if let TaggedVec::U32(v) = values {
                 assert_eq!(v, vec![3, 2, 2, 4]);
@@ -526,7 +526,7 @@ fn test_candle_backend_power() {
     let result = backend.pow(TaggedTensorTuple::F32([tensor1, tensor2]));
     match result {
         TaggedTensor::F32([arr]) => {
-            assert_eq!(arr.0.shape().dims(), &[2, 2]);
+            assert_eq!(arr.shape().0, &[2, 2]);
             let values = backend.to_vec(TaggedTensor::F32([arr]));
             if let TaggedVec::F32(v) = values {
                 assert_eq!(v, vec![4.0, 9.0, 16.0, 25.0]);
@@ -555,7 +555,7 @@ fn test_candle_backend_log() {
     let result = backend.log(TaggedTensor::F32([tensor]));
     match result {
         TaggedTensor::F32([arr]) => {
-            assert_eq!(arr.0.shape().dims(), &[2, 2]);
+            assert_eq!(arr.shape().0, &[2, 2]);
             let values = backend.to_vec(TaggedTensor::F32([arr]));
             if let TaggedVec::F32(v) = values {
                 let expected = [1.0f32, 2.0, 3.0, 4.0]
@@ -590,8 +590,13 @@ fn test_candle_backend_floor() {
     let result = backend.floor(TaggedTensor::F32([tensor]));
     match result {
         TaggedTensor::F32([arr]) => {
-            assert_eq!(arr.0.shape().dims(), &[2, 2]);
-            let result_data = arr.0.flatten_all().unwrap().to_vec1::<f32>().unwrap();
+            assert_eq!(arr.shape().0, &[2, 2]);
+            let result_data = arr
+                .materialize()
+                .flatten_all()
+                .unwrap()
+                .to_vec1::<f32>()
+                .unwrap();
             assert_eq!(result_data, vec![1.0, 2.0, -4.0, 4.0]);
         }
         _ => panic!("Expected F32 result"),
@@ -615,7 +620,7 @@ fn test_candle_backend_negation() {
     let result = backend.neg(TaggedTensor::F32([tensor]));
     match result {
         TaggedTensor::F32([arr]) => {
-            assert_eq!(arr.0.shape().dims(), &[2, 2]);
+            assert_eq!(arr.shape().0, &[2, 2]);
             let values = backend.to_vec(TaggedTensor::F32([arr]));
             if let TaggedVec::F32(v) = values {
                 assert_eq!(v, vec![-1.0, 2.0, -3.0, 4.0]);
@@ -645,7 +650,7 @@ fn test_candle_backend_broadcast() {
     let broadcasted = backend.broadcast(TaggedTensor::F32([tensor]), Shape(vec![1, 2, 2]));
     match broadcasted {
         TaggedTensor::F32([arr]) => {
-            assert_eq!(arr.0.shape().dims(), &[1, 2, 2]);
+            assert_eq!(arr.shape().0, &[1, 2, 2]);
         }
         _ => panic!("Expected F32 result"),
     }
@@ -661,7 +666,7 @@ fn test_candle_backend_broadcast() {
     let broadcasted = backend.broadcast(TaggedTensor::F32([tensor]), Shape(vec![5, 2, 2]));
     match broadcasted {
         TaggedTensor::F32([arr]) => {
-            assert_eq!(arr.0.shape().dims(), &[5, 2, 2]);
+            assert_eq!(arr.shape().0, &[5, 2, 2]);
         }
         _ => panic!("Expected F32 result"),
     }
@@ -681,7 +686,7 @@ fn test_candle_backend_broadcast() {
         backend.broadcast(TaggedTensor::U32([tensor_u32]), Shape(vec![2, 1, 2, 2]));
     match broadcasted_u32 {
         TaggedTensor::U32([arr]) => {
-            assert_eq!(arr.0.shape().dims(), &[2, 1, 2, 2]);
+            assert_eq!(arr.shape().0, &[2, 1, 2, 2]);
         }
         _ => panic!("Expected U32 result"),
     }
@@ -707,7 +712,7 @@ fn test_candle_backend_broadcast_bad_shape() {
     let broadcasted = backend.broadcast(TaggedTensor::F32([tensor]), Shape(vec![2, 2, 2]));
     match broadcasted {
         TaggedTensor::F32([arr]) => {
-            assert_eq!(arr.0.shape().dims(), &[1, 2, 2]);
+            assert_eq!(arr.shape().0, &[1, 2, 2]);
         }
         _ => panic!("Expected F32 result"),
     }
@@ -867,7 +872,7 @@ fn test_candle_backend_empty_tensor() {
         TaggedTensor::F32([arr]) => arr,
         _ => panic!("Expected F32"),
     };
-    assert_eq!(scalar.0.shape().dims(), &[] as &[usize]);
+    assert_eq!(scalar.shape().0, &[] as &[usize]);
 
     // Test zeros with single element
     let single_tagged = backend.zeros(Shape(vec![1]), Dtype::F32);
@@ -875,7 +880,7 @@ fn test_candle_backend_empty_tensor() {
         TaggedTensor::F32([arr]) => arr,
         _ => panic!("Expected F32"),
     };
-    assert_eq!(single.0.shape().dims(), &[1]);
+    assert_eq!(single.shape().0, &[1]);
 }
 
 #[test]
@@ -914,12 +919,7 @@ fn test_candle_backend_single_element_operations() {
     ] {
         match result {
             TaggedTensor::F32([arr]) => {
-                assert_eq!(
-                    arr.0.shape().dims(),
-                    &[1],
-                    "{} result should have shape [1]",
-                    name
-                );
+                assert_eq!(arr.shape().0, &[1], "{} result should have shape [1]", name);
             }
             _ => panic!("Expected F32 result for {}", name),
         }
@@ -933,11 +933,7 @@ fn test_candle_backend_single_element_operations() {
     // Test negation (preserves shape)
     match neg_result {
         TaggedTensor::F32([arr]) => {
-            assert_eq!(
-                arr.0.shape().dims(),
-                &[1],
-                "neg result should have shape [1]"
-            );
+            assert_eq!(arr.shape().0, &[1], "neg result should have shape [1]");
         }
         _ => panic!("Expected F32 result for neg"),
     }
@@ -945,22 +941,14 @@ fn test_candle_backend_single_element_operations() {
     // Test max and sum
     match max_result {
         TaggedTensor::F32([arr]) => {
-            assert_eq!(
-                arr.0.shape().dims(),
-                &[1],
-                "max result should have shape []"
-            );
+            assert_eq!(arr.shape().0, &[1], "max result should have shape []");
         }
         _ => panic!("Expected F32 result for max"),
     }
 
     match sum_result {
         TaggedTensor::F32([arr]) => {
-            assert_eq!(
-                arr.0.shape().dims(),
-                &[1],
-                "sum result should have shape []"
-            );
+            assert_eq!(arr.shape().0, &[1], "sum result should have shape []");
         }
         _ => panic!("Expected F32 result for sum"),
     }
@@ -985,7 +973,7 @@ fn test_candle_backend_large_tensor() {
     let result = backend.add(TaggedTensorTuple::F32([tensor.clone(), tensor.clone()]));
     match result {
         TaggedTensor::F32([arr]) => {
-            assert_eq!(arr.0.shape().dims(), &[10, 10]);
+            assert_eq!(arr.shape().0, &[10, 10]);
         }
         _ => panic!("Expected F32 result"),
     }
@@ -996,14 +984,14 @@ fn test_candle_backend_large_tensor() {
 
     match sum_result {
         TaggedTensor::F32([arr]) => {
-            assert_eq!(arr.0.shape().dims(), &[10, 1]);
+            assert_eq!(arr.shape().0, &[10, 1]);
         }
         _ => panic!("Expected F32 result for sum"),
     }
 
     match max_result {
         TaggedTensor::F32([arr]) => {
-            assert_eq!(arr.0.shape().dims(), &[10, 1]);
+            assert_eq!(arr.shape().0, &[10, 1]);
         }
         _ => panic!("Expected F32 result for max"),
     }
@@ -1154,7 +1142,12 @@ fn test_candle_interpreter_exp() {
 
     assert!(
         allclose_f32(
-            &actual.0.flatten_all().unwrap().to_vec1().unwrap(),
+            &actual
+                .materialize()
+                .flatten_all()
+                .unwrap()
+                .to_vec1()
+                .unwrap(),
             &expected,
             1e-5,
             1e-8
