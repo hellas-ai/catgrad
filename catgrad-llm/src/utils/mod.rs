@@ -2,7 +2,7 @@ use catgrad::prelude::Dtype;
 use hf_hub::{Repo, RepoType, api::sync::ApiBuilder};
 use rayon::prelude::*;
 use serde::de::DeserializeOwned;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashSet};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use tokenizers::tokenizer::Tokenizer;
@@ -535,8 +535,8 @@ pub fn load_model_weights<B: interpreter::Backend>(
     }
 
     // Read each tensor
-    let mut type_map = HashMap::new();
-    let mut data_map = HashMap::new();
+    let mut type_map = BTreeMap::new();
+    let mut data_map = BTreeMap::new();
     let mut total_params = 0;
 
     for file_path in model_paths {
