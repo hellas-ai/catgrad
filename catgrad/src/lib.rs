@@ -1,5 +1,6 @@
 #![doc = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/README.md"))]
 pub mod category;
+pub mod cid;
 pub mod stdlib;
 
 // Compiler passes
