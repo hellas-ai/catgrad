@@ -11,6 +11,8 @@ pub mod path;
 
 // Shapechecking & Evaluation
 pub mod interpreter;
+#[cfg(feature = "runtime")]
+pub mod runtime;
 pub mod ssa;
 pub mod typecheck;
 

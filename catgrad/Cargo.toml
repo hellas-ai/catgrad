@@ -34,3 +34,9 @@ serde = ["dep:serde", "open-hypergraphs/serde"]
 # blob primitives in `cid::dag_cbor`. Pulls in `blake3` and
 # `serde_ipld_dagcbor` only at this level.
 dag-cbor = ["serde", "dep:blake3", "dep:serde_ipld_dagcbor"]
+# `runtime` enables `pub mod runtime` (Program, BoundProgram, Session,
+# Snapshot). The runtime layer is content-addressed end to end (program
+# CIDs, parameter tensor CIDs), so it requires `dag-cbor`. Default builds
+# get a smaller surface — graph + interpreter — without pulling in
+# blake3 or serde_ipld_dagcbor.
+runtime = ["dag-cbor"]
