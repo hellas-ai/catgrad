@@ -18,5 +18,5 @@ clap = { version = "4.5.37", features = ["derive"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.145"
 half = "2.7.1"
-tokenizers = { version = "0.21.4", features = ["http"] }
+tokenizers = { version = "0.21.4", default-features = false, features = ["http"] }
 safetensors = "0.7.0"

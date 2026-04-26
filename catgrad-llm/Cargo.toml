@@ -13,7 +13,7 @@ catgrad = {version = "0.2.1", path = "../catgrad", features=["candle-backend"]}
 open-hypergraphs = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true , features=["preserve_order"]}
-tokenizers = { workspace = true }
+tokenizers = { workspace = true, default-features = false, features = ["progressbar", "fancy-regex"] }
 
 # TODO: remove these?
 hf-hub = { version = "0.4.3", default-features = false, features = ["ureq"] }
@@ -32,6 +32,12 @@ serde_with = { version = "3.17", default-features = false, features = ["macros"]
 serde_path_to_error = "0.1"
 ureq = "2.12.1"
 url = "2.5.7"
+
+# onig (C regex) and esaxx (C++ BPE trainer) pull libstdc++ into the link.
+# Skip on static musl (no libstdc++.a) and Windows (mingw mcfgthread include
+# paths aren't sandbox-friendly); fancy-regex covers both.
+[target.'cfg(not(any(target_env = "musl", target_os = "windows")))'.dependencies]
+tokenizers = { workspace = true, features = ["onig", "esaxx_fast"] }
 
 
 [dev-dependencies]
