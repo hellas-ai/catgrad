@@ -198,6 +198,7 @@ fn load_param_types() -> typecheck::Parameters {
 // NOTE: you would normally create this data by reading the safetensors file!
 fn load_param_data<B: interpreter::Backend>(backend: &B) -> interpreter::Parameters<B> {
     use catgrad::category::core::Shape;
+    use catgrad::interpreter::TaggedTensor;
     use std::collections::BTreeMap;
 
     let mut map = BTreeMap::new();
@@ -206,7 +207,7 @@ fn load_param_data<B: interpreter::Backend>(backend: &B) -> interpreter::Paramet
     let layer1_data: Vec<f32> = (0..784 * 100)
         .map(|i| (i as f32 * 0.01 % 2.0) - 1.0) // Simple pattern: values between -1 and 1
         .collect();
-    let layer1_tensor = interpreter::tensor(backend, Shape(vec![784, 100]), layer1_data)
+    let layer1_tensor = TaggedTensor::from_vec(backend, layer1_data, Shape(vec![784, 100]))
         .expect("failed to create tensor");
     map.insert(
         path(vec!["0", "weights"]).expect("invalid param path"),
@@ -217,7 +218,7 @@ fn load_param_data<B: interpreter::Backend>(backend: &B) -> interpreter::Paramet
     let layer2_data: Vec<f32> = (0..100 * 10)
         .map(|i| (i as f32 * 0.01 % 2.0) - 1.0)
         .collect();
-    let layer2_tensor = interpreter::tensor(backend, Shape(vec![100, 10]), layer2_data)
+    let layer2_tensor = TaggedTensor::from_vec(backend, layer2_data, Shape(vec![100, 10]))
         .expect("failed to create tensor");
     map.insert(
         path(vec!["1", "weights"]).expect("invalid param path"),

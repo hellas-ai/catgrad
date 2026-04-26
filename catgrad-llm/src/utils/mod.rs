@@ -420,7 +420,7 @@ pub(crate) fn concat_moe_experts<B: interpreter::Backend>(
                 let key = path(key_str.split(".").collect()).expect("invalid param path");
 
                 // Check if this expert exists in the parameter maps
-                if let Some(interpreter::Value::Tensor(tensor)) = parameter_values.0.get(&key) {
+                if let Some(tensor) = parameter_values.0.get(&key) {
                     expert_tensors.push(tensor.clone());
                     expert_keys.push(key);
                 }
@@ -469,9 +469,7 @@ pub(crate) fn concat_moe_experts<B: interpreter::Backend>(
             let concatenated_dtype = concatenated.dtype();
 
             println!("concatenated dtype: {:?}", concatenated_dtype);
-            parameter_values
-                .0
-                .insert(new_key.clone(), interpreter::Value::Tensor(concatenated));
+            parameter_values.0.insert(new_key.clone(), concatenated);
 
             let vne: Vec<NatExpr> = new_shape_dims.into_iter().map(NatExpr::Constant).collect();
             let tensor_type = typecheck::Type::Tensor(TypeExpr::NdArrayType(NdArrayType {
@@ -565,7 +563,7 @@ pub fn load_model_weights<B: interpreter::Backend>(
                         }
                     };
                     total_params += data.len();
-                    interpreter::tensor(backend, interpreter::Shape(shape.clone()), data)
+                    interpreter::TaggedTensor::from_vec(backend, data, interpreter::Shape(shape.clone()))
                 }
                 Dtype::F16 => {
                     let data: Vec<half::f16> = match view.dtype() {
@@ -586,7 +584,7 @@ pub fn load_model_weights<B: interpreter::Backend>(
                         }
                     };
                     total_params += data.len();
-                    interpreter::tensor(backend, interpreter::Shape(shape.clone()), data)
+                    interpreter::TaggedTensor::from_vec(backend, data, interpreter::Shape(shape.clone()))
                 }
                 Dtype::BF16 => {
                     let data: Vec<half::bf16> = match view.dtype() {
@@ -605,7 +603,7 @@ pub fn load_model_weights<B: interpreter::Backend>(
                         }
                     };
                     total_params += data.len();
-                    interpreter::tensor(backend, interpreter::Shape(shape.clone()), data)
+                    interpreter::TaggedTensor::from_vec(backend, data, interpreter::Shape(shape.clone()))
                 }
                 Dtype::U32 => unreachable!(),
             }

@@ -1,4 +1,5 @@
 use super::backend::Backend;
+use super::parameters::Parameters;
 use super::tensor_op::tensor_op;
 use super::types::*;
 
@@ -54,8 +55,13 @@ impl<B: Backend> abstract_interpreter::Interpreter for Interpreter<B> {
     fn nat_mul(a: Self::Nat, b: Self::Nat) -> Self::Nat     { a * b                }
 
     fn handle_load(&self, _ssa: &CoreSSA, path: &crate::prelude::Path) -> Option<Vec<Value<B>>> {
+        // Materialized parameters are tensor-only; wrap into the
+        // interpreter's heterogeneous Value at the lookup boundary.
         // TODO: remove clone?
-        self.parameters.0.get(path).map(|t| vec![t.clone()])
+        self.parameters
+            .0
+            .get(path)
+            .map(|tensor| vec![Value::Tensor(tensor.clone())])
     }
 
     fn handle_definition(

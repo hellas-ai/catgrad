@@ -7,8 +7,10 @@ pub mod interpreter;
 pub use interpreter::*;
 
 pub mod backend;
-//pub mod parameters;
+pub mod parameters;
 pub mod tensor_op;
+
+pub use parameters::Parameters;
 
 pub use crate::category::core::{Dtype, Shape};
 pub use backend::{Backend, BackendError};
