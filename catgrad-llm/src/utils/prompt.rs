@@ -17,7 +17,7 @@ pub struct PreparedPrompt {
 #[derive(Clone, Copy, Debug, Default)]
 pub struct RenderChatTemplateOptions<'a> {
     pub enable_thinking: bool,
-    pub tools: Option<&'a [Value]>,
+    pub tools: Option<&'a [JsonValue]>,
 }
 
 impl PreparedPrompt {
@@ -49,7 +49,28 @@ impl PreparedPrompt {
         messages: &[types::Message],
         stop_token_ids: &[i32],
     ) -> Result<Self> {
-        let prompt = render_chat_prompt(chat_template, tokenizer_config, messages)?;
+        Self::from_messages_with_options(
+            tokenizer,
+            chat_template,
+            tokenizer_config,
+            messages,
+            stop_token_ids,
+            RenderChatTemplateOptions::default(),
+        )
+    }
+
+    /// Like [`Self::from_messages`] but lets the caller pass tool schemas and
+    /// `enable_thinking` through to the chat template.
+    pub fn from_messages_with_options(
+        tokenizer: &Tokenizer,
+        chat_template: &str,
+        tokenizer_config: &JsonValue,
+        messages: &[types::Message],
+        stop_token_ids: &[i32],
+        options: RenderChatTemplateOptions<'_>,
+    ) -> Result<Self> {
+        let prompt =
+            render_chat_prompt_with_options(chat_template, tokenizer_config, messages, options)?;
         Self::from_prompt(tokenizer, &prompt, stop_token_ids)
     }
 }
@@ -113,22 +134,6 @@ pub(crate) fn message_to_template_context(message: &types::Message) -> Result<Va
     }
 
     Ok(Value::from_serialize(map))
-}
-
-pub(crate) fn render_chat_prompt(
-    chat_template: &str,
-    tokenizer_config: &JsonValue,
-    messages: &[types::Message],
-) -> Result<String> {
-    render_chat_prompt_with_options(
-        chat_template,
-        tokenizer_config,
-        messages,
-        RenderChatTemplateOptions {
-            enable_thinking: false,
-            tools: None,
-        },
-    )
 }
 
 pub(crate) fn render_chat_prompt_with_options(
@@ -345,8 +350,8 @@ fn anthropic_blocks_to_template_string(
 ) -> Result<String> {
     let mut out = String::new();
     for block in blocks {
-        match block {
-            types::anthropic::ContentBlock::Text { text } => out.push_str(text),
+        if let types::anthropic::ContentBlock::Text { text } = block {
+            out.push_str(text);
         }
     }
     Ok(out)

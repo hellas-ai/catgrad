@@ -132,6 +132,7 @@ impl Usage {
 pub enum FinishReason {
     Stop,
     Length,
+    ToolCalls,
 }
 
 /// Chat-completions response.
@@ -187,6 +188,7 @@ pub struct ChatStreamChoice {
 pub struct ChatDelta {
     pub role: Option<String>,
     pub content: Option<String>,
+    pub tool_calls: Option<Vec<JsonValue>>,
 }
 
 impl From<ChatMessage> for super::Message {

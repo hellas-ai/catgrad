@@ -249,7 +249,7 @@ fn render_tool_prompt(
     chat_template: &str,
     tokenizer_config: &serde_json::Value,
     prompt: &str,
-    tools: &[Value],
+    tools: &[serde_json::Value],
     enable_thinking: bool,
 ) -> Result<String> {
     Ok(render_chat_template_values(
@@ -267,7 +267,7 @@ fn render_tool_follow_up_prompt(
     chat_template: &str,
     tokenizer_config: &serde_json::Value,
     prompt: &str,
-    tools: &[Value],
+    tools: &[serde_json::Value],
     tool_use_step: &ToolUseStep,
     tool_responses: &[String],
     enable_thinking: bool,
@@ -334,11 +334,8 @@ fn run_with_backend<B: interpreter::Backend>(
         Err(err) if args.tool_use => return Err(err.into()),
         Err(_) => String::new(),
     };
-    let tool_schemas = if args.tool_use {
+    let tool_schemas: Vec<serde_json::Value> = if args.tool_use {
         tools::tool_schemas()
-            .into_iter()
-            .map(Value::from_serialize)
-            .collect()
     } else {
         Vec::new()
     };

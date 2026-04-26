@@ -197,13 +197,7 @@ impl ModelEngine {
         let tools = request
             .tools
             .as_deref()
-            .filter(|tools| !tools.is_empty())
-            .map(|tools| {
-                tools
-                    .iter()
-                    .map(minijinja::Value::from_serialize)
-                    .collect::<Vec<_>>()
-            });
+            .filter(|tools| !tools.is_empty());
         let enable_thinking = request
             .reasoning_effort
             .is_some_and(|effort| effort != types::openai::ReasoningEffort::None);
@@ -212,7 +206,7 @@ impl ModelEngine {
             &messages,
             RenderChatTemplateOptions {
                 enable_thinking,
-                tools: tools.as_deref(),
+                tools,
             },
         )
     }
