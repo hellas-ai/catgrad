@@ -38,6 +38,12 @@ pub enum LLMError {
 
     #[error("Unsupported wire-format conversion: {0}")]
     UnsupportedWireConversion(String),
+
+    #[error(transparent)]
+    Runtime(#[from] catgrad::runtime::RuntimeError),
+
+    #[error("Invalid text session state: {0}")]
+    InvalidTextSessionState(String),
 }
 
 // iirc we didn't want to expose the `tokenizers` crate's error type directly (why?)

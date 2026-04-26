@@ -1,4 +1,6 @@
-use catgrad::prelude::Dtype;
+use catgrad::interpreter;
+use catgrad::prelude::{Dtype, path};
+use catgrad::typecheck;
 use hf_hub::{Repo, RepoType, api::sync::ApiBuilder};
 use rayon::prelude::*;
 use serde::de::DeserializeOwned;
@@ -7,8 +9,7 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use tokenizers::tokenizer::Tokenizer;
 
-use crate::config::LLMConfig;
-use crate::helpers::{LLMModel, WeightPostProcess};
+use crate::helpers::LLMModel;
 use crate::models;
 use crate::{LLMError, Result};
 
@@ -16,7 +17,6 @@ mod detokenize;
 pub use detokenize::{Detokenizer, detokenize_tokens};
 
 mod prompt;
-pub(crate) use prompt::render_chat_prompt_with_options;
 pub use prompt::{
     PreparedPrompt, RenderChatTemplateOptions, render_chat_template, render_chat_template_values,
 };
@@ -359,9 +359,6 @@ pub fn get_model(
             "GraniteForCausalLM" | "GraniteMoeForCausalLM" | "GraniteMoeHybridForCausalLM" => {
                 Box::new(models::granite::GraniteModel::new(config_json, dtype)?)
             }
-            "DeepseekV3ForCausalLM" => {
-                Box::new(models::deepseek::DeepSeekModel::new(config_json, dtype)?)
-            }
             "GptOssForCausalLM" => Box::new(models::gpt_oss::GPTOssModel::new(config_json, dtype)?),
             "Lfm2ForCausalLM" => Box::new(models::lfm2::Lfm2Model::new(
                 "model",
@@ -387,140 +384,6 @@ pub fn get_model(
             }
         };
     Ok(model)
-}
-
-use catgrad::interpreter;
-use catgrad::prelude::path;
-use catgrad::typecheck;
-
-// Concatenates MoE expert weights from separate tensors into single tensors per layer
-// to avoid the need for dynamic parameter names
-pub(crate) fn concat_moe_experts<B: interpreter::Backend>(
-    config: &dyn LLMConfig,
-    num_local_experts: usize,
-    backend: &B,
-    parameter_values: &mut interpreter::Parameters<B>,
-    parameter_types: &mut typecheck::Parameters,
-) -> Result<()> {
-    use catgrad::typecheck::*;
-
-    let proj_names = ["down_proj", "gate_proj", "up_proj"];
-
-    for layer_idx in 0..config.num_hidden_layers() {
-        for proj_name in &proj_names {
-            // Collect all expert tensors for this layer and projection
-            let mut expert_tensors = Vec::new();
-            let mut expert_keys = Vec::new();
-
-            for expert_idx in 0..num_local_experts {
-                let key_str = format!(
-                    "model.layers.{}.mlp.experts.{}.{}.weight",
-                    layer_idx, expert_idx, proj_name
-                );
-                let key = path(key_str.split(".").collect()).expect("invalid param path");
-
-                // Check if this expert exists in the parameter maps
-                if let Some(tensor) = parameter_values.0.get(&key) {
-                    expert_tensors.push(tensor.clone());
-                    expert_keys.push(key);
-                }
-            }
-
-            if expert_tensors.is_empty() {
-                continue;
-            }
-
-            if expert_tensors.len() != num_local_experts {
-                return Err(LLMError::InvalidModelConfig(format!(
-                    "Expected {} experts for layer {} {}, found {}",
-                    num_local_experts,
-                    layer_idx,
-                    proj_name,
-                    expert_tensors.len()
-                )));
-            }
-
-            let original_shape = expert_tensors[0].shape();
-            let original_dims = original_shape.0.clone();
-
-            let mut new_shape_dims = vec![num_local_experts];
-            new_shape_dims.extend(original_dims.clone());
-
-            let mut reshaped_tensors = Vec::new();
-            for tensor in expert_tensors {
-                let mut reshape_dims = vec![1];
-                reshape_dims.extend(original_dims.clone());
-                let reshaped = backend.reshape(tensor, interpreter::Shape(reshape_dims));
-                reshaped_tensors.push(reshaped);
-            }
-
-            // Concatenate all reshaped tensors along dimension 0
-            // TODO: this is naive and slow. Either preallocate or fuse this with the safetensors loading code.
-            let mut concatenated = reshaped_tensors[0].clone();
-            for tensor in &reshaped_tensors[1..] {
-                concatenated = backend.concat(concatenated, tensor.clone(), 0);
-            }
-
-            let new_key_str = format!(
-                "model.layers.{}.mlp.experts.{}.weight",
-                layer_idx, proj_name
-            );
-            let new_key = path(new_key_str.split(".").collect()).expect("invalid param path");
-            let concatenated_dtype = concatenated.dtype();
-
-            println!("concatenated dtype: {:?}", concatenated_dtype);
-            parameter_values.0.insert(new_key.clone(), concatenated);
-
-            let vne: Vec<NatExpr> = new_shape_dims.into_iter().map(NatExpr::Constant).collect();
-            let tensor_type = typecheck::Type::Tensor(TypeExpr::NdArrayType(NdArrayType {
-                dtype: DtypeExpr::Constant(concatenated_dtype),
-                shape: ShapeExpr::Shape(vne),
-            }));
-            parameter_types.0.insert(new_key, tensor_type);
-
-            // Remove original experts
-            for key in expert_keys {
-                parameter_values.0.remove(&key);
-                parameter_types.0.remove(&key);
-            }
-        }
-    }
-
-    Ok(())
-}
-
-pub fn post_process_weights<B: interpreter::Backend>(
-    post_process: WeightPostProcess,
-    config: &dyn LLMConfig,
-    backend: &B,
-    parameter_values: &mut interpreter::Parameters<B>,
-    parameter_types: &mut typecheck::Parameters,
-) -> Result<()> {
-    match post_process {
-        WeightPostProcess::None => Ok(()),
-        WeightPostProcess::ConcatMoeExperts { num_local_experts } => concat_moe_experts(
-            config,
-            num_local_experts,
-            backend,
-            parameter_values,
-            parameter_types,
-        ),
-    }
-}
-
-pub fn post_process_model_weights<B: interpreter::Backend>(
-    model: &dyn LLMModel,
-    backend: &B,
-    parameter_values: &mut interpreter::Parameters<B>,
-    parameter_types: &mut typecheck::Parameters,
-) -> Result<()> {
-    post_process_weights(
-        model.weight_post_process(),
-        model.config(),
-        backend,
-        parameter_values,
-        parameter_types,
-    )
 }
 
 pub fn load_model_weights<B: interpreter::Backend>(

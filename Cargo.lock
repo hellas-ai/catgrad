@@ -480,6 +480,7 @@ dependencies = [
  "minijinja-contrib",
  "open-hypergraphs",
  "open-hypergraphs-dot",
+ "paste",
  "rayon",
  "safetensors 0.7.0",
  "serde",

@@ -645,6 +645,10 @@ impl LLMModel for Qwen3_5Model {
         Some(seq_len.div_ceil(GATED_DELTA_CHUNK_SIZE))
     }
 
+    fn extra_nat_chunk_size(&self) -> Option<usize> {
+        Some(GATED_DELTA_CHUNK_SIZE)
+    }
+
     fn empty_state_type(&self) -> Vec<(Dtype, Shape)> {
         let dtype = self.dtype();
         vec![

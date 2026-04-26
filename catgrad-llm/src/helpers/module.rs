@@ -80,12 +80,6 @@ pub fn llm_type(config: &dyn LLMConfig, dtype: Dtype) -> (Vec<Type>, Vec<Type>) 
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum WeightPostProcess {
-    None,
-    ConcatMoeExperts { num_local_experts: usize },
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MultimodalMetadata {
     pub image_token_index: usize,
     pub mm_tokens_per_image: usize,
@@ -104,6 +98,13 @@ pub trait LLMModel: DynModule {
     }
 
     fn extra_nat_input(&self, _seq_len: usize) -> Option<usize> {
+        None
+    }
+
+    /// For models that need an extra per-step nat input computed as
+    /// `seq_len.div_ceil(chunk_size)` (gated-delta chunking), the chunk size.
+    /// `None` for models that don't need such an input.
+    fn extra_nat_chunk_size(&self) -> Option<usize> {
         None
     }
 
@@ -126,10 +127,6 @@ pub trait LLMModel: DynModule {
             config.get_v_head_dim(),
         ]);
         vec![(dtype, k_shape), (dtype, v_shape)]
-    }
-
-    fn weight_post_process(&self) -> WeightPostProcess {
-        WeightPostProcess::None
     }
 
     fn is_multimodal(&self) -> bool {

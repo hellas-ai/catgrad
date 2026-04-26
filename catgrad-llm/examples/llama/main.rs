@@ -2,6 +2,8 @@ use anyhow::Result;
 use catgrad::interpreter::backend::candle::CandleBackend;
 use catgrad::interpreter::backend::ndarray::NdArrayBackend;
 use catgrad::prelude::*;
+use catgrad::runtime::{BoundProgram, Program, ProgramSpec, Session};
+use std::sync::Arc;
 use catgrad_llm::helpers::{LLMModel, ToolCall, ToolUseStep};
 use catgrad_llm::utils::*;
 use clap::{Parser, ValueEnum};
@@ -313,14 +315,8 @@ fn run_with_backend<B: interpreter::Backend>(
     let model_dtype = args.dtype;
 
     let start_load = std::time::Instant::now();
-    let (
-        mut parameter_values,
-        mut parameter_types,
-        config_json,
-        tokenizer,
-        tokenizer_config,
-        total_params,
-    ) = load_model(&model_name, &args.revision, &backend, model_dtype)?;
+    let (parameter_values, _parameter_types, config_json, tokenizer, tokenizer_config, total_params) =
+        load_model(&model_name, &args.revision, &backend, model_dtype)?;
     let elapsed_load = start_load.elapsed();
 
     eprintln!(
@@ -423,12 +419,6 @@ fn run_with_backend<B: interpreter::Backend>(
         runtime_context,
         model_dtype,
     )?;
-    post_process_model_weights(
-        model.as_ref(),
-        &backend,
-        &mut parameter_values,
-        &mut parameter_types,
-    )?;
 
     let mm_metadata = if use_image {
         Some(
@@ -468,22 +458,20 @@ fn run_with_backend<B: interpreter::Backend>(
         return Ok(());
     }
 
-    // Get stdlib environment and extend with parameter declarations
-    let mut env = stdlib();
-    let load_prefix = if use_image {
+    let module_path = if use_image {
         catgrad::prelude::Path::empty()
     } else {
         model.path()
     };
-    env.declarations
-        .extend(to_load_ops(load_prefix, parameter_types.keys()));
-
-    // Shapecheck the model
-    if args.typecheck {
-        typecheck::check(&env, &parameter_types, typed_term.clone()).map_err(anyhow::Error::new)?;
-    }
-
-    let interpreter = interpreter::Interpreter::new(backend, env, parameter_values);
+    let spec = ProgramSpec {
+        typed_term: typed_term.clone(),
+        module_path,
+        empty_state_type: model.empty_state_type(),
+        max_sequence_length,
+        extra_nat_chunk_size: model.extra_nat_chunk_size(),
+    };
+    let bound_program =
+        Arc::new(BoundProgram::bind(&parameter_values, &backend, Program::from(spec))?);
 
     let mut multimodal_ctx: Option<MultimodalRuntime<B>> = None;
     if let Some(mm) = mm_metadata {
@@ -511,7 +499,7 @@ fn run_with_backend<B: interpreter::Backend>(
                 cache_path.display()
             );
             interpreter::float_tensor(
-                &interpreter.backend,
+                &backend,
                 Shape(vec![1, mm.mm_tokens_per_image, mm.hidden_size]),
                 cached,
                 model_dtype,
@@ -519,21 +507,32 @@ fn run_with_backend<B: interpreter::Backend>(
             .map_err(|e| anyhow::anyhow!("BackendError: {:?}", e))?
         } else {
             let image_tensor = interpreter::float_tensor(
-                &interpreter.backend,
+                &backend,
                 Shape(image_shape),
                 image_data,
                 model_dtype,
             )
             .map_err(|e| anyhow::anyhow!("BackendError: {:?}", e))?;
-            let vision_term = vision_model
-                .term()
-                .ok_or_else(|| anyhow::anyhow!("failed to build vision model term"))?;
-            let results = interpreter.run(vision_term.term, vec![image_tensor])?;
-            let visual_embeddings = results
-                .first()
-                .cloned()
-                .ok_or_else(|| anyhow::anyhow!("Vision model returned no outputs"))?;
-            let flattened = to_f32_vec(&interpreter.backend, &visual_embeddings)?;
+            let vision_program = Program::from_module(
+                vision_model.as_ref(),
+                catgrad::prelude::Path::empty(),
+                vec![],
+                0,
+                None,
+            )?;
+            let bound_vision = std::sync::Arc::new(BoundProgram::bind(
+                &parameter_values,
+                &backend,
+                vision_program,
+            )?);
+            let snap = bound_vision.empty_snapshot();
+            let mut vision_session = std::sync::Arc::clone(&bound_vision).start(snap)?;
+            let mut results = vision_session.run(vec![image_tensor])?;
+            if results.is_empty() {
+                return Err(anyhow::anyhow!("Vision model returned no outputs"));
+            }
+            let visual_embeddings = results.remove(0);
+            let flattened = to_f32_vec(&backend, &visual_embeddings)?;
             save_cached_embeddings(&cache_path, &flattened)?;
             eprintln!("Saved image features to: {}", cache_path.display());
             visual_embeddings
@@ -550,8 +549,7 @@ fn run_with_backend<B: interpreter::Backend>(
     if args.tool_use {
         let (first_text, first_tokens, first_elapsed_pp, first_elapsed_gen) = generate_stream(
             model.as_ref(),
-            &typed_term,
-            &interpreter,
+            &bound_program,
             &tokenizer,
             token_ids,
             GenerationConfig {
@@ -592,8 +590,7 @@ fn run_with_backend<B: interpreter::Backend>(
                 .to_vec();
             let (_, second_tokens, second_elapsed_pp, second_elapsed_gen) = generate_stream(
                 model.as_ref(),
-                &typed_term,
-                &interpreter,
+                &bound_program,
                 &tokenizer,
                 follow_up_ids,
                 GenerationConfig {
@@ -630,8 +627,7 @@ fn run_with_backend<B: interpreter::Backend>(
     } else {
         let (_, generated_tokens, elapsed_pp, elapsed_gen) = generate_stream(
             model.as_ref(),
-            &typed_term,
-            &interpreter,
+            &bound_program,
             &tokenizer,
             token_ids,
             GenerationConfig {
@@ -691,7 +687,7 @@ struct MultimodalRuntime<B: interpreter::Backend> {
     visual_embeddings: interpreter::Value<B>,
 }
 
-enum DecodeInputs<'a, B: interpreter::Backend> {
+enum DecodeParameterBundle<'a, B: interpreter::Backend> {
     Text {
         input_tokens: &'a [u32],
     },
@@ -715,14 +711,14 @@ struct GenerationConfig<'a, B: interpreter::Backend> {
 
 fn generate_stream<B: interpreter::Backend>(
     model: &dyn LLMModel,
-    typed_term: &TypedTerm,
-    interpreter: &interpreter::Interpreter<B>,
+    bound_program: &std::sync::Arc<BoundProgram<B>>,
     tokenizer: &tokenizers::Tokenizer,
     mut token_ids: Vec<u32>,
     config: GenerationConfig<'_, B>,
 ) -> Result<(String, usize, std::time::Duration, std::time::Duration)> {
     let eos_token_ids = model.config().get_eos_token_ids();
-    let mut state_cache = empty_state_cache(&interpreter.backend, model)?;
+    let empty_snapshot = bound_program.empty_snapshot();
+    let mut snapshot = empty_snapshot.clone();
     let mut use_image_embeddings = config.multimodal_ctx.is_some();
     let mut output = String::new();
     let mut generated_tokens = 0;
@@ -731,7 +727,7 @@ fn generate_stream<B: interpreter::Backend>(
 
     for i in 0..config.max_seq_len {
         let decode_inputs = if let Some(ctx) = config.multimodal_ctx {
-            DecodeInputs::Multimodal {
+            DecodeParameterBundle::Multimodal {
                 input_tokens: &token_ids,
                 hidden_size: ctx.hidden_size,
                 image_token_index: ctx.image_token_index,
@@ -739,18 +735,19 @@ fn generate_stream<B: interpreter::Backend>(
                 use_image_embeddings,
             }
         } else {
-            DecodeInputs::Text {
+            DecodeParameterBundle::Text {
                 input_tokens: &token_ids,
             }
         };
-        let (next_token_id, updated_state_cache) = run_interpreter(
+        let mut session = std::sync::Arc::clone(bound_program).start(snapshot)?;
+        let next_token_id = run_session(
             model,
-            typed_term,
-            interpreter,
+            &**bound_program,
+            &mut session,
             decode_inputs,
-            &state_cache,
             config.max_sequence_length,
         )?;
+        let next_snapshot = session.into_snapshot();
         if i == 0 {
             elapsed_pp = start_gen.elapsed();
             start_gen = std::time::Instant::now();
@@ -760,9 +757,10 @@ fn generate_stream<B: interpreter::Backend>(
             break;
         }
         if config.use_kv_cache {
-            state_cache = updated_state_cache;
+            snapshot = next_snapshot;
             token_ids = vec![next_token_id];
         } else {
+            snapshot = empty_snapshot.clone();
             token_ids.push(next_token_id);
         }
         if config.multimodal_ctx.is_some() && config.use_kv_cache {
@@ -779,36 +777,23 @@ fn generate_stream<B: interpreter::Backend>(
     Ok((output, generated_tokens, elapsed_pp, start_gen.elapsed()))
 }
 
-fn token_tensor<B: interpreter::Backend>(
-    interpreter: &interpreter::Interpreter<B>,
-    label: &str,
-    input_tokens: &[u32],
-) -> Result<interpreter::Value<B>> {
-    interpreter::tensor(
-        &interpreter.backend,
-        Shape(vec![1, input_tokens.len()]),
-        input_tokens.to_vec(),
-    )
-    .map_err(|err| anyhow::anyhow!("{label} tensor error: {:?}", err))
-}
-
-fn run_interpreter<B: interpreter::Backend>(
+fn run_session<B: interpreter::Backend>(
     model: &dyn LLMModel,
-    typed_term: &TypedTerm,
-    interpreter: &interpreter::Interpreter<B>,
-    decode_inputs: DecodeInputs<'_, B>,
-    state_cache: &[interpreter::Value<B>],
+    bound_program: &BoundProgram<B>,
+    session: &mut Session<B>,
+    decode_inputs: DecodeParameterBundle<'_, B>,
     max_sequence_length: usize,
-) -> Result<(u32, Vec<interpreter::Value<B>>)> {
-    let mut inputs = Vec::with_capacity(state_cache.len() + 4);
+) -> Result<u32> {
+    let backend = &bound_program.interpreter().backend;
+    let mut inputs = Vec::with_capacity(session.state().len() + 4);
     let input_seq_len;
 
     match decode_inputs {
-        DecodeInputs::Text { input_tokens } => {
+        DecodeParameterBundle::Text { input_tokens } => {
             input_seq_len = input_tokens.len();
-            inputs.push(token_tensor(interpreter, "input", input_tokens)?);
+            inputs.push(token_tensor_b(backend, "input", input_tokens)?);
         }
-        DecodeInputs::Multimodal {
+        DecodeParameterBundle::Multimodal {
             input_tokens,
             hidden_size,
             image_token_index,
@@ -817,7 +802,7 @@ fn run_interpreter<B: interpreter::Backend>(
         } => {
             input_seq_len = input_tokens.len();
             let empty_image_embeddings = interpreter::float_tensor(
-                &interpreter.backend,
+                backend,
                 Shape(vec![1, 0, hidden_size]),
                 Vec::<f32>::new(),
                 model.dtype(),
@@ -830,8 +815,8 @@ fn run_interpreter<B: interpreter::Backend>(
                 (&[][..], input_tokens)
             };
 
-            let text_before = token_tensor(interpreter, "text_before", text_before_tokens)?;
-            let text_after = token_tensor(interpreter, "text_after", text_after_tokens)?;
+            let text_before = token_tensor_b(backend, "text_before", text_before_tokens)?;
+            let text_after = token_tensor_b(backend, "text_after", text_after_tokens)?;
             let image_embeddings = if use_image_embeddings {
                 visual_embeddings.clone()
             } else {
@@ -844,40 +829,40 @@ fn run_interpreter<B: interpreter::Backend>(
         }
     }
 
-    inputs.extend(state_cache.iter().cloned());
+    inputs.extend(session.state().iter().cloned());
     inputs.push(interpreter::Value::Nat(max_sequence_length));
     // Workaround: push extra nat input needed for gated delta decoding, representing chunk_number.
-    // It is seq_len dependent and cannot be computed in-graph as it is seq_len % chunk_size.
     if let Some(extra_nat) = model.extra_nat_input(input_seq_len) {
         inputs.push(interpreter::Value::Nat(extra_nat));
     }
 
-    // Run the model
-    let mut results = interpreter
-        .run(typed_term.term.clone(), inputs)
-        .expect("Failed to run inference");
-
-    if results.is_empty() {
+    let mut outputs = session.run(inputs)?;
+    if outputs.is_empty() {
         return Err(anyhow::anyhow!("model returned no outputs"));
     }
-    let updated_state_cache = if results.len() > 1 {
-        results.split_off(1)
-    } else {
-        Vec::new()
-    };
-    let output = results.remove(0);
+    let output = outputs.remove(0);
 
     match output {
-        interpreter::Value::Tensor(arr) => match interpreter.backend.to_vec(arr) {
-            interpreter::TaggedVec::U32(v) => {
-                let token = v
-                    .last()
-                    .copied()
-                    .ok_or_else(|| anyhow::anyhow!("token output tensor was empty"))?;
-                Ok((token, updated_state_cache))
-            }
+        interpreter::Value::Tensor(arr) => match backend.to_vec(arr) {
+            interpreter::TaggedVec::U32(v) => v
+                .last()
+                .copied()
+                .ok_or_else(|| anyhow::anyhow!("token output tensor was empty")),
             _ => Err(anyhow::anyhow!("Unexpected output dtype")),
         },
         t => Err(anyhow::anyhow!("Output was not a tensor: {:?}", t)),
     }
+}
+
+fn token_tensor_b<B: interpreter::Backend>(
+    backend: &B,
+    label: &str,
+    input_tokens: &[u32],
+) -> Result<interpreter::Value<B>> {
+    interpreter::tensor(
+        backend,
+        Shape(vec![1, input_tokens.len()]),
+        input_tokens.to_vec(),
+    )
+    .map_err(|err| anyhow::anyhow!("{label} tensor error: {:?}", err))
 }

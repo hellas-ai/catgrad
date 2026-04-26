@@ -1,10 +1,12 @@
-//! LLM-specific code like tokenization and kv-cache logic which (currently) has to live outside
-//! the model graph.
+//! Tokenization, prompt preparation, kv-cache logic, and a text-causal
+//! session layer that compose over catgrad's generic runtime to do
+//! end-to-end LLM inference.
+
 pub mod config;
 mod error;
 pub mod helpers;
 pub mod models;
-pub mod run;
+pub mod runtime;
 pub mod types;
 pub mod utils;
 

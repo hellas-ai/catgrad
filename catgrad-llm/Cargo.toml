@@ -9,7 +9,7 @@ repository.workspace = true
 documentation.workspace = true
 
 [dependencies]
-catgrad = {version = "0.2.1", path = "../catgrad", features=["candle-backend"]}
+catgrad = {version = "0.2.1", path = "../catgrad", features=["serde", "dag-cbor", "runtime"]}
 open-hypergraphs = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true , features=["preserve_order"]}
@@ -40,6 +40,14 @@ url = "2.5.7"
 tokenizers = { workspace = true, features = ["onig", "esaxx_fast"] }
 
 
+[features]
+# Enable CUDA-backed candle for tests/examples. Forwards to `catgrad/cuda`
+# via the dev-dep below; the dependency line itself can't carry conditional
+# features so we expose it here.
+cuda = ["catgrad/cuda"]
+# Same shape for Apple Metal.
+metal = ["catgrad/metal"]
+
 [dev-dependencies]
 clap = { workspace = true }
 toml = "0.8"
@@ -50,3 +58,6 @@ test-log = "0.2.17"
 catgrad = {path = "../catgrad", features=["ndarray-backend", "candle-backend", "svg", "serde"]}
 anyhow = "1.0.99"
 tiny_http = "0.12"
+# Macro identifier concatenation for the (model × dtype × backend) test
+# matrix in `tests/text_session_split_stability.rs`.
+paste = "1"
