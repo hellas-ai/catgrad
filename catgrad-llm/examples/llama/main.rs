@@ -4,10 +4,13 @@ use catgrad::interpreter::backend::ndarray::NdArrayBackend;
 use catgrad::prelude::*;
 use catgrad::runtime::{BoundProgram, Program, ProgramSpec, Session};
 use std::sync::Arc;
-use catgrad_llm::helpers::{LLMModel, ToolCall, ToolUseStep};
+use catgrad_llm::helpers::LLMModel;
+use catgrad_llm::runtime::chat::{
+    ChatOptions, ChatTurn, DecodeEvent, StopReason as ParserStopReason, ToolDirectory,
+};
+use catgrad_llm::types;
 use catgrad_llm::utils::*;
 use clap::{Parser, ValueEnum};
-use minijinja::{Value, context};
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::io::Write;
@@ -200,109 +203,29 @@ fn get_models(app_config: &AppConfig) -> Vec<(&str, &str)> {
     models
 }
 
-fn user_message(prompt: &str, has_image: bool) -> Value {
-    if has_image {
-        let content = vec![
-            context!(type => "text", text => prompt),
-            context!(type => "image"),
-        ];
-        context!(role => "user", content => content)
-    } else {
-        context!(role => "user", content => prompt)
-    }
-}
-
-fn assistant_message(content: String) -> Value {
-    context!(role => "assistant", content => content)
-}
-
-fn tool_call_id(index: usize) -> String {
-    format!("call_{}", index + 1)
-}
-
-fn assistant_tool_message(content: String, tool_calls: &[ToolCall]) -> Value {
-    let tool_calls: Vec<_> = tool_calls
-        .iter()
-        .enumerate()
-        .map(|(index, tool_call)| {
-            context!(
-                id => tool_call_id(index),
-                type => "function",
-                function => context!(
-                    name => &tool_call.name,
-                    arguments => &tool_call.arguments,
-                )
-            )
-        })
-        .collect();
-    context!(role => "assistant", content => content, tool_calls => tool_calls)
-}
-
-fn tool_message(index: usize, tool_call: &ToolCall, content: String) -> Value {
-    context!(
-        role => "tool",
-        name => &tool_call.name,
-        tool_call_id => tool_call_id(index),
-        content => content,
-    )
-}
-
-fn render_tool_prompt(
+/// Build a `ChatTurn` for the calculator-tool demo. `eos_token_ids` is
+/// passed empty here: `generate_stream` reads the actual stop tokens
+/// from `model.config()` directly, so the value carried via
+/// `PreparedPrompt::stop_token_ids` is unused on this code path.
+fn build_tool_chat_turn(
+    config_json: &serde_json::Value,
     chat_template: &str,
+    tokenizer: &tokenizers::Tokenizer,
     tokenizer_config: &serde_json::Value,
-    prompt: &str,
-    tools: &[serde_json::Value],
     enable_thinking: bool,
-) -> Result<String> {
-    Ok(render_chat_template_values(
-        chat_template,
-        tokenizer_config,
-        &[user_message(prompt, false)],
-        RenderChatTemplateOptions {
-            enable_thinking,
-            tools: Some(tools),
-        },
-    )?)
-}
-
-fn render_tool_follow_up_prompt(
-    chat_template: &str,
-    tokenizer_config: &serde_json::Value,
-    prompt: &str,
-    tools: &[serde_json::Value],
-    tool_use_step: &ToolUseStep,
-    tool_responses: &[String],
-    enable_thinking: bool,
-) -> Result<String> {
-    let assistant_message = if let Some(raw_tool_calls) = &tool_use_step.assistant_tool_calls_text {
-        assistant_message(format!(
-            "{}{}",
-            tool_use_step.assistant_content, raw_tool_calls
-        ))
-    } else {
-        assistant_tool_message(
-            tool_use_step.assistant_content.clone(),
-            &tool_use_step.tool_calls,
-        )
-    };
-
-    let mut messages = vec![user_message(prompt, false), assistant_message];
-    messages.extend(
-        tool_use_step
-            .tool_calls
-            .iter()
-            .zip(tool_responses.iter())
-            .enumerate()
-            .map(|(index, (tool_call, response))| tool_message(index, tool_call, response.clone())),
-    );
-    Ok(render_chat_template_values(
-        chat_template,
-        tokenizer_config,
-        &messages,
-        RenderChatTemplateOptions {
-            enable_thinking,
-            tools: Some(tools),
-        },
+) -> Result<ChatTurn> {
+    let arch = get_model_architecture(config_json)
+        .map_err(|err| anyhow::anyhow!("{err}"))?
+        .to_string();
+    let directory = Arc::new(ToolDirectory::new(tools::tool_specs())?);
+    Ok(ChatTurn::new(
+        arch,
+        Arc::from(chat_template),
+        Arc::new(tokenizer.clone()),
+        Arc::new(tokenizer_config.clone()),
+        Arc::from(Vec::<i32>::new().as_slice()),
+        Some(directory),
+        ChatOptions { enable_thinking },
     )?)
 }
 
@@ -330,8 +253,26 @@ fn run_with_backend<B: interpreter::Backend>(
         Err(err) if args.tool_use => return Err(err.into()),
         Err(_) => String::new(),
     };
-    let tool_schemas: Vec<serde_json::Value> = if args.tool_use {
-        tools::tool_schemas()
+
+    // For `--tool-use`, build a `ChatTurn` up front. We re-use it for
+    // both the first-turn render (here) and the post-decode parse +
+    // follow-up render (after generation completes).
+    let chat_turn: Option<ChatTurn> = if args.tool_use {
+        Some(build_tool_chat_turn(
+            &config_json,
+            &chat_template,
+            &tokenizer,
+            &tokenizer_config,
+            args.thinking,
+        )?)
+    } else {
+        None
+    };
+
+    let initial_messages: Vec<types::Message> = if chat_turn.is_some() {
+        vec![types::Message::OpenAI(Box::new(
+            types::openai::ChatMessage::text("user", args.prompt.clone()),
+        ))]
     } else {
         Vec::new()
     };
@@ -342,6 +283,10 @@ fn run_with_backend<B: interpreter::Backend>(
     let mut max_seq_len = args.max_seq_len;
     let use_image = args.image.is_some() && !benchmarking;
 
+    // Either render via ChatTurn (tool_use, gives PreparedPrompt with
+    // input_ids directly) or take the traditional prompt-string path
+    // (which then gets tokenized below).
+    let mut tool_use_token_ids: Option<Vec<u32>> = None;
     let prompt = if let Some(bench) = &args.bench {
         pp = bench[0];
         tg = bench[1];
@@ -351,14 +296,10 @@ fn run_with_backend<B: interpreter::Backend>(
             &model_name, pp, tg
         );
         "The".repeat(pp)
-    } else if args.tool_use {
-        render_tool_prompt(
-            &chat_template,
-            &tokenizer_config,
-            &args.prompt,
-            &tool_schemas,
-            args.thinking,
-        )?
+    } else if let Some(ct) = chat_turn.as_ref() {
+        let prepared = ct.render(&initial_messages)?;
+        tool_use_token_ids = Some(prepared.input_ids.iter().map(|&i| i as u32).collect());
+        String::new()
     } else if chat_template.is_empty() || args.raw {
         args.prompt.clone()
     } else {
@@ -387,24 +328,31 @@ fn run_with_backend<B: interpreter::Backend>(
         prompt
     };
 
-    let encoding = tokenizer
-        .encode(prompt.as_str(), true)
-        .map_err(|err| anyhow::anyhow!("check error {:?}", err))?;
+    let mut token_ids = if let Some(ids) = tool_use_token_ids {
+        ids
+    } else {
+        let encoding = tokenizer
+            .encode(prompt.as_str(), true)
+            .map_err(|err| anyhow::anyhow!("check error {:?}", err))?;
+        encoding.get_ids().to_vec()
+    };
 
-    let mut token_ids = encoding.get_ids().to_vec();
-
-    // Workaround: remove duplicate BOS token if present, seen in LFM2-VL
-    if let Some(bos_token_id) = tokenizer_config
-        .get("bos_token")
-        .and_then(|bos_token| {
-            bos_token
-                .as_str()
-                .or_else(|| bos_token.get("content").and_then(serde_json::Value::as_str))
-        })
-        .and_then(|bos_token| tokenizer.token_to_id(bos_token))
-    {
-        if token_ids.starts_with(&[bos_token_id, bos_token_id]) {
-            token_ids.remove(0);
+    // Workaround: remove duplicate BOS token if present, seen in LFM2-VL.
+    // Skipped on the tool-use path — ChatTurn-rendered prompts don't
+    // double-emit BOS.
+    if !args.tool_use {
+        if let Some(bos_token_id) = tokenizer_config
+            .get("bos_token")
+            .and_then(|bos_token| {
+                bos_token
+                    .as_str()
+                    .or_else(|| bos_token.get("content").and_then(serde_json::Value::as_str))
+            })
+            .and_then(|bos_token| tokenizer.token_to_id(bos_token))
+        {
+            if token_ids.starts_with(&[bos_token_id, bos_token_id]) {
+                token_ids.remove(0);
+            }
         }
     }
 
@@ -546,7 +494,10 @@ fn run_with_backend<B: interpreter::Backend>(
     }
 
     let use_kv_cache = args.kv_cache || use_image;
-    if args.tool_use {
+    if let Some(ct) = chat_turn {
+        // First turn: collect text without streaming so we can run the
+        // parser over it as a unit and decide whether to dispatch any
+        // tool calls.
         let (first_text, first_tokens, first_elapsed_pp, first_elapsed_gen) = generate_stream(
             model.as_ref(),
             &bound_program,
@@ -561,33 +512,105 @@ fn run_with_backend<B: interpreter::Backend>(
                 multimodal_ctx: None,
             },
         )?;
-        if let Some(tool_use_step) = model.parse_tool_calls(&first_text)? {
-            let mut tool_responses = Vec::with_capacity(tool_use_step.tool_calls.len());
-            for tool_call in &tool_use_step.tool_calls {
-                let tool_response = tools::execute_tool_call(tool_call)?;
-                eprintln!(
-                    "Tool {}({}) -> {}",
-                    tool_call.name,
-                    serde_json::Value::Object(tool_call.arguments.clone()),
-                    tool_response
-                );
-                tool_responses.push(tool_response);
-            }
 
-            let follow_up_prompt = render_tool_follow_up_prompt(
-                &chat_template,
-                &tokenizer_config,
-                &args.prompt,
-                &tool_schemas,
-                &tool_use_step,
-                &tool_responses,
-                args.thinking,
-            )?;
-            let follow_up_ids = tokenizer
-                .encode(follow_up_prompt.as_str(), true)
-                .map_err(|err| anyhow::anyhow!("check error {:?}", err))?
-                .get_ids()
-                .to_vec();
+        // Walk parser events to extract tool calls + assistant prefix.
+        // For non-streaming, feeding the whole buffer in one shot then
+        // calling `finish` yields the full event sequence.
+        let mut parser = ct.make_parser();
+        let mut events = parser.feed(&first_text);
+        events.extend(parser.finish(ParserStopReason::EndOfText));
+
+        let mut assistant_content = String::new();
+        let mut tool_calls_for_assistant: Vec<serde_json::Value> = Vec::new();
+        let mut tool_results: Vec<(String, String)> = Vec::new();
+        let mut current_call_name: Option<String> = None;
+        for event in events {
+            match event {
+                DecodeEvent::TextDelta(s) => assistant_content.push_str(&s),
+                DecodeEvent::ToolCallStart { name, .. } => {
+                    current_call_name = Some(name);
+                }
+                DecodeEvent::ToolCallArgsDelta { .. } => {
+                    // Single full-args delta arrives atomically with End;
+                    // ignore here.
+                }
+                DecodeEvent::ToolCallEnd { args, .. } => {
+                    let name = current_call_name
+                        .take()
+                        .expect("ToolCallEnd without preceding ToolCallStart");
+                    let result = tools::execute(&name, &args)?;
+                    eprintln!("Tool {}({}) -> {}", name, args, result);
+                    let id = format!("call_{}", tool_calls_for_assistant.len());
+                    tool_calls_for_assistant.push(serde_json::json!({
+                        "id": id.clone(),
+                        "type": "function",
+                        "function": {
+                            "name": name,
+                            "arguments": serde_json::to_string(&args).unwrap_or_default(),
+                        },
+                    }));
+                    tool_results.push((id, result));
+                }
+                DecodeEvent::Stop { .. } => {}
+                DecodeEvent::UnknownTool { name, .. } => {
+                    anyhow::bail!("model called unknown tool: {name}");
+                }
+                DecodeEvent::InvalidArgs { name, errors, .. } => {
+                    anyhow::bail!(
+                        "model called {name} with invalid arguments: {errors:?}"
+                    );
+                }
+                DecodeEvent::ParseError { source, .. } => {
+                    anyhow::bail!("parse error in model output: {source}");
+                }
+            }
+        }
+
+        if tool_calls_for_assistant.is_empty() {
+            // Plain text response, no tool dispatch needed.
+            print!("{first_text}");
+            std::io::stdout().flush()?;
+            println!();
+            let total_elapsed = first_elapsed_pp + first_elapsed_gen;
+            eprintln!(
+                "{} tokens generated in {} seconds. ({:.2} tps)",
+                first_tokens,
+                total_elapsed.as_secs(),
+                first_tokens as f64 / total_elapsed.as_secs_f64(),
+            );
+        } else {
+            // Build the conversation: original user message + assistant
+            // tool-calls + one tool-result message per call. Re-render
+            // through ChatTurn so the chat template sees the full
+            // history with tool spec still bound, then re-tokenize and
+            // stream the model's final answer.
+            let mut messages = initial_messages;
+            messages.push(types::Message::OpenAI(Box::new(
+                types::openai::ChatMessage::builder()
+                    .role("assistant".into())
+                    .content(if assistant_content.is_empty() {
+                        None
+                    } else {
+                        Some(types::openai::MessageContent::Text(assistant_content))
+                    })
+                    .tool_calls(Some(tool_calls_for_assistant))
+                    .build(),
+            )));
+            for (id, result) in tool_results {
+                messages.push(types::Message::OpenAI(Box::new(
+                    types::openai::ChatMessage::builder()
+                        .role("tool".into())
+                        .tool_call_id(Some(id))
+                        .content(Some(types::openai::MessageContent::Text(result)))
+                        .build(),
+                )));
+            }
+            let follow_up_prepared = ct.render(&messages)?;
+            let follow_up_ids: Vec<u32> = follow_up_prepared
+                .input_ids
+                .iter()
+                .map(|&i| i as u32)
+                .collect();
             let (_, second_tokens, second_elapsed_pp, second_elapsed_gen) = generate_stream(
                 model.as_ref(),
                 &bound_program,
@@ -611,17 +634,6 @@ fn run_with_backend<B: interpreter::Backend>(
                 total_tokens,
                 total_elapsed.as_secs(),
                 total_tokens as f64 / total_elapsed.as_secs_f64(),
-            );
-        } else {
-            print!("{first_text}");
-            std::io::stdout().flush()?;
-            println!();
-            let total_elapsed = first_elapsed_pp + first_elapsed_gen;
-            eprintln!(
-                "{} tokens generated in {} seconds. ({:.2} tps)",
-                first_tokens,
-                total_elapsed.as_secs(),
-                first_tokens as f64 / total_elapsed.as_secs_f64(),
             );
         }
     } else {
