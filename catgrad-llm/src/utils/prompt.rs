@@ -14,10 +14,17 @@ pub struct PreparedPrompt {
     pub multimodal: PreparedMultimodalInput,
 }
 
+/// Options for the public, tools-free chat-template render path.
+///
+/// Tool-enabled rendering is intentionally not exposed here.
+/// `ChatTurn::render` is the single tool-enabled render path; it
+/// composes the per-architecture `ToolCallProtocol::render_tools`
+/// shaping with this struct's other options and feeds the result to
+/// [`PreparedPrompt::from_messages_with_tools`] (crate-private). Any
+/// caller that wants tools must go through `ChatTurn`.
 #[derive(Clone, Copy, Debug, Default)]
-pub struct RenderChatTemplateOptions<'a> {
+pub struct RenderChatTemplateOptions {
     pub enable_thinking: bool,
-    pub tools: Option<&'a [JsonValue]>,
 }
 
 impl PreparedPrompt {
@@ -41,7 +48,10 @@ impl PreparedPrompt {
         Ok(Self::new(input_ids, stop_token_ids.to_vec()))
     }
 
-    /// Renders chat messages through the template and tokenizes the result.
+    /// Renders chat messages through the template and tokenizes the
+    /// result. No tools are bound — this path cannot inject a `tools`
+    /// variable into the chat template. Use `ChatTurn::render` for the
+    /// tool-enabled path.
     pub fn from_messages(
         tokenizer: &Tokenizer,
         chat_template: &str,
@@ -59,18 +69,49 @@ impl PreparedPrompt {
         )
     }
 
-    /// Like [`Self::from_messages`] but lets the caller pass tool schemas and
-    /// `enable_thinking` through to the chat template.
+    /// Like [`Self::from_messages`] but lets the caller pass
+    /// `enable_thinking` through to the chat template. Still no tools.
     pub fn from_messages_with_options(
         tokenizer: &Tokenizer,
         chat_template: &str,
         tokenizer_config: &JsonValue,
         messages: &[types::Message],
         stop_token_ids: &[i32],
-        options: RenderChatTemplateOptions<'_>,
+        options: RenderChatTemplateOptions,
     ) -> Result<Self> {
-        let prompt =
-            render_chat_prompt_with_options(chat_template, tokenizer_config, messages, options)?;
+        Self::from_messages_with_tools(
+            tokenizer,
+            chat_template,
+            tokenizer_config,
+            messages,
+            stop_token_ids,
+            options,
+            None,
+        )
+    }
+
+    /// Crate-private constructor used only by
+    /// [`crate::runtime::chat::ChatTurn::render`]. `tools` is the
+    /// already-protocol-shaped JSON value (output of
+    /// `ToolCallProtocol::render_tools`); it gets bound directly to
+    /// the chat template's `tools` variable. This is the *only* path
+    /// that injects a non-empty `tools` into a rendered prompt.
+    pub(crate) fn from_messages_with_tools(
+        tokenizer: &Tokenizer,
+        chat_template: &str,
+        tokenizer_config: &JsonValue,
+        messages: &[types::Message],
+        stop_token_ids: &[i32],
+        options: RenderChatTemplateOptions,
+        tools: Option<&JsonValue>,
+    ) -> Result<Self> {
+        let prompt = render_chat_prompt_with_tools(
+            chat_template,
+            tokenizer_config,
+            messages,
+            options,
+            tools,
+        )?;
         Self::from_prompt(tokenizer, &prompt, stop_token_ids)
     }
 }
@@ -136,17 +177,30 @@ pub(crate) fn message_to_template_context(message: &types::Message) -> Result<Va
     Ok(Value::from_serialize(map))
 }
 
-pub(crate) fn render_chat_prompt_with_options(
+/// Tool-aware render path used only by
+/// [`crate::runtime::chat::ChatTurn::render`] (via
+/// [`PreparedPrompt::from_messages_with_tools`]). `tools` is the
+/// already-shaped JSON value the chat template's `tools` variable is
+/// bound to; shaping happens in
+/// [`crate::runtime::chat::ToolCallProtocol::render_tools`].
+pub(crate) fn render_chat_prompt_with_tools(
     chat_template: &str,
     tokenizer_config: &JsonValue,
     messages: &[types::Message],
-    options: RenderChatTemplateOptions<'_>,
+    options: RenderChatTemplateOptions,
+    tools: Option<&JsonValue>,
 ) -> Result<String> {
     let messages: Vec<_> = messages
         .iter()
         .map(message_to_template_context)
         .collect::<Result<_>>()?;
-    render_chat_template_values(chat_template, tokenizer_config, &messages, options)
+    render_chat_messages(
+        chat_template,
+        tokenizer_config,
+        Value::from_serialize(&messages),
+        options,
+        tools,
+    )
 }
 
 fn strftime_now(format_str: String) -> String {
@@ -157,7 +211,8 @@ fn render_chat_messages(
     chat_template: &str,
     tokenizer_config: &JsonValue,
     messages: Value,
-    options: RenderChatTemplateOptions<'_>,
+    options: RenderChatTemplateOptions,
+    tools: Option<&JsonValue>,
 ) -> Result<String> {
     let mut env = Environment::new();
     env.set_unknown_method_callback(template_unknown_method_callback);
@@ -170,10 +225,7 @@ fn render_chat_messages(
         .unwrap_or("");
     let prompt = tmpl.render(context!(
         messages => messages,
-        tools => options
-            .tools
-            .map(Value::from_serialize)
-            .unwrap_or(Value::UNDEFINED),
+        tools => tools.map(Value::from_serialize).unwrap_or(Value::UNDEFINED),
         add_generation_prompt => true,
         enable_thinking => options.enable_thinking,
         bos_token => bos_token
@@ -227,17 +279,20 @@ fn normalize_openai_tool_call(tool_call: &JsonValue) -> JsonValue {
     JsonValue::Object(tool_call)
 }
 
+/// Tools-free template render against pre-built message values.
+/// Tools cannot be injected from this path; use `ChatTurn` for that.
 pub fn render_chat_template_values(
     chat_template: &str,
     tokenizer_config: &JsonValue,
     messages: &[Value],
-    options: RenderChatTemplateOptions<'_>,
+    options: RenderChatTemplateOptions,
 ) -> Result<String> {
     render_chat_messages(
         chat_template,
         tokenizer_config,
         Value::from_serialize(messages),
         options,
+        None,
     )
 }
 
@@ -261,10 +316,7 @@ pub fn render_chat_template(
         chat_template,
         tokenizer_config,
         &messages,
-        RenderChatTemplateOptions {
-            enable_thinking,
-            tools: None,
-        },
+        RenderChatTemplateOptions { enable_thinking },
     )
 }
 

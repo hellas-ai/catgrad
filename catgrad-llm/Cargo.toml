@@ -27,6 +27,7 @@ thiserror = "2.0"
 rayon = "1.11.0"
 image = "0.25.6"
 chrono = "0.4.41"
+jsonschema = { version = "0.36", default-features = false }
 typed-builder = "0.23"
 serde_with = { version = "3.17", default-features = false, features = ["macros"] }
 serde_path_to_error = "0.1"

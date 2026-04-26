@@ -468,10 +468,6 @@ impl LLMModel for Lfm2Model {
         self.dtype
     }
 
-    fn parse_tool_calls(&self, output: &str) -> crate::Result<Option<ToolUseStep>> {
-        parse_lfm2_tool_calls(output)
-    }
-
     fn multimodal_metadata(&self) -> Option<MultimodalMetadata> {
         let mm = self.multimodal.as_ref()?;
         Some(MultimodalMetadata {

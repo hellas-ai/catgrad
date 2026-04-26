@@ -95,10 +95,6 @@ impl LLMModel for OlmoModel {
         self.dtype
     }
 
-    fn parse_tool_calls(&self, output: &str) -> crate::Result<Option<ToolUseStep>> {
-        parse_olmo3_tool_calls(output)
-    }
-
     fn extra_nat_input(&self, seq_len: usize) -> Option<usize> {
         Some(seq_len.div_ceil(GATED_DELTA_CHUNK_SIZE))
     }

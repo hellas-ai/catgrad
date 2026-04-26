@@ -34,10 +34,15 @@
 //! [`Parameters`]: catgrad::interpreter::Parameters
 //! [`Session`]: catgrad::runtime::Session
 
+pub mod chat;
 mod text_decoder;
 mod text_execution;
 mod text_program;
 
+pub use chat::{
+    ChatOptions, ChatTurn, DecodeEvent, IncrementalToolCallParser, ParserError, SchemaError,
+    SentinelMatcher, StopReason, ToolCallProtocol, ToolDirectory, ToolSpec, tool_protocol_for,
+};
 pub use text_decoder::{BoundProgramText, TextDecoder, TextState};
 pub use text_execution::{TextExecution, TextPolicy, TextReceipt};
 pub use text_program::text_program_from_config;

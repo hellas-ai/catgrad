@@ -1,8 +1,6 @@
 use crate::config::LLMConfig;
 use catgrad::prelude::*;
 
-use super::ToolUseStep;
-
 /// Type signature for LLM Modules
 pub fn llm_type(config: &dyn LLMConfig, dtype: Dtype) -> (Vec<Type>, Vec<Type>) {
     use catgrad::typecheck::*;
@@ -92,10 +90,6 @@ pub trait LLMModel: DynModule {
     fn config(&self) -> &dyn LLMConfig;
 
     fn dtype(&self) -> Dtype;
-
-    fn parse_tool_calls(&self, _output: &str) -> crate::Result<Option<ToolUseStep>> {
-        Ok(None)
-    }
 
     fn extra_nat_input(&self, _seq_len: usize) -> Option<usize> {
         None
