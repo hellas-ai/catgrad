@@ -237,6 +237,13 @@ where
     if let Err(e) = f(&sse) {
         log::error!("stream error: {e}");
     }
+    // Drop the sender first so the spawned response thread's
+    // `ChannelReader::read` sees `rx.recv() == Err`, returns 0, and
+    // tiny_http's `io::copy` can complete and emit the chunked
+    // terminator. Without this, `sse` outlives `handle.join()`, the
+    // response thread blocks forever on the channel, and join
+    // deadlocks the request handler.
+    drop(sse);
     let _ = handle.join();
 }
 
