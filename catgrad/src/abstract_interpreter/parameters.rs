@@ -1,6 +1,6 @@
 use super::{Interpreter, Value};
 use crate::path::Path;
-use std::collections::btree_map::{BTreeMap,Keys};
+use std::collections::btree_map::{BTreeMap, Keys};
 
 #[derive(Clone, Debug)]
 pub struct Parameters<I: Interpreter>(pub BTreeMap<Path, Value<I>>);
