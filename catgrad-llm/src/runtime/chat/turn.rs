@@ -16,15 +16,31 @@
 use std::sync::Arc;
 
 use serde_json::Value as JsonValue;
+use thiserror::Error;
 use tokenizers::tokenizer::Tokenizer;
 
-use crate::error::LLMError;
 use crate::types;
 use crate::utils::{PreparedPrompt, RenderChatTemplateOptions};
 use crate::{Result, runtime::chat::PassthroughParser};
 
 use super::protocol::{ToolCallProtocol, tool_protocol_for};
 use super::{IncrementalToolCallParser, ToolDirectory};
+
+/// Failure modes that [`ChatTurn::new`] reports. Distinct from
+/// `LLMError` so callers can map each variant to the right wire
+/// status without string-matching on a generic error.
+#[derive(Debug, Error)]
+pub enum ChatTurnConfigError {
+    /// Caller asked for tools but the model architecture has no
+    /// registered tool-call protocol. This is a request/capability
+    /// error — the model never ran. Gateways should map to HTTP 400
+    /// with a "model X does not support tool calling" message.
+    #[error(
+        "model `{arch}` does not support tool calling \
+         (no tool-call protocol registered for this architecture)"
+    )]
+    ToolsUnsupportedForModel { arch: String },
+}
 
 /// Per-turn options that aren't request-content (messages) or
 /// per-architecture (protocol).
@@ -78,17 +94,14 @@ impl ChatTurn {
         stop_token_ids: Arc<[i32]>,
         tools: Option<Arc<ToolDirectory>>,
         options: ChatOptions,
-    ) -> Result<Self> {
+    ) -> std::result::Result<Self, ChatTurnConfigError> {
         let arch = arch.into();
         let tools = tools.filter(|dir| !dir.is_empty());
         let protocol = match (&tools, tool_protocol_for(&arch)) {
             (None, _) => None,
             (Some(_), Some(p)) => Some(p),
             (Some(_), None) => {
-                return Err(LLMError::UnsupportedModel(format!(
-                    "model `{arch}` does not support tool calling \
-                     (no tool-call protocol registered for this architecture)"
-                )));
+                return Err(ChatTurnConfigError::ToolsUnsupportedForModel { arch });
             }
         };
         Ok(Self {

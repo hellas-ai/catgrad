@@ -8,8 +8,10 @@
 
 use crate::Result;
 use crate::error::LLMError;
+use crate::types::{anthropic, openai};
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use super::event::SchemaError;
 
@@ -35,6 +37,44 @@ impl ToolSpec {
             description,
             parameters,
         }
+    }
+
+    /// Convert from the OpenAI wire shape — strict: requires the
+    /// `function` wrapper, requires a non-empty `function.name`. The
+    /// returned [`ToolSpec`] is the canonical internal form; OpenAI is
+    /// no longer special.
+    pub fn from_openai_tool(tool: &openai::ChatCompletionTool) -> Result<Self> {
+        if tool.function.name.is_empty() {
+            return Err(LLMError::InvalidModelConfig(
+                "openai tool: `function.name` is empty".into(),
+            ));
+        }
+        Ok(Self::new(
+            tool.function.name.clone(),
+            tool.function.description.clone(),
+            tool.function
+                .parameters
+                .clone()
+                .unwrap_or_else(|| JsonValue::Object(Default::default())),
+        ))
+    }
+
+    /// Convert from the Anthropic wire shape directly into a
+    /// [`ToolSpec`]. Note Anthropic uses `input_schema` (not
+    /// `parameters`); this helper folds that naming difference at the
+    /// boundary so the rest of the stack only sees the canonical
+    /// shape.
+    pub fn from_anthropic_tool(tool: &anthropic::Tool) -> Result<Self> {
+        if tool.name.is_empty() {
+            return Err(LLMError::InvalidModelConfig(
+                "anthropic tool: `name` is empty".into(),
+            ));
+        }
+        Ok(Self::new(
+            tool.name.clone(),
+            tool.description.clone(),
+            tool.input_schema.clone(),
+        ))
     }
 }
 
@@ -92,6 +132,39 @@ impl ToolDirectory {
         let spec = self.specs.iter().find(|s| s.name == name)?;
         let validator = self.validators.get(name)?;
         Some((spec, validator))
+    }
+
+    /// Build a directory from the OpenAI wire shape. Returns `None`
+    /// for an empty input — empty tools is no tools (the canonical
+    /// "no-tools requested" case). The `Arc` wrapping is so callers
+    /// can pass the result straight to [`ChatTurn::new`](super::ChatTurn::new)
+    /// without an extra clone.
+    pub fn from_openai_tools(
+        tools: &[openai::ChatCompletionTool],
+    ) -> Result<Option<Arc<Self>>> {
+        if tools.is_empty() {
+            return Ok(None);
+        }
+        let specs: Vec<ToolSpec> = tools
+            .iter()
+            .map(ToolSpec::from_openai_tool)
+            .collect::<Result<_>>()?;
+        Ok(Some(Arc::new(Self::new(specs)?)))
+    }
+
+    /// Build a directory from the Anthropic wire shape. Same contract
+    /// as [`Self::from_openai_tools`] — empty input returns `None`.
+    pub fn from_anthropic_tools(
+        tools: &[anthropic::Tool],
+    ) -> Result<Option<Arc<Self>>> {
+        if tools.is_empty() {
+            return Ok(None);
+        }
+        let specs: Vec<ToolSpec> = tools
+            .iter()
+            .map(ToolSpec::from_anthropic_tool)
+            .collect::<Result<_>>()?;
+        Ok(Some(Arc::new(Self::new(specs)?)))
     }
 
     /// Validate `args` against the named tool's schema. Returns the list

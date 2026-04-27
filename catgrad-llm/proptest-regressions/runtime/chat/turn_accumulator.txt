@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 7f4c9f5b9ca0b75593a6e0cda6c963479f9c64b74dddd1cb5ce626615b768c4f # shrinks to events = [ToolCallStart { index: 0, name: "a" }]

@@ -8,3 +8,6 @@
 //! registry and rejects the turn at construction time.
 
 pub mod qwen3;
+
+#[cfg(test)]
+pub(crate) mod test_util;

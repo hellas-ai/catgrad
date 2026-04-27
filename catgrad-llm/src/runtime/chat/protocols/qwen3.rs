@@ -279,7 +279,7 @@ fn parse_payload(payload: &str, index: usize, directory: &ToolDirectory) -> Payl
         Err(err) => {
             return PayloadOutcome::Fatal(DecodeEvent::ParseError {
                 sentinel: TOOL_CALL_OPEN,
-                source: ParserError::Json(err),
+                source: ParserError::from(err),
             });
         }
     };
@@ -778,5 +778,78 @@ mod tests {
             !msg.contains(secret),
             "oversized payload error message must not include payload bytes; got: {msg}"
         );
+    }
+}
+
+#[cfg(test)]
+mod proptests {
+    //! Chunk-invariance: feeding the same model output as one string
+    //! versus split across chunk boundaries produces the same final
+    //! decoded turn (or the same DecodeFailure). This is the high-
+    //! signal version of dozens of "split at byte N" scenario tests
+    //! — the property holds for ANY split point.
+
+    use super::*;
+    use crate::runtime::chat::protocols::test_util;
+    use proptest::prelude::*;
+
+    /// Hand-curated set of inputs that exercise the protocol's
+    /// interesting cases: plain text, a single valid call, a call
+    /// embedded in surrounding text, multiple calls, sentinel-shaped
+    /// text outside a sentinel, malformed content. Sourced from the
+    /// scenario tests above so the property is tested over the same
+    /// surface they cover.
+    fn interesting_inputs() -> Vec<&'static str> {
+        vec![
+            // plain text
+            "hello world",
+            // single valid call
+            r#"<tool_call>{"name":"add","arguments":{"a":1,"b":2}}</tool_call>"#,
+            // call surrounded by text
+            r#"prefix <tool_call>{"name":"add","arguments":{"a":1,"b":2}}</tool_call> suffix"#,
+            // two calls in sequence
+            r#"<tool_call>{"name":"add","arguments":{"a":1,"b":2}}</tool_call><tool_call>{"name":"add","arguments":{"a":3,"b":4}}</tool_call>"#,
+            // sentinel-shaped text that isn't a sentinel
+            "the docs say <tool_call> but it's just text",
+            // unknown tool (should produce a fatal event;
+            // chunk-invariance still holds — same failure either way)
+            r#"<tool_call>{"name":"missing","arguments":{}}</tool_call>"#,
+            // call with text suffix only
+            r#"<tool_call>{"name":"add","arguments":{"a":1,"b":2}}</tool_call> done"#,
+        ]
+    }
+
+    proptest! {
+        /// For each interesting input, feeding it as one chunk vs
+        /// arbitrary 2-way splits yields the same final result.
+        #[test]
+        fn two_way_split_is_invariant(
+            input_idx in 0_usize..7,
+            split in 0_usize..200,
+        ) {
+            let inputs = interesting_inputs();
+            let text = inputs[input_idx];
+            let whole = test_util::decode_whole(make_parser, text);
+            let chunked = test_util::decode_chunked(make_parser, text, &[split]);
+            // Compare via Debug — covers both Ok-with-equal-turn and
+            // Err-with-equal-failure cases.
+            prop_assert_eq!(format!("{:?}", whole), format!("{:?}", chunked));
+        }
+
+        /// Random N-way splits also preserve invariance. Three splits
+        /// covers most byte-boundary edge cases (sentinel boundary,
+        /// JSON boundary, args boundary).
+        #[test]
+        fn n_way_split_is_invariant(
+            input_idx in 0_usize..7,
+            mut splits in prop::collection::vec(0_usize..200, 1..5),
+        ) {
+            let inputs = interesting_inputs();
+            let text = inputs[input_idx];
+            splits.sort_unstable();
+            let whole = test_util::decode_whole(make_parser, text);
+            let chunked = test_util::decode_chunked(make_parser, text, &splits);
+            prop_assert_eq!(format!("{:?}", whole), format!("{:?}", chunked));
+        }
     }
 }

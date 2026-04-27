@@ -27,11 +27,16 @@ mod protocol;
 pub mod protocols;
 mod tool_spec;
 mod turn;
+mod turn_accumulator;
+pub mod wire;
 
 pub use event::{DecodeEvent, ParserError, SchemaError, StopReason};
-pub use parser::{IncrementalToolCallParser, SentinelMatcher};
+pub use parser::{IncrementalToolCallParser, PassthroughParser, SentinelMatcher};
 pub use protocol::{ToolCallProtocol, tool_protocol_for};
 pub use tool_spec::{ToolDirectory, ToolSpec};
-pub use turn::{ChatOptions, ChatTurn};
+pub use turn::{ChatOptions, ChatTurn, ChatTurnConfigError};
+pub use turn_accumulator::{
+    AssistantTurnAccumulator, DecodedAssistantTurn, DecodedPart, DecodedToolCall,
+};
+pub use wire::DecodeFailure;
 
-pub(crate) use parser::PassthroughParser;

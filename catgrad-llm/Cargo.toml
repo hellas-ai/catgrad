@@ -62,3 +62,4 @@ tiny_http = "0.12"
 # Macro identifier concatenation for the (model × dtype × backend) test
 # matrix in `tests/text_session_split_stability.rs`.
 paste = "1"
+proptest = "1"

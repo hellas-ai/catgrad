@@ -11,10 +11,16 @@ use tiny_http::{Header, Method, Request, Response, Server, StatusCode};
 use catgrad::interpreter::backend::candle::CandleBackend;
 use catgrad::prelude::*;
 use catgrad::runtime::{BoundProgram, RuntimeError};
+use catgrad_llm::runtime::chat::wire::anthropic::{AnthropicStreamFrame, AnthropicStreamMapper};
+use catgrad_llm::runtime::chat::wire::openai::{OpenAiStreamFrame, OpenAiStreamMapper};
+use catgrad_llm::runtime::chat::wire::{PumpError, pump_finish, pump_text};
 use catgrad_llm::runtime::chat::{
-    ChatOptions, ChatTurn, DecodeEvent, StopReason as ParserStopReason, ToolDirectory, ToolSpec,
+    ChatOptions, ChatTurn, ChatTurnConfigError, DecodeFailure,
+    StopReason as ParserStopReason, ToolDirectory,
 };
-use catgrad_llm::runtime::{BoundProgramText, text_program_from_config};
+use catgrad_llm::runtime::{
+    BoundProgramText, BreakReason, DecodeOutcome, run_decode, text_program_from_config,
+};
 use catgrad_llm::types::{self, anthropic, openai, plain};
 use catgrad_llm::utils::{
     from_json_slice, get_model, get_model_architecture, get_model_chat_template, load_model,
@@ -52,25 +58,27 @@ struct Engine {
 }
 
 /// Errors `Engine::chat_turn` produces. Mapped to HTTP status by the
-/// surface handlers: `InvalidToolDirectory` and `ToolsUnsupportedForModel`
-/// are request errors (400); the others surface as 500 (no chat
-/// template) or get rejected at parse-time before reaching here.
+/// surface handlers (all are 400 today). Wire-tools shape errors
+/// are caught earlier by `ToolDirectory::from_*_tools` at the surface
+/// edge.
 #[derive(Debug)]
 enum ChatTurnError {
     NoChatTemplate,
-    InvalidToolDirectory(LLMError),
-    ToolsUnsupportedForModel { arch: String },
+    ChatTurnConfig(ChatTurnConfigError),
     Other(LLMError),
+}
+
+impl From<ChatTurnConfigError> for ChatTurnError {
+    fn from(e: ChatTurnConfigError) -> Self {
+        Self::ChatTurnConfig(e)
+    }
 }
 
 impl std::fmt::Display for ChatTurnError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::NoChatTemplate => write!(f, "model has no chat template"),
-            Self::InvalidToolDirectory(e) => write!(f, "Invalid tool definitions: {e}"),
-            Self::ToolsUnsupportedForModel { arch } => {
-                write!(f, "Model architecture `{arch}` does not support tool calling")
-            }
+            Self::ChatTurnConfig(e) => write!(f, "{e}"),
             Self::Other(e) => write!(f, "{e}"),
         }
     }
@@ -132,14 +140,15 @@ impl Engine {
         PreparedPrompt::from_prompt(&self.tokenizer, prompt, &self.eos_token_ids)
     }
 
-    /// Build a `ChatTurn` for one chat-completion request. Wire-tools
-    /// → typed `ToolSpec` conversion + `ToolDirectory` build + protocol
-    /// lookup all happen here, mirroring node's `ModelAssets::chat_turn`.
-    /// The wire-tools input is always the OpenAI-shaped envelope
-    /// (the Anthropic surface converts to it before calling).
+    /// Build a `ChatTurn` for one chat-completion request. The caller
+    /// supplies an already-built [`ToolDirectory`] (or `None` for no
+    /// tools) — wire-shape conversion happens at the gateway edge via
+    /// `ToolDirectory::from_openai_tools` /
+    /// `ToolDirectory::from_anthropic_tools`. Mirrors node's
+    /// `ModelAssets::chat_turn`.
     fn chat_turn(
         &self,
-        wire_tools: Option<&[serde_json::Value]>,
+        tools: Option<Arc<ToolDirectory>>,
         options: ChatOptions,
     ) -> Result<ChatTurn, ChatTurnError> {
         if self.chat_template.is_empty() {
@@ -149,34 +158,15 @@ impl Engine {
             .map_err(ChatTurnError::Other)?
             .to_string();
 
-        // Empty wire-tools list normalized to None at the edge — same
-        // semantics as ChatTurn::new's internal normalization, kept
-        // explicit here so the wire meaning ("user sent []") is
-        // visible in one place.
-        let directory = match wire_tools {
-            None => None,
-            Some(specs) if specs.is_empty() => None,
-            Some(specs) => {
-                let typed = wire_tools_to_specs(specs).map_err(ChatTurnError::InvalidToolDirectory)?;
-                let dir =
-                    ToolDirectory::new(typed).map_err(ChatTurnError::InvalidToolDirectory)?;
-                Some(Arc::new(dir))
-            }
-        };
-
-        ChatTurn::new(
-            arch.clone(),
+        Ok(ChatTurn::new(
+            arch,
             Arc::clone(&self.chat_template),
             Arc::clone(&self.tokenizer),
             Arc::clone(&self.tokenizer_config),
             Arc::clone(&self.eos_token_ids),
-            directory,
+            tools,
             options,
-        )
-        .map_err(|err| match err {
-            LLMError::UnsupportedModel(_) => ChatTurnError::ToolsUnsupportedForModel { arch },
-            other => ChatTurnError::Other(other),
-        })
+        )?)
     }
 
     fn generate(
@@ -193,80 +183,53 @@ impl Engine {
             token_ids,
         )
         .map_err(|e| anyhow::anyhow!("failed to build input tensor: {e:?}"))?;
-        let mut session = std::sync::Arc::clone(&self.bound)
+        let mut decoder = std::sync::Arc::clone(&self.bound)
             .prefill(&initial_state, &input_tensor)?;
         let mut detok = Detokenizer::from_tokenizer(&self.tokenizer, &prepared.stop_token_ids);
 
-        let mut generated = 0u32;
-        let mut reason = StopReason::MaxTokens;
-        for _ in 0..max_tokens {
-            let next = session.next_token();
-            let delta = detok.push_tokens(&[next as i32])?;
-            if detok.is_stopped() {
-                reason = StopReason::Stop;
-                break;
-            }
-            generated += 1;
-            if !delta.is_empty() {
-                on_delta(&delta)?;
-            }
-            session.commit_next()?;
-        }
+        // Drive the decode loop via the shared catgrad-llm helper.
+        // Stop-token detection is split between two layers:
+        //
+        // - `run_decode`'s `stop_tokens` argument: the parser-level
+        //   stop tokens (model EOS, etc.). Caught at peek time
+        //   before commit → returns `EndOfSequence`. The token is NOT
+        //   committed and NOT yielded to the callback.
+        // - `Detokenizer::is_stopped`: catches stop SEQUENCES (multi-
+        //   character strings) that span multiple tokens. Caught
+        //   after the detokenizer has absorbed the token → callback
+        //   returns `Break(StopSequence)` → `StopSequence` outcome.
+        let (generated, outcome) = run_decode(
+            &mut decoder,
+            max_tokens,
+            &prepared.stop_token_ids,
+            |token| -> Result<std::ops::ControlFlow<BreakReason>, LLMError> {
+                let delta = detok.push_tokens(&[token as i32])?;
+                if detok.is_stopped() {
+                    return Ok(std::ops::ControlFlow::Break(BreakReason::StopSequence));
+                }
+                if !delta.is_empty() {
+                    on_delta(&delta)?;
+                }
+                Ok(std::ops::ControlFlow::Continue(()))
+            },
+        )
+        .map_err(|err| match err {
+            catgrad_llm::runtime::DecodeLoopError::Decoder(e) => anyhow::anyhow!(e),
+            catgrad_llm::runtime::DecodeLoopError::Sink(e) => anyhow::anyhow!(e),
+        })?;
+
+        // Both EndOfSequence (parser stop token) and StopSequence
+        // (detokenizer stop string) are normal generation ends → Stop.
+        // Cancelled isn't reachable here (no cancellation source) but
+        // mapped defensively. MaxTokens is its own outcome.
+        let reason = match outcome {
+            DecodeOutcome::EndOfSequence
+            | DecodeOutcome::StopSequence
+            | DecodeOutcome::Cancelled => StopReason::Stop,
+            DecodeOutcome::MaxTokens => StopReason::MaxTokens,
+        };
         Ok((generated, reason))
     }
-}
-
-/// Convert an OpenAI-shaped wire tool list (`[{type, function:{name,
-/// description, parameters}}, ...]`) into typed [`ToolSpec`]s. The
-/// Anthropic surface goes through `anthropic_tool_to_openai_form`
-/// before reaching here. Strict shape — a missing `name` is a request
-/// error, since the schema can't be applied without one.
-fn wire_tools_to_specs(wire_tools: &[serde_json::Value]) -> Result<Vec<ToolSpec>, LLMError> {
-    let mut out = Vec::with_capacity(wire_tools.len());
-    for (idx, entry) in wire_tools.iter().enumerate() {
-        let function = entry.get("function").ok_or_else(|| {
-            LLMError::InvalidModelConfig(format!("tool[{idx}] is missing the `function` wrapper"))
-        })?;
-        let name = function
-            .get("name")
-            .and_then(serde_json::Value::as_str)
-            .ok_or_else(|| {
-                LLMError::InvalidModelConfig(format!(
-                    "tool[{idx}].function is missing required `name`"
-                ))
-            })?
-            .to_string();
-        let description = function
-            .get("description")
-            .and_then(serde_json::Value::as_str)
-            .map(|s| s.to_string());
-        let parameters = function
-            .get("parameters")
-            .cloned()
-            .unwrap_or_else(|| serde_json::Value::Object(Default::default()));
-        out.push(ToolSpec::new(name, description, parameters));
-    }
-    Ok(out)
-}
-
-/// Translate an Anthropic-shaped tool (`{name, description,
-/// input_schema}`) into the OpenAI-shaped envelope, so the wire
-/// converter has one input shape.
-fn anthropic_tool_to_openai_form(t: &serde_json::Value) -> serde_json::Value {
-    let mut function = serde_json::Map::new();
-    if let Some(name) = t.get("name") {
-        function.insert("name".to_string(), name.clone());
-    }
-    if let Some(desc) = t.get("description") {
-        function.insert("description".to_string(), desc.clone());
-    }
-    if let Some(schema) = t.get("input_schema") {
-        function.insert("parameters".to_string(), schema.clone());
-    }
-    let mut wrapper = serde_json::Map::new();
-    wrapper.insert("type".to_string(), serde_json::Value::String("function".into()));
-    wrapper.insert("function".to_string(), serde_json::Value::Object(function));
-    serde_json::Value::Object(wrapper)
 }
 
 /// Map the example's local stop hint into the parser's `StopReason`
@@ -278,24 +241,6 @@ fn parser_stop_for(reason: StopReason) -> ParserStopReason {
         StopReason::Stop => ParserStopReason::EndOfText,
         StopReason::MaxTokens => ParserStopReason::MaxTokens,
     }
-}
-
-/// OpenAI `finish_reason` mapping that honors `saw_tool_call` over
-/// the inference stop reason — clients use this signal to dispatch.
-fn openai_finish_reason(stop: StopReason, saw_tool_call: bool) -> openai::FinishReason {
-    if saw_tool_call {
-        return openai::FinishReason::ToolCalls;
-    }
-    stop.into()
-}
-
-/// Anthropic `stop_reason` mapping with the same `saw_tool_call`
-/// override.
-fn anthropic_stop_reason(stop: StopReason, saw_tool_call: bool) -> anthropic::StopReason {
-    if saw_tool_call {
-        return anthropic::StopReason::ToolUse;
-    }
-    stop.into()
 }
 
 // --- SSE helpers ---
@@ -427,16 +372,20 @@ fn serve_openai(request: Request, engine: &Engine, req: openai::ChatCompletionRe
     let enable_thinking = req
         .reasoning_effort
         .is_some_and(openai::ReasoningEffort::enables_thinking);
-    let tools = req.tools.clone();
+    let tools_dir = match ToolDirectory::from_openai_tools(req.tools.as_deref().unwrap_or(&[])) {
+        Ok(dir) => dir,
+        Err(err) => {
+            return drop(request.respond(error_response(
+                400,
+                &format!("Invalid tool definitions: {err}"),
+            )));
+        }
+    };
     let messages: Vec<types::Message> =
         req.messages.into_iter().map(types::Message::from).collect();
 
-    let chat_turn = match engine.chat_turn(tools.as_deref(), ChatOptions { enable_thinking }) {
+    let chat_turn = match engine.chat_turn(tools_dir, ChatOptions { enable_thinking }) {
         Ok(turn) => turn,
-        Err(err @ ChatTurnError::InvalidToolDirectory(_))
-        | Err(err @ ChatTurnError::ToolsUnsupportedForModel { .. }) => {
-            return drop(request.respond(error_response(400, &err.to_string())));
-        }
         Err(err) => return drop(request.respond(error_response(400, &err.to_string()))),
     };
     let prepared = match chat_turn.render(&messages) {
@@ -447,9 +396,11 @@ fn serve_openai(request: Request, engine: &Engine, req: openai::ChatCompletionRe
 
     if stream {
         let mut parser = chat_turn.make_parser();
+        let mut mapper = OpenAiStreamMapper::new(|prefix: &str| next_id(prefix));
         stream_response(request, |sse| {
             let id = next_id("chatcmpl");
             let created = now_unix();
+            // Initial role:assistant chunk — wire convention.
             sse.data(&openai_chunk(
                 &id,
                 created,
@@ -461,84 +412,57 @@ fn serve_openai(request: Request, engine: &Engine, req: openai::ChatCompletionRe
                 None,
             ))?;
 
-            let mut saw_tool_call = false;
-            let mut in_progress: std::collections::HashMap<usize, OpenAiCall> =
-                std::collections::HashMap::new();
-            let mut protocol_error: Option<String> = None;
+            let mut protocol_failure: Option<PumpError<OpenAiStreamFrame>> = None;
 
             let gen_result = engine.generate(&prepared, max_tokens, |delta| {
-                let events = parser.feed(delta);
-                for event in events {
-                    let outcome = openai_apply_stream_event(
-                        event,
-                        &id,
-                        created,
-                        &model,
-                        sse,
-                        &mut saw_tool_call,
-                        &mut in_progress,
-                    )
-                    .map_err(|e| {
-                        LLMError::Runtime(RuntimeError::ExecutionError(e.to_string()))
-                    })?;
-                    if let Some(msg) = outcome {
-                        protocol_error = Some(msg);
-                        return Err(LLMError::Runtime(RuntimeError::ExecutionError(
+                match pump_text(&mut *parser, &mut mapper, delta) {
+                    Ok(frames) => {
+                        for frame in frames {
+                            sse.data(&wrap_openai_frame(&id, created, &model, frame))
+                                .map_err(|e| LLMError::Runtime(
+                                    RuntimeError::ExecutionError(e.to_string()),
+                                ))?;
+                        }
+                        Ok(())
+                    }
+                    Err(err) => {
+                        protocol_failure = Some(err);
+                        Err(LLMError::Runtime(RuntimeError::ExecutionError(
                             "parser protocol error".into(),
-                        )));
+                        )))
                     }
                 }
-                Ok(())
             });
 
-            if let Some(message) = protocol_error {
-                // Per the gateway contract: error frame, then close,
-                // NO [DONE]. Strict OpenAI clients treat [DONE] after
-                // an error as a successful empty completion.
-                sse.data(&serde_json::json!({
-                    "error": {
-                        "message": message,
-                        "type": "invalid_response",
-                    }
-                }))?;
+            if let Some(PumpError { failure, cleanup }) = protocol_failure {
+                // Per the gateway contract: cleanup frames first, then
+                // error frame, then close, NO [DONE]. OpenAI cleanup is
+                // always empty but we emit uniformly.
+                for frame in cleanup {
+                    sse.data(&wrap_openai_frame(&id, created, &model, frame))?;
+                }
+                sse.data(&openai_error_frame(&failure))?;
                 return Ok(());
             }
-            // Propagate any non-protocol generation error.
             let (completion_tokens, reason) = gen_result?;
+            let parser_stop = parser_stop_for(reason);
 
-            // Drain parser tail events.
-            let mut tail_protocol_error: Option<String> = None;
-            for event in parser.finish(parser_stop_for(reason)) {
-                if let Some(msg) = openai_apply_stream_event(
-                    event,
-                    &id,
-                    created,
-                    &model,
-                    sse,
-                    &mut saw_tool_call,
-                    &mut in_progress,
-                )? {
-                    tail_protocol_error = Some(msg);
-                    break;
+            // Drain parser tail + mapper.finish via the same pump.
+            match pump_finish(&mut *parser, &mut mapper, parser_stop) {
+                Ok(frames) => {
+                    for frame in frames {
+                        sse.data(&wrap_openai_frame(&id, created, &model, frame))?;
+                    }
+                }
+                Err(PumpError { failure, cleanup }) => {
+                    for frame in cleanup {
+                        sse.data(&wrap_openai_frame(&id, created, &model, frame))?;
+                    }
+                    sse.data(&openai_error_frame(&failure))?;
+                    return Ok(());
                 }
             }
-            if let Some(message) = tail_protocol_error {
-                sse.data(&serde_json::json!({
-                    "error": {
-                        "message": message,
-                        "type": "invalid_response",
-                    }
-                }))?;
-                return Ok(());
-            }
 
-            sse.data(&openai_chunk(
-                &id,
-                created,
-                &model,
-                openai::ChatDelta::default(),
-                Some(openai_finish_reason(reason, saw_tool_call)),
-            ))?;
             if include_usage {
                 sse.data(&openai_usage_chunk(
                     &id,
@@ -551,55 +475,56 @@ fn serve_openai(request: Request, engine: &Engine, req: openai::ChatCompletionRe
             sse.done()
         });
     } else {
-        // Non-streaming: collect text, then parse all at once.
-        let mut text = String::new();
+        // Non-streaming: same per-delta pipeline; discard frames; read
+        // final assistant payload from `mapper.snapshot()`. Cleanup
+        // frames from PumpError are wire-bracketing — irrelevant when
+        // there's no wire stream.
+        let mut parser = chat_turn.make_parser();
+        let mut mapper = OpenAiStreamMapper::new(|prefix: &str| next_id(prefix));
+        let mut protocol_failure: Option<DecodeFailure> = None;
+
         let result = engine.generate(&prepared, max_tokens, |d| {
-            text.push_str(d);
+            if let Err(PumpError { failure, .. }) =
+                pump_text(&mut *parser, &mut mapper, d)
+            {
+                protocol_failure = Some(failure);
+                return Err(LLMError::Runtime(RuntimeError::ExecutionError(
+                    "parser protocol error".into(),
+                )));
+            }
             Ok(())
         });
+
+        if let Some(failure) = protocol_failure {
+            return drop(request.respond(error_response(
+                http_status_for(&failure),
+                &failure.to_string(),
+            )));
+        }
         let (completion_tokens, reason) = match result {
             Ok(r) => r,
             Err(e) => return drop(request.respond(error_response(500, &e.to_string()))),
         };
 
-        let mut parser = chat_turn.make_parser();
-        let mut events = parser.feed(&text);
-        events.extend(parser.finish(parser_stop_for(reason)));
-
-        let mut content = String::new();
-        let mut tool_calls: Vec<serde_json::Value> = Vec::new();
-        let mut saw_tool_call = false;
-        let mut in_progress: std::collections::HashMap<usize, OpenAiCall> =
-            std::collections::HashMap::new();
-        for event in events {
-            match openai_apply_event(
-                event,
-                &mut content,
-                &mut tool_calls,
-                &mut saw_tool_call,
-                &mut in_progress,
-            ) {
-                Ok(()) => {}
-                Err(message) => {
-                    return drop(request.respond(error_response(502, &message)));
-                }
-            }
+        let parser_stop = parser_stop_for(reason);
+        if let Err(PumpError { failure, .. }) =
+            pump_finish(&mut *parser, &mut mapper, parser_stop)
+        {
+            return drop(request.respond(error_response(
+                http_status_for(&failure),
+                &failure.to_string(),
+            )));
         }
 
-        let message_content = if content.is_empty() {
-            None
-        } else {
-            Some(openai::MessageContent::Text(content))
+        let snapshot = match mapper.snapshot() {
+            Ok(s) => s,
+            Err(failure) => {
+                return drop(request.respond(error_response(
+                    http_status_for(&failure),
+                    &failure.to_string(),
+                )));
+            }
         };
-        let assistant = openai::ChatMessage::builder()
-            .role("assistant".into())
-            .content(message_content)
-            .tool_calls(if tool_calls.is_empty() {
-                None
-            } else {
-                Some(tool_calls)
-            })
-            .build();
         let _ = request.respond(json_response(
             200,
             &openai::ChatCompletionResponse::builder()
@@ -610,8 +535,8 @@ fn serve_openai(request: Request, engine: &Engine, req: openai::ChatCompletionRe
                 .choices(vec![
                     openai::ChatChoice::builder()
                         .index(0)
-                        .message(assistant)
-                        .finish_reason(Some(openai_finish_reason(reason, saw_tool_call)))
+                        .message(snapshot.message)
+                        .finish_reason(Some(snapshot.finish_reason))
                         .build(),
                 ])
                 .usage(Some(openai::Usage::from_counts(
@@ -623,175 +548,42 @@ fn serve_openai(request: Request, engine: &Engine, req: openai::ChatCompletionRe
     }
 }
 
-/// One in-flight tool call, keyed by parser index. Wire ID minted at
-/// `ToolCallStart` and reused for matching `ArgsDelta` / `End`.
-struct OpenAiCall {
-    wire_id: String,
-    name: String,
-    arguments: String,
-}
-
-/// Apply one parser event to the non-streaming OpenAI response
-/// accumulators. Returns `Err(message)` for terminal parser events
-/// (caller maps to HTTP 502).
-fn openai_apply_event(
-    event: DecodeEvent,
-    content: &mut String,
-    tool_calls: &mut Vec<serde_json::Value>,
-    saw_tool_call: &mut bool,
-    in_progress: &mut std::collections::HashMap<usize, OpenAiCall>,
-) -> Result<(), String> {
-    match event {
-        DecodeEvent::TextDelta(s) => content.push_str(&s),
-        DecodeEvent::ToolCallStart { index, name } => {
-            *saw_tool_call = true;
-            in_progress.insert(
-                index,
-                OpenAiCall {
-                    wire_id: next_id("call"),
-                    name,
-                    arguments: String::new(),
-                },
-            );
-        }
-        DecodeEvent::ToolCallArgsDelta { index, delta } => {
-            if let Some(c) = in_progress.get_mut(&index) {
-                c.arguments.push_str(&delta);
-            }
-        }
-        DecodeEvent::ToolCallEnd { index, .. } => {
-            if let Some(c) = in_progress.remove(&index) {
-                tool_calls.push(serde_json::json!({
-                    "id": c.wire_id,
-                    "type": "function",
-                    "function": {
-                        "name": c.name,
-                        "arguments": c.arguments,
-                    },
-                }));
-            }
-        }
-        DecodeEvent::Stop { .. } => {}
-        DecodeEvent::UnknownTool { name, .. } => {
-            return Err(format!("model called unknown tool `{name}`"));
-        }
-        DecodeEvent::InvalidArgs { name, errors, .. } => {
-            let detail = errors
-                .iter()
-                .map(|e| e.to_string())
-                .collect::<Vec<_>>()
-                .join("; ");
-            return Err(format!(
-                "model called `{name}` with arguments that don't match the schema: {detail}"
-            ));
-        }
-        DecodeEvent::ParseError { sentinel, source } => {
-            return Err(format!(
-                "model emitted malformed tool call within `{sentinel}`: {source}"
-            ));
-        }
-    }
-    Ok(())
-}
-
-/// Apply one parser event to the streaming OpenAI surface. Returns
-/// `Ok(Some(error_msg))` for terminal parser events (caller emits an
-/// error frame and closes WITHOUT `[DONE]`); `Ok(None)` for normal
-/// progress; `Err(_)` only for SSE-channel send failures.
-fn openai_apply_stream_event(
-    event: DecodeEvent,
+/// Wrap one mapper-emitted [`OpenAiStreamFrame`] into the
+/// [`openai::ChatCompletionChunk`] envelope the wire expects. Caller
+/// owns the response id, created timestamp, and model name.
+fn wrap_openai_frame(
     id: &str,
     created: i64,
     model: &str,
-    sse: &SseSender,
-    saw_tool_call: &mut bool,
-    in_progress: &mut std::collections::HashMap<usize, OpenAiCall>,
-) -> anyhow::Result<Option<String>> {
-    match event {
-        DecodeEvent::TextDelta(s) => {
-            sse.data(&openai_chunk(
-                id,
-                created,
-                model,
-                openai::ChatDelta {
-                    content: Some(s),
-                    ..Default::default()
-                },
-                None,
-            ))?;
+    frame: OpenAiStreamFrame,
+) -> openai::ChatCompletionChunk {
+    openai_chunk(id, created, model, frame.delta, frame.finish_reason)
+}
+
+/// Build the OpenAI wire error frame for a [`DecodeFailure`]. The
+/// stream MUST close after this frame WITHOUT `[DONE]` — strict
+/// clients treat `[DONE]` after an error as a successful empty
+/// completion.
+fn openai_error_frame(failure: &DecodeFailure) -> serde_json::Value {
+    serde_json::json!({
+        "error": {
+            "message": failure.to_string(),
+            "type": match failure {
+                DecodeFailure::InternalSequence { .. } => "internal_error",
+                _ => "invalid_response",
+            },
         }
-        DecodeEvent::ToolCallStart { index, name } => {
-            *saw_tool_call = true;
-            let wire_id = next_id("call");
-            in_progress.insert(
-                index,
-                OpenAiCall {
-                    wire_id: wire_id.clone(),
-                    name: name.clone(),
-                    arguments: String::new(),
-                },
-            );
-            sse.data(&openai_chunk(
-                id,
-                created,
-                model,
-                openai::ChatDelta {
-                    tool_calls: Some(vec![serde_json::json!({
-                        "index": index,
-                        "id": wire_id,
-                        "type": "function",
-                        "function": {
-                            "name": name,
-                            "arguments": "",
-                        },
-                    })]),
-                    ..Default::default()
-                },
-                None,
-            ))?;
-        }
-        DecodeEvent::ToolCallArgsDelta { index, delta } => {
-            if let Some(c) = in_progress.get_mut(&index) {
-                c.arguments.push_str(&delta);
-            }
-            sse.data(&openai_chunk(
-                id,
-                created,
-                model,
-                openai::ChatDelta {
-                    tool_calls: Some(vec![serde_json::json!({
-                        "index": index,
-                        "function": { "arguments": delta },
-                    })]),
-                    ..Default::default()
-                },
-                None,
-            ))?;
-        }
-        DecodeEvent::ToolCallEnd { index, .. } => {
-            in_progress.remove(&index);
-        }
-        DecodeEvent::Stop { .. } => {}
-        DecodeEvent::UnknownTool { name, .. } => {
-            return Ok(Some(format!("model called unknown tool `{name}`")));
-        }
-        DecodeEvent::InvalidArgs { name, errors, .. } => {
-            let detail = errors
-                .iter()
-                .map(|e| e.to_string())
-                .collect::<Vec<_>>()
-                .join("; ");
-            return Ok(Some(format!(
-                "model called `{name}` with arguments that don't match the schema: {detail}"
-            )));
-        }
-        DecodeEvent::ParseError { sentinel, source } => {
-            return Ok(Some(format!(
-                "model emitted malformed tool call within `{sentinel}`: {source}"
-            )));
-        }
+    })
+}
+
+/// Map a [`DecodeFailure`] to the appropriate non-streaming HTTP
+/// status. Internal sequence errors are 500 (mapper/parser bug);
+/// everything else is 502 (model output).
+fn http_status_for(failure: &DecodeFailure) -> u16 {
+    match failure {
+        DecodeFailure::InternalSequence { .. } => 500,
+        _ => 502,
     }
-    Ok(None)
 }
 
 fn openai_chunk(
@@ -842,18 +634,19 @@ fn serve_anthropic(request: Request, engine: &Engine, req: &anthropic::MessageRe
     let stream = req.stream == Some(true);
     let messages: Vec<_> = req.into();
 
-    // Anthropic wire tools → OpenAI shape → typed ToolSpec via the
-    // shared converter.
-    let tools: Option<Vec<serde_json::Value>> = req.tools.as_ref().map(|tools| {
-        tools.iter().map(anthropic_tool_to_openai_form).collect()
-    });
+    let tools_dir =
+        match ToolDirectory::from_anthropic_tools(req.tools.as_deref().unwrap_or(&[])) {
+            Ok(dir) => dir,
+            Err(err) => {
+                return drop(request.respond(error_response(
+                    400,
+                    &format!("Invalid tool definitions: {err}"),
+                )));
+            }
+        };
 
-    let chat_turn = match engine.chat_turn(tools.as_deref(), ChatOptions::default()) {
+    let chat_turn = match engine.chat_turn(tools_dir, ChatOptions::default()) {
         Ok(turn) => turn,
-        Err(err @ ChatTurnError::InvalidToolDirectory(_))
-        | Err(err @ ChatTurnError::ToolsUnsupportedForModel { .. }) => {
-            return drop(request.respond(error_response(400, &err.to_string())));
-        }
         Err(err) => return drop(request.respond(error_response(400, &err.to_string()))),
     };
     let prepared = match chat_turn.render(&messages) {
@@ -864,6 +657,7 @@ fn serve_anthropic(request: Request, engine: &Engine, req: &anthropic::MessageRe
 
     if stream {
         let mut parser = chat_turn.make_parser();
+        let mut mapper = AnthropicStreamMapper::new(|prefix: &str| next_id(prefix));
         stream_response(request, |sse| {
             let id = next_id("msg");
             sse.event_data(
@@ -880,177 +674,123 @@ fn serve_anthropic(request: Request, engine: &Engine, req: &anthropic::MessageRe
                 },
             )?;
 
-            let mut blocks = AnthropicBlocks::new();
-            let mut saw_tool_call = false;
-            let mut protocol_error: Option<String> = None;
+            let mut protocol_failure: Option<PumpError<AnthropicStreamFrame>> = None;
 
             let gen_result = engine.generate(&prepared, max_tokens, |delta| {
-                let events = parser.feed(delta);
-                for event in events {
-                    let outcome = anthropic_apply_stream_event(
-                        event,
-                        sse,
-                        &mut blocks,
-                        &mut saw_tool_call,
-                    )
-                    .map_err(|e| {
-                        LLMError::Runtime(RuntimeError::ExecutionError(e.to_string()))
-                    })?;
-                    if let Some(msg) = outcome {
-                        protocol_error = Some(msg);
-                        return Err(LLMError::Runtime(RuntimeError::ExecutionError(
+                match pump_text(&mut *parser, &mut mapper, delta) {
+                    Ok(frames) => {
+                        for frame in frames {
+                            emit_anthropic_frame(sse, frame, prompt_tokens, 0).map_err(|e| {
+                                LLMError::Runtime(RuntimeError::ExecutionError(e.to_string()))
+                            })?;
+                        }
+                        Ok(())
+                    }
+                    Err(err) => {
+                        // PumpError already drained close_for_error;
+                        // stash the whole thing for the error path.
+                        protocol_failure = Some(err);
+                        Err(LLMError::Runtime(RuntimeError::ExecutionError(
                             "parser protocol error".into(),
-                        )));
+                        )))
                     }
                 }
-                Ok(())
             });
 
-            if let Some(message) = protocol_error {
+            if let Some(PumpError { failure, cleanup }) = protocol_failure {
+                // Cleanup frames bracket any open content block so the
+                // `error` event arrives in a well-formed stream.
                 // Anthropic clients treat `error` as terminal — no
-                // `message_stop` follows. Close any open block first.
-                blocks.close_open(sse)?;
-                sse.event_data(
-                    "error",
-                    &anthropic::MessageStreamEvent::Error {
-                        error: anthropic::StreamError {
-                            error_type: "invalid_request_error".into(),
-                            message,
-                        },
-                    },
-                )?;
+                // `message_stop` follows.
+                for frame in cleanup {
+                    emit_anthropic_frame(sse, frame, prompt_tokens, 0)?;
+                }
+                sse.event_data("error", &anthropic_error_event(&failure))?;
                 return Ok(());
             }
             let (completion_tokens, reason) = gen_result?;
+            let parser_stop = parser_stop_for(reason);
 
-            // Drain parser tail.
-            let mut tail_protocol_error: Option<String> = None;
-            for event in parser.finish(parser_stop_for(reason)) {
-                if let Some(msg) = anthropic_apply_stream_event(
-                    event,
-                    sse,
-                    &mut blocks,
-                    &mut saw_tool_call,
-                )? {
-                    tail_protocol_error = Some(msg);
-                    break;
+            // Drain parser tail + mapper.finish via the same pump.
+            // Frames carry block-close events plus the terminal Stop
+            // (which becomes `message_delta` with our output_tokens).
+            match pump_finish(&mut *parser, &mut mapper, parser_stop) {
+                Ok(frames) => {
+                    for frame in frames {
+                        emit_anthropic_frame(sse, frame, prompt_tokens, completion_tokens)?;
+                    }
+                }
+                Err(PumpError { failure, cleanup }) => {
+                    for frame in cleanup {
+                        emit_anthropic_frame(sse, frame, prompt_tokens, completion_tokens)?;
+                    }
+                    sse.event_data("error", &anthropic_error_event(&failure))?;
+                    return Ok(());
                 }
             }
-            if let Some(message) = tail_protocol_error {
-                blocks.close_open(sse)?;
-                sse.event_data(
-                    "error",
-                    &anthropic::MessageStreamEvent::Error {
-                        error: anthropic::StreamError {
-                            error_type: "invalid_request_error".into(),
-                            message,
-                        },
-                    },
-                )?;
-                return Ok(());
-            }
 
-            blocks.close_open(sse)?;
-            sse.event_data(
-                "message_delta",
-                &anthropic::MessageStreamEvent::MessageDelta {
-                    delta: anthropic::StreamMessageDelta {
-                        stop_reason: Some(anthropic_stop_reason(reason, saw_tool_call)),
-                    },
-                    usage: anthropic::AnthropicUsage::new(prompt_tokens, completion_tokens),
-                },
-            )?;
             sse.event_data("message_stop", &anthropic::MessageStreamEvent::MessageStop)
         });
     } else {
-        // Non-streaming: collect text, parse, walk events into blocks.
-        let mut text = String::new();
+        // Non-streaming: same per-delta pipeline; discard frames; read
+        // final blocks + stop_reason from `mapper.snapshot()`.
+        // Cleanup frames from PumpError are wire-bracketing —
+        // irrelevant when there's no wire stream.
+        let mut parser = chat_turn.make_parser();
+        let mut mapper = AnthropicStreamMapper::new(|prefix: &str| next_id(prefix));
+        let mut protocol_failure: Option<DecodeFailure> = None;
+
         let result = engine.generate(&prepared, max_tokens, |d| {
-            text.push_str(d);
+            if let Err(PumpError { failure, .. }) =
+                pump_text(&mut *parser, &mut mapper, d)
+            {
+                protocol_failure = Some(failure);
+                return Err(LLMError::Runtime(RuntimeError::ExecutionError(
+                    "parser protocol error".into(),
+                )));
+            }
             Ok(())
         });
+
+        if let Some(failure) = protocol_failure {
+            return drop(request.respond(error_response(
+                http_status_for(&failure),
+                &failure.to_string(),
+            )));
+        }
         let (completion_tokens, reason) = match result {
             Ok(r) => r,
             Err(e) => return drop(request.respond(error_response(500, &e.to_string()))),
         };
 
-        let mut parser = chat_turn.make_parser();
-        let mut events = parser.feed(&text);
-        events.extend(parser.finish(parser_stop_for(reason)));
+        let parser_stop = parser_stop_for(reason);
+        if let Err(PumpError { failure, .. }) =
+            pump_finish(&mut *parser, &mut mapper, parser_stop)
+        {
+            return drop(request.respond(error_response(
+                http_status_for(&failure),
+                &failure.to_string(),
+            )));
+        }
 
-        let mut content_blocks: Vec<anthropic::ContentBlock> = Vec::new();
-        let mut current_text = String::new();
-        let mut saw_tool_call = false;
-        let mut in_progress: std::collections::HashMap<usize, (String, String)> =
-            std::collections::HashMap::new();
-        for event in events {
-            match event {
-                DecodeEvent::TextDelta(s) => current_text.push_str(&s),
-                DecodeEvent::ToolCallStart { index, name } => {
-                    saw_tool_call = true;
-                    if !current_text.is_empty() {
-                        content_blocks.push(anthropic::ContentBlock::Text {
-                            text: std::mem::take(&mut current_text),
-                        });
-                    }
-                    in_progress.insert(index, (next_id("toolu"), name));
-                }
-                DecodeEvent::ToolCallArgsDelta { .. } => {}
-                DecodeEvent::ToolCallEnd { index, args } => {
-                    if let Some((wire_id, name)) = in_progress.remove(&index) {
-                        content_blocks.push(anthropic::ContentBlock::ToolUse {
-                            id: wire_id,
-                            name,
-                            input: args,
-                        });
-                    }
-                }
-                DecodeEvent::Stop { .. } => {}
-                DecodeEvent::UnknownTool { name, .. } => {
-                    return drop(request.respond(error_response(
-                        502,
-                        &format!("model called unknown tool `{name}`"),
-                    )));
-                }
-                DecodeEvent::InvalidArgs { name, errors, .. } => {
-                    let detail = errors
-                        .iter()
-                        .map(|e| e.to_string())
-                        .collect::<Vec<_>>()
-                        .join("; ");
-                    return drop(request.respond(error_response(
-                        502,
-                        &format!(
-                            "model called `{name}` with arguments that don't match the schema: {detail}"
-                        ),
-                    )));
-                }
-                DecodeEvent::ParseError { sentinel, source } => {
-                    return drop(request.respond(error_response(
-                        502,
-                        &format!(
-                            "model emitted malformed tool call within `{sentinel}`: {source}"
-                        ),
-                    )));
-                }
+        let snapshot = match mapper.snapshot() {
+            Ok(s) => s,
+            Err(failure) => {
+                return drop(request.respond(error_response(
+                    http_status_for(&failure),
+                    &failure.to_string(),
+                )));
             }
-        }
-        if !current_text.is_empty() {
-            content_blocks.push(anthropic::ContentBlock::Text { text: current_text });
-        }
-        if content_blocks.is_empty() {
-            content_blocks.push(anthropic::ContentBlock::Text { text: String::new() });
-        }
-
+        };
         let _ = request.respond(json_response(
             200,
             &anthropic::MessageResponse::builder()
                 .id(next_id("msg"))
                 .message_type(Some("message".into()))
                 .role("assistant".into())
-                .content(content_blocks)
+                .content(snapshot.blocks)
                 .model(model)
-                .stop_reason(Some(anthropic_stop_reason(reason, saw_tool_call)))
+                .stop_reason(Some(snapshot.stop_reason))
                 .usage(anthropic::AnthropicUsage::new(
                     prompt_tokens,
                     completion_tokens,
@@ -1060,154 +800,55 @@ fn serve_anthropic(request: Request, engine: &Engine, req: &anthropic::MessageRe
     }
 }
 
-/// Anthropic streaming block tracker. Anthropic requires
-/// `content_block_start` / `delta`* / `stop` to be perfectly
-/// bracketed and forbids interleaving deltas from different blocks,
-/// so transitions between text and tool_use blocks must close-then-
-/// open. The tracker maintains its own block-index counter — the
-/// parser's tool-call `index` is NOT the same as the Anthropic
-/// content-block index.
-struct AnthropicBlocks {
-    next_index: u32,
-    open: AnthropicOpen,
-    in_progress: std::collections::HashMap<usize, u32>,
-}
-
-enum AnthropicOpen {
-    None,
-    Text { index: u32 },
-    ToolUse { block_index: u32 },
-}
-
-impl AnthropicBlocks {
-    fn new() -> Self {
-        Self {
-            next_index: 0,
-            open: AnthropicOpen::None,
-            in_progress: std::collections::HashMap::new(),
-        }
-    }
-
-    fn alloc(&mut self) -> u32 {
-        let i = self.next_index;
-        self.next_index += 1;
-        i
-    }
-
-    /// Close any currently-open block. Used before terminal frames
-    /// or before opening a different block kind.
-    fn close_open(&mut self, sse: &SseSender) -> anyhow::Result<()> {
-        let to_close = match self.open {
-            AnthropicOpen::None => None,
-            AnthropicOpen::Text { index } => Some(index),
-            AnthropicOpen::ToolUse { block_index } => Some(block_index),
-        };
-        if let Some(index) = to_close {
-            sse.event_data(
-                "content_block_stop",
-                &anthropic::MessageStreamEvent::ContentBlockStop { index },
-            )?;
-            self.open = AnthropicOpen::None;
-        }
-        Ok(())
-    }
-}
-
-fn anthropic_apply_stream_event(
-    event: DecodeEvent,
+/// Wrap one mapper-emitted [`AnthropicStreamFrame`] into the matching
+/// `MessageStreamEvent` SSE event and send it. The mapper produces
+/// content-block-level frames plus a terminal `Stop` carrying the
+/// resolved stop_reason; this function adds the `message_delta`
+/// envelope (with caller-owned `output_tokens`) for the stop.
+fn emit_anthropic_frame(
     sse: &SseSender,
-    blocks: &mut AnthropicBlocks,
-    saw_tool_call: &mut bool,
-) -> anyhow::Result<Option<String>> {
-    match event {
-        DecodeEvent::TextDelta(s) => {
-            let block_index = match blocks.open {
-                AnthropicOpen::Text { index } => index,
-                AnthropicOpen::ToolUse { .. } | AnthropicOpen::None => {
-                    blocks.close_open(sse)?;
-                    let idx = blocks.alloc();
-                    sse.event_data(
-                        "content_block_start",
-                        &anthropic::MessageStreamEvent::ContentBlockStart {
-                            index: idx,
-                            content_block: anthropic::ContentBlock::Text {
-                                text: String::new(),
-                            },
-                        },
-                    )?;
-                    blocks.open = AnthropicOpen::Text { index: idx };
-                    idx
-                }
-            };
-            sse.event_data(
-                "content_block_delta",
-                &anthropic::MessageStreamEvent::ContentBlockDelta {
-                    index: block_index,
-                    delta: anthropic::ContentBlockDelta::TextDelta { text: s },
+    frame: AnthropicStreamFrame,
+    prompt_tokens: u32,
+    output_tokens: u32,
+) -> anyhow::Result<()> {
+    match frame {
+        AnthropicStreamFrame::BlockStart { index, block } => sse.event_data(
+            "content_block_start",
+            &anthropic::MessageStreamEvent::ContentBlockStart {
+                index,
+                content_block: block,
+            },
+        ),
+        AnthropicStreamFrame::BlockDelta { index, delta } => sse.event_data(
+            "content_block_delta",
+            &anthropic::MessageStreamEvent::ContentBlockDelta { index, delta },
+        ),
+        AnthropicStreamFrame::BlockStop { index } => sse.event_data(
+            "content_block_stop",
+            &anthropic::MessageStreamEvent::ContentBlockStop { index },
+        ),
+        AnthropicStreamFrame::Stop(stop_reason) => sse.event_data(
+            "message_delta",
+            &anthropic::MessageStreamEvent::MessageDelta {
+                delta: anthropic::StreamMessageDelta {
+                    stop_reason: Some(stop_reason),
                 },
-            )?;
-        }
-        DecodeEvent::ToolCallStart { index, name } => {
-            *saw_tool_call = true;
-            blocks.close_open(sse)?;
-            let block_index = blocks.alloc();
-            blocks.in_progress.insert(index, block_index);
-            blocks.open = AnthropicOpen::ToolUse { block_index };
-            sse.event_data(
-                "content_block_start",
-                &anthropic::MessageStreamEvent::ContentBlockStart {
-                    index: block_index,
-                    content_block: anthropic::ContentBlock::ToolUse {
-                        id: next_id("toolu"),
-                        name,
-                        input: serde_json::Value::Object(serde_json::Map::new()),
-                    },
-                },
-            )?;
-        }
-        DecodeEvent::ToolCallArgsDelta { index, delta } => {
-            if let Some(&block_index) = blocks.in_progress.get(&index) {
-                sse.event_data(
-                    "content_block_delta",
-                    &anthropic::MessageStreamEvent::ContentBlockDelta {
-                        index: block_index,
-                        delta: anthropic::ContentBlockDelta::InputJsonDelta {
-                            partial_json: delta,
-                        },
-                    },
-                )?;
-            }
-        }
-        DecodeEvent::ToolCallEnd { index, .. } => {
-            if let Some(block_index) = blocks.in_progress.remove(&index) {
-                sse.event_data(
-                    "content_block_stop",
-                    &anthropic::MessageStreamEvent::ContentBlockStop { index: block_index },
-                )?;
-                blocks.open = AnthropicOpen::None;
-            }
-        }
-        DecodeEvent::Stop { .. } => {}
-        DecodeEvent::UnknownTool { name, .. } => {
-            return Ok(Some(format!("model called unknown tool `{name}`")));
-        }
-        DecodeEvent::InvalidArgs { name, errors, .. } => {
-            let detail = errors
-                .iter()
-                .map(|e| e.to_string())
-                .collect::<Vec<_>>()
-                .join("; ");
-            return Ok(Some(format!(
-                "model called `{name}` with arguments that don't match the schema: {detail}"
-            )));
-        }
-        DecodeEvent::ParseError { sentinel, source } => {
-            return Ok(Some(format!(
-                "model emitted malformed tool call within `{sentinel}`: {source}"
-            )));
-        }
+                usage: anthropic::AnthropicUsage::new(prompt_tokens, output_tokens),
+            },
+        ),
     }
-    Ok(None)
+}
+
+fn anthropic_error_event(failure: &DecodeFailure) -> anthropic::MessageStreamEvent {
+    anthropic::MessageStreamEvent::Error {
+        error: anthropic::StreamError {
+            error_type: match failure {
+                DecodeFailure::InternalSequence { .. } => "internal_error".into(),
+                _ => "invalid_request_error".into(),
+            },
+            message: failure.to_string(),
+        },
+    }
 }
 
 fn serve_plain(request: Request, engine: &Engine, req: &plain::CompletionRequest) {

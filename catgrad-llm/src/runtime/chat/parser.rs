@@ -30,10 +30,13 @@ pub trait IncrementalToolCallParser: Send {
     fn finish(&mut self, reason: StopReason) -> Vec<DecodeEvent>;
 }
 
-/// No-tools parser. Forwards every byte as `TextDelta`; emits `Stop` on
-/// finish. Used by [`ChatTurn::make_parser`](super::ChatTurn::make_parser)
-/// when the turn has no [`ToolDirectory`](super::ToolDirectory) bound.
-pub(crate) struct PassthroughParser;
+/// No-tools parser. Forwards every byte as `TextDelta`; emits `Stop`
+/// on finish. Used by
+/// [`ChatTurn::make_parser`](super::ChatTurn::make_parser) when the
+/// turn has no [`ToolDirectory`](super::ToolDirectory) bound, and
+/// available publicly so consumers (and tests) can construct one
+/// directly without needing a `ChatTurn`.
+pub struct PassthroughParser;
 
 impl IncrementalToolCallParser for PassthroughParser {
     fn feed(&mut self, text: &str) -> Vec<DecodeEvent> {

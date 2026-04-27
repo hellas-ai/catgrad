@@ -6,7 +6,7 @@ use catgrad::runtime::{BoundProgram, Program, ProgramSpec, Session};
 use std::sync::Arc;
 use catgrad_llm::helpers::LLMModel;
 use catgrad_llm::runtime::chat::{
-    ChatOptions, ChatTurn, DecodeEvent, StopReason as ParserStopReason, ToolDirectory,
+    ChatOptions, ChatTurn, DecodedAssistantTurn, StopReason as ParserStopReason, ToolDirectory,
 };
 use catgrad_llm::types;
 use catgrad_llm::utils::*;
@@ -513,58 +513,39 @@ fn run_with_backend<B: interpreter::Backend>(
             },
         )?;
 
-        // Walk parser events to extract tool calls + assistant prefix.
-        // For non-streaming, feeding the whole buffer in one shot then
-        // calling `finish` yields the full event sequence.
+        // Drain parser events into a wire-neutral assistant turn.
+        // The accumulator handles sequence rules and surfaces fatal
+        // events as DecodeFailure (which we render via anyhow::bail!).
         let mut parser = ct.make_parser();
-        let mut events = parser.feed(&first_text);
-        events.extend(parser.finish(ParserStopReason::EndOfText));
+        let events = parser
+            .feed(&first_text)
+            .into_iter()
+            .chain(parser.finish(ParserStopReason::EndOfText));
+        let turn = DecodedAssistantTurn::from_events(events)
+            .map_err(|failure| anyhow::anyhow!("{failure}"))?;
 
-        let mut assistant_content = String::new();
-        let mut tool_calls_for_assistant: Vec<serde_json::Value> = Vec::new();
-        let mut tool_results: Vec<(String, String)> = Vec::new();
-        let mut current_call_name: Option<String> = None;
-        for event in events {
-            match event {
-                DecodeEvent::TextDelta(s) => assistant_content.push_str(&s),
-                DecodeEvent::ToolCallStart { name, .. } => {
-                    current_call_name = Some(name);
-                }
-                DecodeEvent::ToolCallArgsDelta { .. } => {
-                    // Single full-args delta arrives atomically with End;
-                    // ignore here.
-                }
-                DecodeEvent::ToolCallEnd { args, .. } => {
-                    let name = current_call_name
-                        .take()
-                        .expect("ToolCallEnd without preceding ToolCallStart");
-                    let result = tools::execute(&name, &args)?;
-                    eprintln!("Tool {}({}) -> {}", name, args, result);
-                    let id = format!("call_{}", tool_calls_for_assistant.len());
-                    tool_calls_for_assistant.push(serde_json::json!({
-                        "id": id.clone(),
-                        "type": "function",
-                        "function": {
-                            "name": name,
-                            "arguments": serde_json::to_string(&args).unwrap_or_default(),
-                        },
-                    }));
-                    tool_results.push((id, result));
-                }
-                DecodeEvent::Stop { .. } => {}
-                DecodeEvent::UnknownTool { name, .. } => {
-                    anyhow::bail!("model called unknown tool: {name}");
-                }
-                DecodeEvent::InvalidArgs { name, errors, .. } => {
-                    anyhow::bail!(
-                        "model called {name} with invalid arguments: {errors:?}"
-                    );
-                }
-                DecodeEvent::ParseError { source, .. } => {
-                    anyhow::bail!("parse error in model output: {source}");
-                }
-            }
+        // Build the OpenAI tool_calls JSON list and dispatch each
+        // call. The accumulator carries `args_json` already, so we
+        // don't re-serialize from `args`. `tool_calls()` and `text()`
+        // are method accessors over the ordered `parts` vec.
+        let calls: Vec<_> = turn.tool_calls().collect();
+        let mut tool_calls_for_assistant: Vec<serde_json::Value> = Vec::with_capacity(calls.len());
+        let mut tool_results: Vec<(String, String)> = Vec::with_capacity(calls.len());
+        for (i, call) in calls.iter().enumerate() {
+            let result = tools::execute(&call.name, &call.args)?;
+            eprintln!("Tool {}({}) -> {}", call.name, call.args, result);
+            let id = format!("call_{i}");
+            tool_calls_for_assistant.push(serde_json::json!({
+                "id": id.clone(),
+                "type": "function",
+                "function": {
+                    "name": &call.name,
+                    "arguments": &call.args_json,
+                },
+            }));
+            tool_results.push((id, result));
         }
+        let assistant_content = turn.text();
 
         if tool_calls_for_assistant.is_empty() {
             // Plain text response, no tool dispatch needed.

@@ -149,9 +149,13 @@ pub enum ParserError {
     #[error("tool-call payload missing required field `{0}`")]
     MissingField(&'static str),
 
-    /// JSON deserialization error inside the payload.
+    /// JSON deserialization error inside the payload. The message is
+    /// stringified at construction time so the variant is `Clone`-safe
+    /// — the poison contract requires that subsequent `feed` calls
+    /// after a failure return the SAME failure value, which would be
+    /// impossible if we held a `serde_json::Error` (it isn't `Clone`).
     #[error("invalid JSON in tool-call payload: {0}")]
-    Json(#[from] serde_json::Error),
+    Json(String),
 
     /// The payload between an open and close sentinel exceeded the
     /// per-call byte limit. The payload itself is intentionally NOT
@@ -161,13 +165,21 @@ pub enum ParserError {
     PayloadTooLarge { limit_bytes: usize },
 }
 
+impl From<serde_json::Error> for ParserError {
+    fn from(err: serde_json::Error) -> Self {
+        Self::Json(err.to_string())
+    }
+}
+
 impl Clone for ParserError {
     fn clone(&self) -> Self {
+        // All variants are now genuinely cloneable — no lossy
+        // variant-shifting that breaks the poison contract.
         match self {
             Self::Malformed(msg) => Self::Malformed(msg.clone()),
             Self::Unterminated => Self::Unterminated,
             Self::MissingField(field) => Self::MissingField(field),
-            Self::Json(err) => Self::Malformed(err.to_string()),
+            Self::Json(msg) => Self::Json(msg.clone()),
             Self::PayloadTooLarge { limit_bytes } => Self::PayloadTooLarge {
                 limit_bytes: *limit_bytes,
             },

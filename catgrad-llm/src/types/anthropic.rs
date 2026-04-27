@@ -59,6 +59,19 @@ pub enum SystemBlockType {
     Text,
 }
 
+/// One offered tool in an Anthropic-style tool list. Anthropic's
+/// shape is flat (no `function` wrapper) and uses `input_schema`
+/// rather than `parameters`.
+#[skip_serializing_none]
+#[derive(Debug, Clone, Serialize, Deserialize, TypedBuilder, PartialEq)]
+pub struct Tool {
+    pub name: String,
+    #[builder(default)]
+    pub description: Option<String>,
+    /// JSON Schema describing the accepted argument shape.
+    pub input_schema: JsonValue,
+}
+
 /// Messages API request.
 #[skip_serializing_none]
 #[derive(Debug, Clone, Serialize, Deserialize, TypedBuilder, PartialEq)]
@@ -72,7 +85,7 @@ pub struct MessageRequest {
     pub max_tokens: u32,
     pub system: Option<SystemPrompt>,
     pub stream: Option<bool>,
-    pub tools: Option<Vec<JsonValue>>,
+    pub tools: Option<Vec<Tool>>,
 }
 
 /// Typed message content blocks.
@@ -332,14 +345,14 @@ mod tests {
                 .max_tokens(64)
                 .system(Some(SystemPrompt::Text("You are concise.".to_string())))
                 .stream(Some(false))
-                .tools(Some(vec![json!({
-                    "name": "lookup_weather",
-                    "description": "Get weather",
-                    "input_schema": {
+                .tools(Some(vec![Tool::builder()
+                    .name("lookup_weather".to_string())
+                    .description(Some("Get weather".to_string()))
+                    .input_schema(json!({
                         "type": "object",
                         "properties": {"city": {"type": "string"}},
-                    },
-                })]))
+                    }))
+                    .build()]))
                 .build()
         );
     }

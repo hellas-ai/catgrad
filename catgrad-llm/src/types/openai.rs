@@ -89,6 +89,32 @@ impl ReasoningEffort {
     }
 }
 
+/// One offered function in an OpenAI-style tool list. Today only
+/// `function` tools are supported by the chat-completions surface;
+/// the wrapper is preserved so future tool kinds (e.g. `code_interpreter`)
+/// can be added as new variants without breaking the wire shape.
+#[skip_serializing_none]
+#[derive(Debug, Clone, Serialize, Deserialize, TypedBuilder, PartialEq)]
+pub struct ChatCompletionTool {
+    /// Always `"function"` today.
+    #[builder(default = "function".to_string())]
+    #[serde(rename = "type")]
+    pub kind: String,
+    pub function: FunctionDef,
+}
+
+/// Function-call descriptor inside a [`ChatCompletionTool`].
+#[skip_serializing_none]
+#[derive(Debug, Clone, Serialize, Deserialize, TypedBuilder, PartialEq)]
+pub struct FunctionDef {
+    pub name: String,
+    #[builder(default)]
+    pub description: Option<String>,
+    /// JSON Schema describing the accepted argument shape.
+    #[builder(default)]
+    pub parameters: Option<JsonValue>,
+}
+
 /// Chat-completions request.
 #[skip_serializing_none]
 #[derive(Debug, Clone, Serialize, Deserialize, TypedBuilder, PartialEq)]
@@ -96,7 +122,7 @@ pub struct ChatCompletionRequest {
     pub model: String,
     pub messages: Vec<ChatMessage>,
     #[builder(default)]
-    pub tools: Option<Vec<JsonValue>>,
+    pub tools: Option<Vec<ChatCompletionTool>>,
     #[builder(default)]
     pub max_tokens: Option<u32>,
     #[builder(default)]
