@@ -3,12 +3,12 @@ use std::fmt;
 use std::slice;
 
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+#[derive(Debug, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Path(Vec<PathComponent>);
 
 // Names of definitions
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+#[derive(Debug, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct PathComponent(String); // only [a-zA-Z_]
 
 pub fn path(components: Vec<&str>) -> Result<Path, InvalidPathComponent> {

@@ -1,7 +1,7 @@
 use catgrad::prelude::ops::*;
 use catgrad::prelude::*;
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 /// Construct, shapecheck, and interpret the `SimpleMNISTModel` using the ndarray backend.
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -167,7 +167,7 @@ fn load_param_types() -> typecheck::Parameters {
     use catgrad::category::core::Dtype;
     use catgrad::typecheck::value_types::{DtypeExpr, NatExpr, NdArrayType, ShapeExpr, TypeExpr};
 
-    let mut map = HashMap::new();
+    let mut map = BTreeMap::new();
 
     // Layer 1: (28*28) → 100
     let layer1_type = Type::Tensor(TypeExpr::NdArrayType(NdArrayType {
@@ -198,9 +198,9 @@ fn load_param_types() -> typecheck::Parameters {
 // NOTE: you would normally create this data by reading the safetensors file!
 fn load_param_data<B: interpreter::Backend>(backend: &B) -> interpreter::Parameters<B> {
     use catgrad::category::core::Shape;
-    use std::collections::HashMap;
+    use std::collections::BTreeMap;
 
-    let mut map = HashMap::new();
+    let mut map = BTreeMap::new();
 
     // Layer 1 weights: [784, 100] - initialize with small random-ish values
     let layer1_data: Vec<f32> = (0..784 * 100)
