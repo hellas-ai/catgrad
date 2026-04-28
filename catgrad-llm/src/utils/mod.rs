@@ -59,10 +59,22 @@ pub fn from_json_reader<T: DeserializeOwned, R: Read>(reader: R) -> Result<T> {
     serde_path_to_error::deserialize(&mut deserializer).map_err(LLMError::from)
 }
 
+/// Resolve a model identifier into the four file paths catgrad-llm needs.
+///
+/// If `model` points to an existing local directory, files are read from
+/// there (the directory must look like a HuggingFace snapshot — at minimum
+/// `config.json`, `tokenizer.json`, `tokenizer_config.json`, and either
+/// `model.safetensors` or `model.safetensors.index.json` plus its shards).
+/// Otherwise `model` is treated as a HuggingFace repo id and downloaded.
 pub fn get_model_files(
     model: &str,
     revision: &str,
 ) -> Result<(Vec<PathBuf>, PathBuf, PathBuf, PathBuf)> {
+    let local = Path::new(model);
+    if local.is_dir() {
+        return local_model_files(local);
+    }
+
     let api = build_hf_api()?;
     let repo = api.repo(Repo::with_revision(
         model.to_string(),
@@ -103,28 +115,87 @@ pub fn get_model_files(
     Ok((m, c, t, tc))
 }
 
+fn local_chat_template(dir: &Path) -> Result<String> {
+    let jinja = dir.join("chat_template.jinja");
+    if jinja.is_file() {
+        return Ok(std::fs::read_to_string(jinja)?);
+    }
+    let tc_path = dir.join("tokenizer_config.json");
+    let tc = std::fs::read_to_string(&tc_path)?;
+    let tokenizer_config: serde_json::Value = from_json_str(&tc)?;
+    tokenizer_config
+        .get("chat_template")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+        .ok_or(LLMError::InvalidModelConfig(
+            "Missing or invalid `chat_template` in tokenizer config".to_string(),
+        ))
+}
+
+fn local_model_files(dir: &Path) -> Result<(Vec<PathBuf>, PathBuf, PathBuf, PathBuf)> {
+    let must_exist = |name: &str| -> Result<PathBuf> {
+        let p = dir.join(name);
+        if p.is_file() {
+            Ok(p)
+        } else {
+            Err(LLMError::InvalidModelConfig(format!(
+                "local model dir {} missing required file `{name}`",
+                dir.display()
+            )))
+        }
+    };
+
+    let weights = if dir.join("model.safetensors.index.json").is_file() {
+        let index = std::fs::File::open(dir.join("model.safetensors.index.json"))?;
+        let json: serde_json::Value = from_json_reader(index)?;
+        let weight_map = json.get("weight_map").and_then(|v| v.as_object()).ok_or(
+            LLMError::InvalidModelConfig("local index missing or invalid `weight_map`".to_string()),
+        )?;
+        let mut shards = HashSet::new();
+        for v in weight_map.values() {
+            let name = v.as_str().ok_or(LLMError::InvalidModelConfig(
+                "weight_map contained non-string values".to_string(),
+            ))?;
+            shards.insert(dir.join(name));
+        }
+        shards.into_iter().collect()
+    } else {
+        vec![must_exist("model.safetensors")?]
+    };
+
+    Ok((
+        weights,
+        must_exist("config.json")?,
+        must_exist("tokenizer.json")?,
+        must_exist("tokenizer_config.json")?,
+    ))
+}
+
 // Try getting the model's chat template from the repository
 pub fn get_model_chat_template(model: &str, revision: &str) -> Result<String> {
-    let api = build_hf_api()?;
-    let repo = api.repo(Repo::with_revision(
-        model.to_string(),
-        RepoType::Model,
-        revision.to_string(),
-    ));
-
-    let chat_template = if let Ok(ct) = repo.get("chat_template.jinja") {
-        std::fs::read_to_string(ct)?
+    let chat_template = if Path::new(model).is_dir() {
+        local_chat_template(Path::new(model))?
     } else {
-        let tc_path = repo.get("tokenizer_config.json")?;
-        let tc = std::fs::read_to_string(tc_path)?;
-        let tokenizer_config: serde_json::Value = from_json_str(&tc)?;
-        tokenizer_config
-            .get("chat_template")
-            .and_then(|v| v.as_str())
-            .ok_or(LLMError::InvalidModelConfig(
-                "Missing or invalid `chat_template` in tokenizer config".to_string(),
-            ))?
-            .to_string()
+        let api = build_hf_api()?;
+        let repo = api.repo(Repo::with_revision(
+            model.to_string(),
+            RepoType::Model,
+            revision.to_string(),
+        ));
+        if let Ok(ct) = repo.get("chat_template.jinja") {
+            std::fs::read_to_string(ct)?
+        } else {
+            let tc_path = repo.get("tokenizer_config.json")?;
+            let tc = std::fs::read_to_string(tc_path)?;
+            let tokenizer_config: serde_json::Value = from_json_str(&tc)?;
+            tokenizer_config
+                .get("chat_template")
+                .and_then(|v| v.as_str())
+                .ok_or(LLMError::InvalidModelConfig(
+                    "Missing or invalid `chat_template` in tokenizer config".to_string(),
+                ))?
+                .to_string()
+        }
     };
     // Some chat templates contain these tags that are not used for inference.
     // If more variants show up a regex may be needed later on.
@@ -382,6 +453,7 @@ pub fn get_model(
                 dtype,
             )?),
             "GPT2LMHeadModel" => Box::new(models::gpt2::GPT2Model::new(config_json, dtype)?),
+            "TalkieForCausalLM" => Box::new(models::talkie::TalkieModel::new(config_json, dtype)?),
             _ => {
                 return Err(LLMError::InvalidModelConfig(format!(
                     "Unsupported model architecture: {}",
