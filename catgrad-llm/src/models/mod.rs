@@ -14,3 +14,4 @@ pub mod qwen3;
 pub mod qwen3_5;
 pub mod siglip;
 pub mod smolvlm2;
+pub mod talkie;
