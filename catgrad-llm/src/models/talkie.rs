@@ -17,6 +17,12 @@
 //! RoPE convention differs from catgrad's default by a sign on `sin`
 //! (talkie: `y1 = x1·cos + x2·sin`, catgrad: `y1 = x1·cos - x2·sin`); we
 //! negate `cache.sin` once after init to match.
+//!
+//! Parameter naming follows the HF-style port at
+//! `lewtun/talkie-1930-13b-it-hf` — the decoder stack lives under
+//! `model.{embed,blocks.…}` while `lm_head` and `lm_head_gain.w_g` are at
+//! the root (matching `TalkieForCausalLM` having `self.model = TalkieModel(…)`
+//! and the head as direct attributes).
 
 #![allow(clippy::too_many_arguments)]
 
@@ -111,9 +117,13 @@ impl TalkieModel {
         max_positions: Var,
     ) -> Vec<Var> {
         let eps = self.config.rms_norm_eps;
+        // The HF-style port wraps the decoder stack in a `TalkieModel` that
+        // sits under the `TalkieForCausalLM`'s `self.model`; lm_head and
+        // lm_head_gain stay at the root.
+        let m = p.extend(["model"]).unwrap();
 
         // Embed → input RMSNorm (unweighted) → save as e_x for embed-skip.
-        let x = embeddings(builder, p.extend(["embed"]).unwrap(), x);
+        let x = embeddings(builder, m.extend(["embed"]).unwrap(), x);
         let x = rmsnorm_raw::<3>(builder, eps, x);
         let e_x = x.clone();
 
@@ -144,7 +154,7 @@ impl TalkieModel {
                 &mut cache,
                 pos.clone(),
                 e_x.clone(),
-                p.extend(["blocks", &i.to_string()]).unwrap(),
+                m.extend(["blocks", &i.to_string()]).unwrap(),
                 x,
             );
         }
