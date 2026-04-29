@@ -32,6 +32,8 @@ serde_with = { version = "3.17", default-features = false, features = ["macros"]
 serde_path_to_error = "0.1"
 ureq = "2.12.1"
 url = "2.5.7"
+hound = "3.5.1"
+rustfft = "6.4.1"
 
 
 [dev-dependencies]

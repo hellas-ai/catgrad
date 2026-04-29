@@ -10,7 +10,7 @@ from transformers.image_utils import load_image
 
 from transformers import (
     AutoModelForCausalLM,
-    AutoModelForImageTextToText,
+    AutoModelForMultimodalLM,
     AutoProcessor,
     AutoTokenizer,
     logging,
@@ -247,6 +247,7 @@ if __name__ == "__main__":
     parser.add_argument("-p", "--prompt", type=str, default="Category theory is")
     parser.add_argument("-s", "--seq-len", type=int, default=10)
     parser.add_argument("-i", "--image", type=str, default=None)
+    parser.add_argument("-a", "--audio", type=str, default=None)
     parser.add_argument("-r", "--raw", action="store_true")
     parser.add_argument("-t", "--thinking", action="store_true")
     parser.add_argument(
@@ -266,19 +267,19 @@ if __name__ == "__main__":
     if args.tool_use and args.raw:
         parser.error("--tool-use does not support --raw")
 
-    if args.image is None:
+    if args.image is None and args.audio is None:
         tokenizer = AutoTokenizer.from_pretrained(args.model, revision=args.revision)
         try:
             model = AutoModelForCausalLM.from_pretrained(
                 args.model, revision=args.revision, dtype=args.dtype
             )
         except:
-            model = AutoModelForImageTextToText.from_pretrained(
+            model = AutoModelForMultimodalLM.from_pretrained(
                 args.model, revision=args.revision, dtype=args.dtype
             )
     else:
         processor = AutoProcessor.from_pretrained(args.model, revision=args.revision)
-        model = AutoModelForImageTextToText.from_pretrained(
+        model = AutoModelForMultimodalLM.from_pretrained(
             args.model, revision=args.revision, dtype=args.dtype
         )
 
@@ -290,6 +291,7 @@ if __name__ == "__main__":
 
     if (
         args.image is None
+        and args.audio is None
         and not args.raw
         and not args.tool_use
         and tokenizer.chat_template is not None
@@ -309,7 +311,7 @@ if __name__ == "__main__":
     model.generation_config.top_p = None
     model.generation_config.top_k = None
 
-    if args.image is None:
+    if args.image is None and args.audio is None:
         if args.tool_use:
             output = run_tool_chat(tokenizer, model, prompt, args)
         else:
@@ -322,13 +324,16 @@ if __name__ == "__main__":
             )
             output = tokenizer.decode(logits[0], skip_special_tokens=True)
     else:
+        content = [{"type": "text", "text": prompt}]
+        if args.image:
+            content += [{"type": "image", "path": args.image}]
+        if args.audio:
+            content += [{"type": "audio", "path": args.audio}]
+
         messages = [
             {
                 "role": "user",
-                "content": [
-                    {"type": "text", "text": prompt},
-                    {"type": "image", "path": args.image},
-                ],
+                "content": content,
             }
         ]
         try:
