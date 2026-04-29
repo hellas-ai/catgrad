@@ -1,17 +1,21 @@
 #![allow(clippy::too_many_arguments)]
 use crate::config::{EosTokenId, LLMConfig};
 use crate::helpers::*;
-use crate::utils::load_and_patchify_dynamic_image;
+use crate::models::conformer::{Gemma4AudioConfig, Gemma4AudioTower};
+use crate::utils::{AUDIO_FEATURE_SIZE, load_and_patchify_dynamic_image, prepare_audio_features};
 use catgrad::prelude::ops::*;
 use catgrad::prelude::*;
 use nn::*;
 use serde::{Deserialize, Serialize};
+use std::path::Path as FsPath;
 
 #[derive(Debug, Clone, Deserialize)]
 struct Gemma4Config {
     text_config: Gemma4TextConfig,
     vision_config: Option<Gemma4VisionConfig>,
+    audio_config: Option<Gemma4AudioConfig>,
     image_token_id: Option<usize>,
+    audio_token_id: Option<usize>,
     vision_soft_tokens_per_image: Option<usize>,
     eos_token_id: Option<EosTokenId>,
 }
@@ -94,6 +98,21 @@ pub struct Gemma4PreparedImageInput {
     pub patches: Vec<f32>,
     pub shape: Vec<usize>,
     pub runtime_vision: Gemma4RuntimeVisionConfig,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+pub struct Gemma4RuntimeAudioConfig {
+    pub num_mel_frames: usize,
+    pub num_soft_tokens_per_audio: usize,
+}
+
+#[derive(Debug, Clone)]
+pub struct Gemma4PreparedAudioInput {
+    pub features: Vec<f32>,
+    pub shape: Vec<usize>,
+    pub mask: Vec<f32>,
+    pub mask_shape: Vec<usize>,
+    pub runtime_audio: Gemma4RuntimeAudioConfig,
 }
 
 impl Gemma4TextConfig {
@@ -222,6 +241,29 @@ pub fn prepare_gemma4_image_input(
     })
 }
 
+pub fn prepare_gemma4_audio_input(
+    audio_path: &FsPath,
+    config_json: &serde_json::Value,
+) -> crate::Result<Gemma4PreparedAudioInput> {
+    let config: Gemma4Config = serde_json::from_value(config_json.clone())?;
+    let audio_config = config.audio_config.ok_or_else(|| {
+        crate::LLMError::InvalidModelConfig("gemma4 missing audio_config".to_string())
+    })?;
+    let prepared = prepare_audio_features(audio_path)?;
+    let num_soft_tokens_per_audio =
+        audio_config.num_soft_tokens_for_frames(prepared.valid_mel_frames);
+    Ok(Gemma4PreparedAudioInput {
+        shape: prepared.feature_shape,
+        features: prepared.features,
+        mask_shape: prepared.mask_shape,
+        mask: prepared.mask,
+        runtime_audio: Gemma4RuntimeAudioConfig {
+            num_mel_frames: prepared.num_mel_frames,
+            num_soft_tokens_per_audio,
+        },
+    })
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Gemma4AttentionKind {
     Sliding,
@@ -241,10 +283,17 @@ struct Gemma4LayerPlan {
 }
 
 #[derive(Debug, Clone)]
-struct Gemma4MultimodalConfig {
-    vision_config: Gemma4VisionConfig,
-    image_token_index: usize,
-    runtime_vision: Gemma4RuntimeVisionConfig,
+enum Gemma4MultimodalConfig {
+    Vision {
+        vision_config: Gemma4VisionConfig,
+        image_token_index: usize,
+        runtime_vision: Gemma4RuntimeVisionConfig,
+    },
+    Audio {
+        audio_config: Gemma4AudioConfig,
+        audio_token_index: usize,
+        runtime_audio: Gemma4RuntimeAudioConfig,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -315,26 +364,57 @@ impl LLMModel for Gemma4Model {
 
     fn multimodal_metadata(&self) -> Option<MultimodalMetadata> {
         let mm = self.multimodal.as_ref()?;
-        Some(MultimodalMetadata {
-            image_token_index: mm.image_token_index,
-            mm_tokens_per_image: mm.runtime_vision.num_soft_tokens_per_image,
-            hidden_size: self.config.hidden_size,
-            image_size: mm
-                .runtime_vision
-                .patch_grid_height
-                .max(mm.runtime_vision.patch_grid_width)
-                * mm.vision_config.patch_size,
-            patch_size: mm.vision_config.patch_size,
-        })
+        match mm {
+            Gemma4MultimodalConfig::Vision {
+                vision_config,
+                image_token_index,
+                runtime_vision,
+            } => Some(MultimodalMetadata {
+                image_token_index: *image_token_index,
+                mm_tokens_per_image: runtime_vision.num_soft_tokens_per_image,
+                hidden_size: self.config.hidden_size,
+                image_size: runtime_vision
+                    .patch_grid_height
+                    .max(runtime_vision.patch_grid_width)
+                    * vision_config.patch_size,
+                patch_size: vision_config.patch_size,
+            }),
+            Gemma4MultimodalConfig::Audio {
+                audio_token_index,
+                runtime_audio,
+                ..
+            } => Some(MultimodalMetadata {
+                image_token_index: *audio_token_index,
+                mm_tokens_per_image: runtime_audio.num_soft_tokens_per_audio,
+                hidden_size: self.config.hidden_size,
+                image_size: 0,
+                patch_size: 0,
+            }),
+        }
     }
 
     fn multimodal_vision_module(&self) -> Option<Box<dyn DynModule>> {
         let mm = self.multimodal.as_ref()?;
-        Some(Box::new(Gemma4VisionEmbeddings {
-            vision_config: mm.vision_config.clone(),
-            runtime_vision: mm.runtime_vision.clone(),
-            text_hidden_size: self.config.hidden_size,
-        }))
+        match mm {
+            Gemma4MultimodalConfig::Vision {
+                vision_config,
+                runtime_vision,
+                ..
+            } => Some(Box::new(Gemma4VisionEmbeddings {
+                vision_config: vision_config.clone(),
+                runtime_vision: runtime_vision.clone(),
+                text_hidden_size: self.config.hidden_size,
+            })),
+            Gemma4MultimodalConfig::Audio {
+                audio_config,
+                runtime_audio,
+                ..
+            } => Some(Box::new(Gemma4AudioEmbeddings {
+                audio_config: audio_config.clone(),
+                runtime_audio: runtime_audio.clone(),
+                text_hidden_size: self.config.hidden_size,
+            })),
+        }
     }
 
     fn multimodal_language_module(&self) -> Option<Box<dyn DynModule>> {
@@ -346,15 +426,26 @@ impl LLMModel for Gemma4Model {
 
     fn multimodal_interpolate_prompt(&self, prompt: &str) -> Option<String> {
         let mm = self.multimodal.as_ref()?;
-        Some(prompt.replace(
-            "<|image|>",
-            &format!(
-                "{}{}{}",
-                "<|image>",
-                "<|image|>".repeat(mm.runtime_vision.num_soft_tokens_per_image),
-                "<image|>"
-            ),
-        ))
+        match mm {
+            Gemma4MultimodalConfig::Vision { runtime_vision, .. } => Some(prompt.replace(
+                "<|image|>",
+                &format!(
+                    "{}{}{}",
+                    "<|image>",
+                    "<|image|>".repeat(runtime_vision.num_soft_tokens_per_image),
+                    "<image|>"
+                ),
+            )),
+            Gemma4MultimodalConfig::Audio { runtime_audio, .. } => Some(prompt.replace(
+                "<|audio|>",
+                &format!(
+                    "{}{}{}",
+                    "<|audio>",
+                    "<|audio|>".repeat(runtime_audio.num_soft_tokens_per_audio),
+                    "<audio|>"
+                ),
+            )),
+        }
     }
 }
 
@@ -363,12 +454,15 @@ impl Gemma4Model {
         root: &str,
         config_json: &serde_json::Value,
         runtime_vision: Option<&Gemma4RuntimeVisionConfig>,
+        runtime_audio: Option<&Gemma4RuntimeAudioConfig>,
         dtype: Dtype,
     ) -> crate::Result<Self> {
         let Gemma4Config {
             mut text_config,
             vision_config,
+            audio_config,
             image_token_id,
+            audio_token_id,
             eos_token_id,
             ..
         }: Gemma4Config = serde_json::from_value(config_json.clone())?;
@@ -379,13 +473,22 @@ impl Gemma4Model {
 
         let multimodal = match (vision_config, image_token_id, runtime_vision) {
             (Some(vision_config), Some(image_token_index), Some(runtime_vision)) => {
-                Some(Gemma4MultimodalConfig {
+                Some(Gemma4MultimodalConfig::Vision {
                     vision_config,
                     image_token_index,
                     runtime_vision: runtime_vision.clone(),
                 })
             }
-            _ => None,
+            _ => match (audio_config, audio_token_id, runtime_audio) {
+                (Some(audio_config), Some(audio_token_index), Some(runtime_audio)) => {
+                    Some(Gemma4MultimodalConfig::Audio {
+                        audio_config,
+                        audio_token_index,
+                        runtime_audio: runtime_audio.clone(),
+                    })
+                }
+                _ => None,
+            },
         };
 
         let first_shared_layer = text_config.num_hidden_layers - text_config.num_kv_shared_layers;
@@ -1141,6 +1244,50 @@ fn gemma4_apply_2d_rope(
     let y_part =
         apply_rope_embedding_positions(builder, row_positions, head_dim / 2, cos_y, sin_y, y_part);
     concat(builder, 3, x_part, y_part)
+}
+
+pub struct Gemma4AudioEmbeddings {
+    audio_config: Gemma4AudioConfig,
+    runtime_audio: Gemma4RuntimeAudioConfig,
+    text_hidden_size: usize,
+}
+
+impl DynModule for Gemma4AudioEmbeddings {
+    fn path(&self) -> Path {
+        path(vec!["Gemma4AudioEmbeddings"]).unwrap()
+    }
+
+    fn ty(&self) -> (Vec<Type>, Vec<Type>) {
+        use catgrad::typecheck::TypeExpr;
+        let t = Type::Tensor(TypeExpr::Var(0));
+        (vec![t.clone(), t.clone()], vec![t])
+    }
+
+    fn def(&self, builder: &Builder, args: Vec<Var>) -> Vec<Var> {
+        let [features, mask]: [Var; 2] = args.try_into().expect("expected 2 inputs");
+        let tower = Gemma4AudioTower {
+            config: self.audio_config.clone(),
+            input_time_steps: self.runtime_audio.num_mel_frames,
+            input_feature_bins: AUDIO_FEATURE_SIZE,
+        };
+        let x = tower.audio_model(builder, features, mask);
+        let x = slice(
+            builder,
+            1,
+            0,
+            self.runtime_audio.num_soft_tokens_per_audio,
+            x,
+        );
+        let x = rmsnorm_raw::<3>(builder, self.audio_config.rms_norm_eps, x);
+        let x = linear_no_bias(
+            builder,
+            self.audio_config.output_proj_dims,
+            self.text_hidden_size,
+            path(vec!["model", "embed_audio", "embedding_projection"]).unwrap(),
+            x,
+        );
+        vec![x]
+    }
 }
 
 pub struct Gemma4VisionEmbeddings {

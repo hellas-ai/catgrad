@@ -145,6 +145,7 @@ pub struct PreparedImageInput {
 pub enum ModelRuntimeContext {
     Qwen3_5Vision(models::qwen3_5::Qwen3_5RuntimeVisionConfig),
     Gemma4Vision(models::gemma4::Gemma4RuntimeVisionConfig),
+    Gemma4Audio(models::gemma4::Gemma4RuntimeAudioConfig),
     Lfm2Vision(models::lfm2::Lfm2RuntimeVisionConfig),
 }
 
@@ -319,6 +320,10 @@ pub fn get_model(
                 config_json,
                 match runtime_context {
                     Some(ModelRuntimeContext::Gemma4Vision(runtime_vision)) => Some(runtime_vision),
+                    _ => None,
+                },
+                match runtime_context {
+                    Some(ModelRuntimeContext::Gemma4Audio(runtime_audio)) => Some(runtime_audio),
                     _ => None,
                 },
                 dtype,
