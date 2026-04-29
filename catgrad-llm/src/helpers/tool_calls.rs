@@ -50,6 +50,10 @@ pub fn parse_qwen3_5_tool_calls(output: &str) -> Result<Option<ToolUseStep>> {
     )
 }
 
+pub fn parse_granite_tool_calls(output: &str) -> Result<Option<ToolUseStep>> {
+    parse_qwen3_tool_calls(output)
+}
+
 pub fn parse_lfm2_tool_calls(output: &str) -> Result<Option<ToolUseStep>> {
     parse_python_tool_calls(output, "<|tool_call_start|>", "<|tool_call_end|>")
 }
