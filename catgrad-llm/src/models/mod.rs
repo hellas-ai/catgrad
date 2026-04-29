@@ -1,3 +1,4 @@
+pub mod conformer;
 pub mod deepseek;
 pub mod gemma3;
 pub mod gemma4;
