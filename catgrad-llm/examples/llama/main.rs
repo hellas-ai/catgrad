@@ -3,6 +3,7 @@ use catgrad::interpreter::backend::candle::CandleBackend;
 use catgrad::interpreter::backend::ndarray::NdArrayBackend;
 use catgrad::prelude::*;
 use catgrad_llm::helpers::{LLMModel, ToolCall, ToolUseStep};
+use catgrad_llm::models;
 use catgrad_llm::utils::*;
 use clap::{Parser, ValueEnum};
 use minijinja::{Value, context};
@@ -38,6 +39,9 @@ struct Args {
     /// Optional image input for multimodal-capable models
     #[arg(short = 'i', long)]
     image: Option<PathBuf>,
+    /// Optional audio input for Gemma4 audio-capable models
+    #[arg(short = 'a', long)]
+    audio: Option<PathBuf>,
     /// Pass raw prompt without chat template
     #[arg(long)]
     raw: bool,
@@ -164,6 +168,12 @@ fn main() -> Result<()> {
     if args.tool_use && args.bench.is_some() {
         anyhow::bail!("--tool-use does not support --bench");
     }
+    if args.image.is_some() && args.audio.is_some() {
+        anyhow::bail!("--image and --audio are mutually exclusive");
+    }
+    if args.tool_use && (args.image.is_some() || args.audio.is_some()) {
+        anyhow::bail!("--tool-use does not support multimodal inputs");
+    }
 
     let app_config = get_app_config(&args)?;
     if args.list_models {
@@ -198,15 +208,29 @@ fn get_models(app_config: &AppConfig) -> Vec<(&str, &str)> {
     models
 }
 
-fn user_message(prompt: &str, has_image: bool) -> Value {
-    if has_image {
-        let content = vec![
-            context!(type => "text", text => prompt),
-            context!(type => "image"),
-        ];
-        context!(role => "user", content => content)
-    } else {
-        context!(role => "user", content => prompt)
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PromptModality {
+    Image,
+    Audio,
+}
+
+fn user_message(prompt: &str, modality: Option<PromptModality>) -> Value {
+    match modality {
+        Some(PromptModality::Image) => {
+            let content = vec![
+                context!(type => "text", text => prompt),
+                context!(type => "image"),
+            ];
+            context!(role => "user", content => content)
+        }
+        Some(PromptModality::Audio) => {
+            let content = vec![
+                context!(type => "text", text => prompt),
+                context!(type => "audio"),
+            ];
+            context!(role => "user", content => content)
+        }
+        None => context!(role => "user", content => prompt),
     }
 }
 
@@ -255,7 +279,7 @@ fn render_tool_prompt(
     Ok(render_chat_template_values(
         chat_template,
         tokenizer_config,
-        &[user_message(prompt, false)],
+        &[user_message(prompt, None)],
         RenderChatTemplateOptions {
             enable_thinking,
             tools: Some(tools),
@@ -284,7 +308,7 @@ fn render_tool_follow_up_prompt(
         )
     };
 
-    let mut messages = vec![user_message(prompt, false), assistant_message];
+    let mut messages = vec![user_message(prompt, None), assistant_message];
     messages.extend(
         tool_use_step
             .tool_calls
@@ -347,7 +371,15 @@ fn run_with_backend<B: interpreter::Backend>(
     let mut pp = 0;
     let mut tg = 0;
     let mut max_seq_len = args.max_seq_len;
-    let use_image = args.image.is_some() && !benchmarking;
+    let modality = if benchmarking {
+        None
+    } else if args.image.is_some() {
+        Some(PromptModality::Image)
+    } else if args.audio.is_some() {
+        Some(PromptModality::Audio)
+    } else {
+        None
+    };
 
     let prompt = if let Some(bench) = &args.bench {
         pp = bench[0];
@@ -369,27 +401,42 @@ fn run_with_backend<B: interpreter::Backend>(
     } else if chat_template.is_empty() || args.raw {
         args.prompt.clone()
     } else {
-        render_chat_template(
+        render_chat_template_values(
             &chat_template,
             &tokenizer_config,
-            &args.prompt,
-            use_image,
-            args.thinking,
+            &[user_message(&args.prompt, modality)],
+            RenderChatTemplateOptions {
+                enable_thinking: args.thinking,
+                tools: None,
+            },
         )?
     };
 
-    let prepared_multimodal = if use_image {
-        prepare_multimodal_input(&config_json, args.image.as_deref())?
-    } else {
-        Default::default()
+    let (prepared_image, prepared_audio, runtime_context) = match modality {
+        Some(PromptModality::Image) => {
+            let prepared = prepare_multimodal_input(&config_json, args.image.as_deref())?;
+            (prepared.image, None, prepared.runtime_context)
+        }
+        Some(PromptModality::Audio) => {
+            let audio_path = args
+                .audio
+                .as_ref()
+                .expect("audio existence already checked");
+            let prepared = models::gemma4::prepare_gemma4_audio_input(audio_path, &config_json)?;
+            (
+                None,
+                Some(prepared.clone()),
+                Some(ModelRuntimeContext::Gemma4Audio(prepared.runtime_audio)),
+            )
+        }
+        None => (None, None, None),
     };
-    let runtime_context = prepared_multimodal.runtime_context.as_ref();
 
-    if !benchmarking && !use_image && !args.tool_use {
+    if !benchmarking && modality.is_none() && !args.tool_use {
         print!("{prompt}");
     }
-    let prompt = if use_image {
-        interpolate_multimodal_prompt(&config_json, runtime_context, &prompt)?
+    let prompt = if modality.is_some() {
+        interpolate_multimodal_prompt(&config_json, runtime_context.as_ref(), &prompt)?
     } else {
         prompt
     };
@@ -423,7 +470,7 @@ fn run_with_backend<B: interpreter::Backend>(
     let model = get_model(
         &config_json,
         max_sequence_length,
-        runtime_context,
+        runtime_context.as_ref(),
         model_dtype,
     )?;
     post_process_model_weights(
@@ -433,7 +480,7 @@ fn run_with_backend<B: interpreter::Backend>(
         &mut parameter_types,
     )?;
 
-    let mm_metadata = if use_image {
+    let mm_metadata = if modality.is_some() {
         Some(
             model
                 .multimodal_metadata()
@@ -446,7 +493,7 @@ fn run_with_backend<B: interpreter::Backend>(
     let typed_term = if let Some(load_path) = &args.load {
         let file = std::fs::File::open(load_path)?;
         serde_json::from_reader(file)?
-    } else if use_image {
+    } else if modality.is_some() {
         let language_model = model.multimodal_language_module().ok_or_else(|| {
             anyhow::anyhow!(
                 "Model {} does not provide multimodal language module",
@@ -473,7 +520,7 @@ fn run_with_backend<B: interpreter::Backend>(
 
     // Get stdlib environment and extend with parameter declarations
     let mut env = stdlib();
-    let load_prefix = if use_image {
+    let load_prefix = if modality.is_some() {
         catgrad::prelude::Path::empty()
     } else {
         model.path()
@@ -490,66 +537,89 @@ fn run_with_backend<B: interpreter::Backend>(
 
     let mut multimodal_ctx: Option<MultimodalRuntime<B>> = None;
     if let Some(mm) = mm_metadata {
-        let vision_model = model.multimodal_vision_module().ok_or_else(|| {
-            anyhow::anyhow!("Model {} does not provide vision module", model_name)
-        })?;
-        let image_path = args
-            .image
-            .as_ref()
-            .expect("image existence already checked");
-        let prepared_image = prepared_multimodal.image.as_ref().ok_or_else(|| {
+        let encoder_model = model.multimodal_vision_module().ok_or_else(|| {
             anyhow::anyhow!(
-                "Model {} did not provide prepared image input for {}",
-                model_name,
-                image_path.display()
+                "Model {} does not provide multimodal encoder module",
+                model_name
             )
         })?;
-        let image_data = prepared_image.data.clone();
-        let image_shape = prepared_image.shape.clone();
-        let cache_path =
-            cache_path_for_embeddings(&model_name, &image_path.to_string_lossy(), &image_data);
-        let visual_embeddings = if let Ok(cached) = load_cached_embeddings(&cache_path) {
-            eprintln!(
-                "Loading cached image features from: {}",
-                cache_path.display()
-            );
-            interpreter::float_tensor(
-                &interpreter.backend,
-                Shape(vec![1, mm.mm_tokens_per_image, mm.hidden_size]),
-                cached,
-                model_dtype,
-            )
-            .map_err(|e| anyhow::anyhow!("BackendError: {:?}", e))?
+        let modality_embeddings = if let Some(prepared_image) = prepared_image.as_ref() {
+            let image_path = args
+                .image
+                .as_ref()
+                .expect("image existence already checked");
+            let image_data = prepared_image.data.clone();
+            let image_shape = prepared_image.shape.clone();
+            let cache_path =
+                cache_path_for_embeddings(&model_name, &image_path.to_string_lossy(), &image_data);
+            if let Ok(cached) = load_cached_embeddings(&cache_path) {
+                eprintln!(
+                    "Loading cached image features from: {}",
+                    cache_path.display()
+                );
+                interpreter::float_tensor(
+                    &interpreter.backend,
+                    Shape(vec![1, mm.mm_tokens_per_image, mm.hidden_size]),
+                    cached,
+                    model_dtype,
+                )
+                .map_err(|e| anyhow::anyhow!("BackendError: {:?}", e))?
+            } else {
+                let image_tensor = interpreter::float_tensor(
+                    &interpreter.backend,
+                    Shape(image_shape),
+                    image_data,
+                    model_dtype,
+                )
+                .map_err(|e| anyhow::anyhow!("BackendError: {:?}", e))?;
+                let encoder_term = encoder_model
+                    .term()
+                    .ok_or_else(|| anyhow::anyhow!("failed to build multimodal encoder term"))?;
+                let results = interpreter.run(encoder_term.term, vec![image_tensor])?;
+                let embeddings = results
+                    .first()
+                    .cloned()
+                    .ok_or_else(|| anyhow::anyhow!("multimodal encoder returned no outputs"))?;
+                let flattened = to_f32_vec(&interpreter.backend, &embeddings)?;
+                save_cached_embeddings(&cache_path, &flattened)?;
+                eprintln!("Saved image features to: {}", cache_path.display());
+                embeddings
+            }
         } else {
-            let image_tensor = interpreter::float_tensor(
+            let prepared_audio = prepared_audio.as_ref().ok_or_else(|| {
+                anyhow::anyhow!("Model {} did not provide prepared audio input", model_name)
+            })?;
+            let audio_tensor = interpreter::float_tensor(
                 &interpreter.backend,
-                Shape(image_shape),
-                image_data,
+                Shape(prepared_audio.shape.clone()),
+                prepared_audio.features.clone(),
                 model_dtype,
             )
             .map_err(|e| anyhow::anyhow!("BackendError: {:?}", e))?;
-            let vision_term = vision_model
+            let mask_tensor = interpreter::float_tensor(
+                &interpreter.backend,
+                Shape(prepared_audio.mask_shape.clone()),
+                prepared_audio.mask.clone(),
+                model_dtype,
+            )
+            .map_err(|e| anyhow::anyhow!("BackendError: {:?}", e))?;
+            let encoder_term = encoder_model
                 .term()
-                .ok_or_else(|| anyhow::anyhow!("failed to build vision model term"))?;
-            let results = interpreter.run(vision_term.term, vec![image_tensor])?;
-            let visual_embeddings = results
+                .ok_or_else(|| anyhow::anyhow!("failed to build multimodal encoder term"))?;
+            let results = interpreter.run(encoder_term.term, vec![audio_tensor, mask_tensor])?;
+            results
                 .first()
                 .cloned()
-                .ok_or_else(|| anyhow::anyhow!("Vision model returned no outputs"))?;
-            let flattened = to_f32_vec(&interpreter.backend, &visual_embeddings)?;
-            save_cached_embeddings(&cache_path, &flattened)?;
-            eprintln!("Saved image features to: {}", cache_path.display());
-            visual_embeddings
+                .ok_or_else(|| anyhow::anyhow!("multimodal encoder returned no outputs"))?
         };
-
         multimodal_ctx = Some(MultimodalRuntime {
             hidden_size: mm.hidden_size,
-            image_token_index: mm.image_token_index,
-            visual_embeddings,
+            placeholder_token_index: mm.image_token_index,
+            modality_embeddings,
         });
     }
 
-    let use_kv_cache = args.kv_cache || use_image;
+    let use_kv_cache = args.kv_cache || modality.is_some();
     if args.tool_use {
         let (first_text, first_tokens, first_elapsed_pp, first_elapsed_gen) = generate_stream(
             model.as_ref(),
@@ -690,8 +760,8 @@ fn to_f32_vec<B: interpreter::Backend>(
 
 struct MultimodalRuntime<B: interpreter::Backend> {
     hidden_size: usize,
-    image_token_index: usize,
-    visual_embeddings: interpreter::Value<B>,
+    placeholder_token_index: usize,
+    modality_embeddings: interpreter::Value<B>,
 }
 
 enum DecodeInputs<'a, B: interpreter::Backend> {
@@ -701,9 +771,9 @@ enum DecodeInputs<'a, B: interpreter::Backend> {
     Multimodal {
         input_tokens: &'a [u32],
         hidden_size: usize,
-        image_token_index: usize,
-        visual_embeddings: &'a interpreter::Value<B>,
-        use_image_embeddings: bool,
+        placeholder_token_index: usize,
+        modality_embeddings: &'a interpreter::Value<B>,
+        use_modality_embeddings: bool,
     },
 }
 
@@ -726,7 +796,7 @@ fn generate_stream<B: interpreter::Backend>(
 ) -> Result<(String, usize, std::time::Duration, std::time::Duration)> {
     let eos_token_ids = model.config().get_eos_token_ids();
     let mut state_cache = empty_state_cache(&interpreter.backend, model)?;
-    let mut use_image_embeddings = config.multimodal_ctx.is_some();
+    let mut use_modality_embeddings = config.multimodal_ctx.is_some();
     let mut output = String::new();
     let mut generated_tokens = 0;
     let mut start_gen = std::time::Instant::now();
@@ -737,9 +807,9 @@ fn generate_stream<B: interpreter::Backend>(
             DecodeInputs::Multimodal {
                 input_tokens: &token_ids,
                 hidden_size: ctx.hidden_size,
-                image_token_index: ctx.image_token_index,
-                visual_embeddings: &ctx.visual_embeddings,
-                use_image_embeddings,
+                placeholder_token_index: ctx.placeholder_token_index,
+                modality_embeddings: &ctx.modality_embeddings,
+                use_modality_embeddings,
             }
         } else {
             DecodeInputs::Text {
@@ -769,7 +839,7 @@ fn generate_stream<B: interpreter::Backend>(
             token_ids.push(next_token_id);
         }
         if config.multimodal_ctx.is_some() && config.use_kv_cache {
-            use_image_embeddings = false;
+            use_modality_embeddings = false;
         }
         let decoded_token = tokenizer.decode(&[next_token_id], true).unwrap();
         output.push_str(&decoded_token);
@@ -814,35 +884,35 @@ fn run_interpreter<B: interpreter::Backend>(
         DecodeInputs::Multimodal {
             input_tokens,
             hidden_size,
-            image_token_index,
-            visual_embeddings,
-            use_image_embeddings,
+            placeholder_token_index,
+            modality_embeddings,
+            use_modality_embeddings,
         } => {
             input_seq_len = input_tokens.len();
-            let empty_image_embeddings = interpreter::float_tensor(
+            let empty_modality_embeddings = interpreter::float_tensor(
                 &interpreter.backend,
                 Shape(vec![1, 0, hidden_size]),
                 Vec::<f32>::new(),
                 model.dtype(),
             )
-            .map_err(|err| anyhow::anyhow!("empty image tensor error: {:?}", err))?;
+            .map_err(|err| anyhow::anyhow!("empty modality tensor error: {:?}", err))?;
 
-            let (text_before_tokens, text_after_tokens) = if use_image_embeddings {
-                split_image_tokens(input_tokens, image_token_index)?
+            let (text_before_tokens, text_after_tokens) = if use_modality_embeddings {
+                split_placeholder_tokens(input_tokens, placeholder_token_index)?
             } else {
                 (&[][..], input_tokens)
             };
 
             let text_before = token_tensor(interpreter, "text_before", text_before_tokens)?;
             let text_after = token_tensor(interpreter, "text_after", text_after_tokens)?;
-            let image_embeddings = if use_image_embeddings {
-                visual_embeddings.clone()
+            let modality_embeddings = if use_modality_embeddings {
+                modality_embeddings.clone()
             } else {
-                empty_image_embeddings
+                empty_modality_embeddings
             };
 
             inputs.push(text_before);
-            inputs.push(image_embeddings);
+            inputs.push(modality_embeddings);
             inputs.push(text_after);
         }
     }

@@ -274,28 +274,28 @@ pub fn interpolate_multimodal_prompt(
     )))
 }
 
-/// Split a multimodal token sequence into the text before and after the image-token span.
-pub fn split_image_tokens(
+/// Split a multimodal token sequence into the text before and after the placeholder-token span.
+pub fn split_placeholder_tokens(
     input_tokens: &[u32],
-    image_token_index: usize,
+    mm_token_index: usize,
 ) -> Result<(&[u32], &[u32])> {
-    let image_token = image_token_index as u32;
+    let mm_token = mm_token_index as u32;
     let first_image_token_index = input_tokens
         .iter()
-        .position(|&token| token == image_token)
+        .position(|&token| token == mm_token)
         .ok_or_else(|| {
             LLMError::InvalidModelConfig(format!(
-                "multimodal prompt is missing image token {image_token_index}"
+                "multimodal prompt is missing image or audio token {mm_token_index}"
             ))
         })?;
-    let last_image_token_index = input_tokens
+    let last_mm_token_index = input_tokens
         .iter()
-        .rposition(|&token| token == image_token)
-        .expect("first image token implies last image token");
+        .rposition(|&token| token == mm_token)
+        .expect("mm token not found when searching for last occurence");
 
     Ok((
         &input_tokens[..first_image_token_index],
-        &input_tokens[last_image_token_index + 1..],
+        &input_tokens[last_mm_token_index + 1..],
     ))
 }
 

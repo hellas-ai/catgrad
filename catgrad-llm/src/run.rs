@@ -410,7 +410,7 @@ impl ModelRunner {
         let mut inputs = Vec::with_capacity(self.state_cache.len() + 5);
         if let Some(multimodal) = self.multimodal.as_mut() {
             let (text_before_tokens, text_after_tokens) = if multimodal.use_image_embeddings {
-                split_image_tokens(tokens, multimodal.image_token_index)?
+                split_placeholder_tokens(tokens, multimodal.image_token_index)?
             } else {
                 (&[][..], tokens)
             };
