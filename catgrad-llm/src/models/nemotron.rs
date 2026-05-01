@@ -29,6 +29,16 @@ struct NemotronConfig {
     chunk_size: usize,
     time_step_min: f32,
     use_bias: bool,
+    mlp_hidden_act: String,
+    n_routed_experts: usize,
+    moe_intermediate_size: usize,
+    moe_shared_expert_intermediate_size: usize,
+    moe_latent_size: Option<usize>,
+    num_experts_per_tok: usize,
+    routed_scaling_factor: f32,
+    n_group: usize,
+    topk_group: usize,
+    norm_topk_prob: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -36,6 +46,7 @@ enum LayerKind {
     Mamba,
     Attention,
     Mlp,
+    Moe,
 }
 
 // Move to helpers
@@ -88,6 +99,10 @@ impl NemotronConfig {
 
     fn mamba_group_size(&self) -> usize {
         self.mamba_intermediate_size() / self.n_groups
+    }
+
+    fn moe_input_size(&self) -> usize {
+        self.moe_latent_size.unwrap_or(self.hidden_size)
     }
 }
 
@@ -186,6 +201,7 @@ impl NemotronModel {
                 'M' => LayerKind::Mamba,
                 '*' => LayerKind::Attention,
                 '-' => LayerKind::Mlp,
+                'E' => LayerKind::Moe,
                 _ => {
                     return Err(crate::LLMError::InvalidModelConfig(format!(
                         "nemotron_h hybrid_override_pattern contained unsupported character {ch:?}"
@@ -212,6 +228,10 @@ impl NemotronModel {
                     next_mamba_id += 1;
                 }
                 LayerKind::Mlp => {
+                    layer_to_cache_id.push(None);
+                    layer_to_mamba_id.push(None);
+                }
+                LayerKind::Moe => {
                     layer_to_cache_id.push(None);
                     layer_to_mamba_id.push(None);
                 }
@@ -384,10 +404,20 @@ impl NemotronModel {
     }
 
     fn mlp(&self, builder: &Builder, p: Path, x: Var) -> Var {
+        self.mlp_with_intermediate(builder, p, self.config.intermediate_size, x)
+    }
+
+    fn mlp_with_intermediate(
+        &self,
+        builder: &Builder,
+        p: Path,
+        intermediate_size: usize,
+        x: Var,
+    ) -> Var {
         let x = linear_b(
             builder,
             self.config.hidden_size,
-            self.config.intermediate_size,
+            intermediate_size,
             self.config.mlp_bias,
             p.extend(["up_proj"]).unwrap(),
             x,
@@ -395,12 +425,167 @@ impl NemotronModel {
         let x = relu(builder, x);
         linear_b(
             builder,
-            self.config.intermediate_size,
+            intermediate_size,
             self.config.hidden_size,
             self.config.mlp_bias,
             p.extend(["down_proj"]).unwrap(),
             x,
         )
+    }
+
+    fn moe_topk_router(&self, builder: &Builder, p: Path, x: Var) -> (Var, Var) {
+        let [batch_size, seq_len, _] = unpack::<3>(builder, shape(builder, x.clone()));
+        let num_tokens = batch_size * seq_len;
+        let x_dtype = dtype(builder, x.clone());
+
+        let routed = linear_no_bias(
+            builder,
+            self.config.hidden_size,
+            self.config.n_routed_experts,
+            p.clone(),
+            x,
+        );
+        let routed = cast(builder, routed, Dtype::F32);
+        let routed = sigmoid(builder, routed);
+        let routed_sh = shape!(builder, num_tokens, self.config.n_routed_experts);
+        let routed = reshape(builder, routed_sh.clone(), routed);
+        let bias = param(builder, &p.extend(["e_score_correction_bias"]).unwrap());
+        let bias = cast(builder, bias, Dtype::F32);
+        let bias = broadcast(builder, routed_sh.clone(), bias);
+        let scores_for_choice = routed + bias;
+
+        let experts_per_group = self.config.n_routed_experts / self.config.n_group;
+        let sh = shape!(builder, num_tokens, self.config.n_group, experts_per_group);
+        let group_scores = reshape(builder, sh, scores_for_choice.clone());
+        let group_scores = topk(builder, 2, group_scores).0;
+        let group_scores = sum(builder, group_scores);
+        let sh = shape!(builder, num_tokens, self.config.n_group);
+        let group_scores = reshape(builder, sh, group_scores);
+
+        let group_idx = topk(builder, self.config.topk_group, group_scores).1;
+        let group_idx = unsqueeze::<2, 3>(builder, 2, group_idx);
+
+        let cols = arange(builder, self.config.n_group);
+        let sh = shape!(
+            builder,
+            num_tokens,
+            self.config.topk_group,
+            self.config.n_group
+        );
+        let cols = broadcast(builder, sh.clone(), cols);
+        let group_idx = broadcast(builder, sh, group_idx);
+
+        let matches = eq(builder, cols, group_idx);
+        let matches = transpose(builder, 1, 2, matches);
+        let mask = sum(builder, matches);
+
+        let sh = shape!(builder, num_tokens, self.config.n_group, experts_per_group);
+        let mask = broadcast(builder, sh, mask);
+        let mask = reshape(builder, routed_sh, mask);
+        let mask = cast(builder, mask, Dtype::F32);
+        let scores_for_choice = mask * scores_for_choice;
+
+        let (values, indices) = topk(builder, self.config.num_experts_per_tok, scores_for_choice);
+        let sh = shape!(builder, num_tokens, self.config.num_experts_per_tok);
+        let indices = reshape(builder, sh.clone(), indices);
+        let mut values = reshape(builder, sh.clone(), values);
+
+        if self.config.norm_topk_prob {
+            let sv = sum(builder, values.clone());
+            let sv_sh = shape(builder, sv.clone());
+            let eps = constant(builder, 1e-20, &sv_sh);
+            let sv = sv + eps;
+            let sv = broadcast(builder, sh, sv);
+            values = values / sv;
+        }
+
+        let scale_sh = shape(builder, values.clone());
+        let scale = constant(builder, self.config.routed_scaling_factor, &scale_sh);
+        values = values * scale;
+
+        (cast(builder, values, x_dtype), indices)
+    }
+
+    fn moe(&self, builder: &Builder, p: Path, x: Var) -> Var {
+        let residual = x.clone();
+        let [batch_size, seq_len, _] = unpack::<3>(builder, shape(builder, x.clone()));
+        let num_tokens = batch_size.clone() * seq_len.clone();
+        let input_dim = self.config.moe_input_size();
+        let mut routed_input = reshape(
+            builder,
+            shape!(builder, num_tokens, 1, self.config.hidden_size),
+            x.clone(),
+        );
+
+        let (values, indices) = self.moe_topk_router(builder, p.extend(["gate"]).unwrap(), x);
+
+        if self.config.moe_latent_size.is_some() {
+            routed_input = linear_b(
+                builder,
+                self.config.hidden_size,
+                input_dim,
+                self.config.mlp_bias,
+                p.extend(["fc1_latent_proj"]).unwrap(),
+                routed_input,
+            );
+        }
+
+        let up_proj = param(
+            builder,
+            &p.extend(["experts", "up_proj", "weight"]).unwrap(),
+        );
+        let down_proj = param(
+            builder,
+            &p.extend(["experts", "down_proj", "weight"]).unwrap(),
+        );
+        let sumk_shape = shape!(builder, num_tokens, 1, input_dim);
+        let mut sumk = constant(builder, 0.0, &sumk_shape);
+        sumk = cast(builder, sumk, dtype(builder, routed_input.clone()));
+
+        for i in 0..self.config.num_experts_per_tok {
+            let idx = get(builder, 1, i, indices.clone());
+            let idx = squeeze::<2, 1>(builder, 1, idx);
+            let val = get(builder, 1, i, values.clone());
+
+            let up = index(builder, 0, idx.clone(), up_proj.clone());
+            let up = transpose(builder, 1, 2, up);
+            let down = index(builder, 0, idx, down_proj.clone());
+            let down = transpose(builder, 1, 2, down);
+
+            let x = matmul(builder, routed_input.clone(), up);
+            let x = relu(builder, x);
+            let x = matmul(builder, x, down);
+
+            let weight = unsqueeze::<2, 3>(builder, 2, val);
+            let weight = broadcast(builder, shape(builder, x.clone()), weight);
+            sumk = sumk + x * weight;
+        }
+
+        let mut x = if self.config.moe_latent_size.is_some() {
+            linear_b(
+                builder,
+                input_dim,
+                self.config.hidden_size,
+                self.config.mlp_bias,
+                p.extend(["fc2_latent_proj"]).unwrap(),
+                sumk,
+            )
+        } else {
+            sumk
+        };
+
+        x = reshape(
+            builder,
+            shape!(builder, batch_size, seq_len, self.config.hidden_size),
+            x,
+        );
+        let shared = self.mlp_with_intermediate(
+            builder,
+            p.extend(["shared_experts"]).unwrap(),
+            self.config.moe_shared_expert_intermediate_size,
+            residual,
+        );
+        x + shared
     }
 
     fn mamba(
@@ -797,6 +982,7 @@ impl NemotronModel {
                 )
             }
             LayerKind::Mlp => self.mlp(builder, p.extend(["mixer"]).unwrap(), x),
+            LayerKind::Moe => self.moe(builder, p.extend(["mixer"]).unwrap(), x),
             LayerKind::Mamba => self.mamba(
                 builder,
                 layer_id,
