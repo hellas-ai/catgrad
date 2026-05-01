@@ -370,7 +370,7 @@ pub fn get_model(
                 Box::new(models::deepseek::DeepSeekModel::new(config_json, dtype)?)
             }
             "GptOssForCausalLM" => Box::new(models::gpt_oss::GPTOssModel::new(config_json, dtype)?),
-            "Lfm2ForCausalLM" => Box::new(models::lfm2::Lfm2Model::new(
+            "Lfm2ForCausalLM" | "Lfm2MoeForCausalLM" => Box::new(models::lfm2::Lfm2Model::new(
                 "model",
                 config_json,
                 None,

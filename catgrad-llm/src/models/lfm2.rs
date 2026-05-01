@@ -35,6 +35,13 @@ struct Lfm2Config {
     eos_token_id: Option<EosTokenId>,
     vocab_size: usize,
     layer_types: Vec<String>,
+    num_dense_layers: usize,
+    num_experts: usize,
+    moe_intermediate_size: usize,
+    num_experts_per_tok: usize,
+    use_expert_bias: bool,
+    routed_scaling_factor: f32,
+    norm_topk_prob: bool,
 }
 
 impl Lfm2Config {
@@ -48,6 +55,10 @@ impl Lfm2Config {
         self.full_attn_idxs.contains(&layer_id)
             || (self.layer_types.len() == self.num_hidden_layers
                 && self.layer_types[layer_id] == "full_attention")
+    }
+
+    fn is_moe_ffn_layer(&self, layer_id: usize) -> bool {
+        self.num_experts > 0 && layer_id >= self.num_dense_layers
     }
 }
 
@@ -873,6 +884,118 @@ impl Lfm2Model {
         )
     }
 
+    fn moe(&self, builder: &Builder, p: Path, x: Var) -> Var {
+        let [batch_size, seq_len, hidden_size] = unpack::<3>(builder, shape(builder, x.clone()));
+        let num_tokens = batch_size.clone() * seq_len.clone();
+        let x_dtype = dtype(builder, x.clone());
+
+        let routed = linear_no_bias(
+            builder,
+            self.config.hidden_size,
+            self.config.num_experts,
+            p.extend(["gate"]).unwrap(),
+            x.clone(),
+        );
+        let routed = cast(builder, routed, Dtype::F32);
+        let routed = sigmoid(builder, routed);
+        let mut routing_weights = reshape(
+            builder,
+            shape!(builder, num_tokens, self.config.num_experts),
+            routed,
+        );
+        let selected_experts = if self.config.use_expert_bias {
+            let expert_bias = param(builder, &p.extend(["expert_bias"]).unwrap());
+            let expert_bias = cast(builder, expert_bias, Dtype::F32);
+            let expert_bias = broadcast(
+                builder,
+                shape(builder, routing_weights.clone()),
+                expert_bias,
+            );
+            let scores_for_routing = routing_weights.clone() + expert_bias;
+            let (values, indices) =
+                topk(builder, self.config.num_experts_per_tok, scores_for_routing);
+            let _ = values;
+            let mut gathered_weights = constant(
+                builder,
+                0.0,
+                &shape!(builder, num_tokens, self.config.num_experts_per_tok),
+            );
+            gathered_weights = cast(builder, gathered_weights, Dtype::F32);
+            for expert_id in 0..self.config.num_experts {
+                let expert = lit(builder, expert_id as u32);
+                let expert = broadcast(builder, shape(builder, indices.clone()), expert);
+                let matches = eq(builder, indices.clone(), expert);
+                let matches = cast(builder, matches, Dtype::F32);
+                let score = slice(builder, 1, expert_id, 1, routing_weights.clone());
+                let score = broadcast(builder, shape(builder, gathered_weights.clone()), score);
+                gathered_weights = gathered_weights + matches * score;
+            }
+            routing_weights = gathered_weights;
+            indices
+        } else {
+            let (weights, indices) =
+                topk(builder, self.config.num_experts_per_tok, routing_weights);
+            routing_weights = weights;
+            indices
+        };
+
+        if self.config.norm_topk_prob {
+            let sum_weights = sum(builder, routing_weights.clone());
+            let eps = constant(builder, 1e-6, &shape(builder, sum_weights.clone()));
+            let sum_weights = sum_weights + eps;
+            let sum_weights = broadcast(
+                builder,
+                shape(builder, routing_weights.clone()),
+                sum_weights,
+            );
+            routing_weights = routing_weights / sum_weights;
+        }
+
+        let scale = constant(
+            builder,
+            self.config.routed_scaling_factor,
+            &shape(builder, routing_weights.clone()),
+        );
+        routing_weights = cast(builder, routing_weights * scale, x_dtype.clone());
+
+        let fullx_shape = shape!(builder, num_tokens, 1, hidden_size);
+        let fullx = reshape(builder, fullx_shape.clone(), x);
+        let w1_all = param(builder, &p.extend(["experts", "w1", "weight"]).unwrap());
+        let w2_all = param(builder, &p.extend(["experts", "w2", "weight"]).unwrap());
+        let w3_all = param(builder, &p.extend(["experts", "w3", "weight"]).unwrap());
+
+        let mut sumk = constant(builder, 0.0, &fullx_shape);
+        sumk = cast(builder, sumk, x_dtype);
+
+        for i in 0..self.config.num_experts_per_tok {
+            let idx = get(builder, 1, i, selected_experts.clone());
+            let idx = squeeze::<2, 1>(builder, 1, idx);
+            let weight = get(builder, 1, i, routing_weights.clone());
+
+            let w1 = index(builder, 0, idx.clone(), w1_all.clone());
+            let w1 = transpose(builder, 1, 2, w1);
+            let w2 = index(builder, 0, idx.clone(), w2_all.clone());
+            let w2 = transpose(builder, 1, 2, w2);
+            let w3 = index(builder, 0, idx, w3_all.clone());
+            let w3 = transpose(builder, 1, 2, w3);
+
+            let gate = matmul(builder, fullx.clone(), w1);
+            let up = matmul(builder, fullx.clone(), w3);
+            let x = silu(builder, gate) * up;
+            let x = matmul(builder, x, w2);
+
+            let weight = unsqueeze::<2, 3>(builder, 2, weight);
+            let weight = broadcast(builder, shape(builder, x.clone()), weight);
+            sumk = sumk + x * weight;
+        }
+
+        reshape(
+            builder,
+            shape!(builder, batch_size, seq_len, self.config.hidden_size),
+            sumk,
+        )
+    }
+
     fn layer(
         &self,
         builder: &Builder,
@@ -921,7 +1044,11 @@ impl Lfm2Model {
             p.extend(["ffn_norm"]).unwrap(),
             x,
         );
-        let x = self.feed_forward(builder, p.extend(["feed_forward"]).unwrap(), x);
+        let x = if self.config.is_moe_ffn_layer(layer_id) {
+            self.moe(builder, p.extend(["feed_forward"]).unwrap(), x)
+        } else {
+            self.feed_forward(builder, p.extend(["feed_forward"]).unwrap(), x)
+        };
         x + res
     }
 
