@@ -337,14 +337,8 @@ fn run_with_backend<B: interpreter::Backend>(
     let model_dtype = args.dtype;
 
     let start_load = std::time::Instant::now();
-    let (
-        mut parameter_values,
-        mut parameter_types,
-        config_json,
-        tokenizer,
-        tokenizer_config,
-        total_params,
-    ) = load_model(&model_name, &args.revision, &backend, model_dtype)?;
+    let (parameter_values, parameter_types, config_json, tokenizer, tokenizer_config, total_params) =
+        load_model(&model_name, &args.revision, &backend, model_dtype)?;
     let elapsed_load = start_load.elapsed();
 
     eprintln!(
@@ -472,12 +466,6 @@ fn run_with_backend<B: interpreter::Backend>(
         max_sequence_length,
         runtime_context.as_ref(),
         model_dtype,
-    )?;
-    post_process_model_weights(
-        model.as_ref(),
-        &backend,
-        &mut parameter_values,
-        &mut parameter_types,
     )?;
 
     let mm_metadata = if modality.is_some() {

@@ -110,12 +110,6 @@ impl LLMModel for DeepSeekModel {
     fn dtype(&self) -> Dtype {
         self.dtype
     }
-
-    fn weight_post_process(&self) -> WeightPostProcess {
-        WeightPostProcess::ConcatMoeExperts {
-            num_local_experts: self.config.num_local_experts,
-        }
-    }
 }
 
 impl DeepSeekModel {

@@ -7,8 +7,7 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use tokenizers::tokenizer::Tokenizer;
 
-use crate::config::LLMConfig;
-use crate::helpers::{LLMModel, WeightPostProcess};
+use crate::helpers::LLMModel;
 use crate::models;
 use crate::{LLMError, Result};
 
@@ -371,7 +370,7 @@ pub fn get_model(
                 Box::new(models::deepseek::DeepSeekModel::new(config_json, dtype)?)
             }
             "GptOssForCausalLM" => Box::new(models::gpt_oss::GPTOssModel::new(config_json, dtype)?),
-            "Lfm2ForCausalLM" => Box::new(models::lfm2::Lfm2Model::new(
+            "Lfm2ForCausalLM" | "Lfm2MoeForCausalLM" => Box::new(models::lfm2::Lfm2Model::new(
                 "model",
                 config_json,
                 None,
@@ -401,150 +400,183 @@ use catgrad::interpreter;
 use catgrad::prelude::path;
 use catgrad::typecheck;
 
-// Concatenates MoE expert weights from separate tensors into single tensors per layer
-// to avoid the need for dynamic parameter names
-pub(crate) fn concat_moe_experts<B: interpreter::Backend>(
-    config: &dyn LLMConfig,
-    num_local_experts: usize,
-    backend: &B,
-    parameter_values: &mut interpreter::Parameters<B>,
-    parameter_types: &mut typecheck::Parameters,
-) -> Result<()> {
-    use catgrad::typecheck::*;
+fn decode_f32_into(tensor_data: &[u8], dst: &mut [f32]) {
+    assert_eq!(tensor_data.len() % 4, 0);
+    assert_eq!(dst.len(), tensor_data.len() / 4);
 
-    let proj_names = ["down_proj", "gate_proj", "up_proj"];
+    dst.par_iter_mut()
+        .zip(tensor_data.par_chunks_exact(4))
+        .for_each(|(out, bytes)| {
+            *out = f32::from_le_bytes(bytes.try_into().unwrap());
+        });
+}
 
-    for layer_idx in 0..config.num_hidden_layers() {
-        for proj_name in &proj_names {
-            // Collect all expert tensors for this layer and projection
-            let mut expert_tensors = Vec::new();
-            let mut expert_keys = Vec::new();
+fn decode_bf16_to_f32_into(tensor_data: &[u8], dst: &mut [f32]) {
+    assert_eq!(tensor_data.len() % 2, 0);
+    assert_eq!(dst.len(), tensor_data.len() / 2);
 
-            for expert_idx in 0..num_local_experts {
-                let key_str = format!(
-                    "model.layers.{}.mlp.experts.{}.{}.weight",
-                    layer_idx, expert_idx, proj_name
-                );
-                let key = path(key_str.split(".").collect()).expect("invalid param path");
+    dst.par_iter_mut()
+        .zip(tensor_data.par_chunks_exact(2))
+        .for_each(|(out, bytes)| {
+            *out = half::bf16::from_le_bytes(bytes.try_into().unwrap()).to_f32();
+        });
+}
 
-                // Check if this expert exists in the parameter maps
-                if let Some(interpreter::Value::Tensor(tensor)) = parameter_values.0.get(&key) {
-                    expert_tensors.push(tensor.clone());
-                    expert_keys.push(key);
-                }
-            }
+fn decode_f32_to_f16_into(tensor_data: &[u8], dst: &mut [half::f16]) {
+    assert_eq!(tensor_data.len() % 4, 0);
+    assert_eq!(dst.len(), tensor_data.len() / 4);
 
-            if expert_tensors.is_empty() {
-                continue;
-            }
+    dst.par_iter_mut()
+        .zip(tensor_data.par_chunks_exact(4))
+        .for_each(|(out, bytes)| {
+            *out = half::f16::from_f32(f32::from_le_bytes(bytes.try_into().unwrap()));
+        });
+}
 
-            if expert_tensors.len() != num_local_experts {
-                return Err(LLMError::InvalidModelConfig(format!(
-                    "Expected {} experts for layer {} {}, found {}",
-                    num_local_experts,
-                    layer_idx,
-                    proj_name,
-                    expert_tensors.len()
-                )));
-            }
+fn decode_bf16_to_f16_into(tensor_data: &[u8], dst: &mut [half::f16]) {
+    assert_eq!(tensor_data.len() % 2, 0);
+    assert_eq!(dst.len(), tensor_data.len() / 2);
 
-            let original_shape = expert_tensors[0].shape();
-            let original_dims = original_shape.0.clone();
+    dst.par_iter_mut()
+        .zip(tensor_data.par_chunks_exact(2))
+        .for_each(|(out, bytes)| {
+            *out =
+                half::f16::from_f32(half::bf16::from_le_bytes(bytes.try_into().unwrap()).to_f32());
+        });
+}
 
-            let mut new_shape_dims = vec![num_local_experts];
-            new_shape_dims.extend(original_dims.clone());
+fn decode_f32_to_bf16_into(tensor_data: &[u8], dst: &mut [half::bf16]) {
+    assert_eq!(tensor_data.len() % 4, 0);
+    assert_eq!(dst.len(), tensor_data.len() / 4);
 
-            let mut reshaped_tensors = Vec::new();
-            for tensor in expert_tensors {
-                let mut reshape_dims = vec![1];
-                reshape_dims.extend(original_dims.clone());
-                let reshaped = backend.reshape(tensor, interpreter::Shape(reshape_dims));
-                reshaped_tensors.push(reshaped);
-            }
+    dst.par_iter_mut()
+        .zip(tensor_data.par_chunks_exact(4))
+        .for_each(|(out, bytes)| {
+            *out = half::bf16::from_f32(f32::from_le_bytes(bytes.try_into().unwrap()));
+        });
+}
 
-            // Concatenate all reshaped tensors along dimension 0
-            // TODO: this is naive and slow. Either preallocate or fuse this with the safetensors loading code.
-            let mut concatenated = reshaped_tensors[0].clone();
-            for tensor in &reshaped_tensors[1..] {
-                concatenated = backend.concat(concatenated, tensor.clone(), 0);
-            }
+fn decode_bf16_into(tensor_data: &[u8], dst: &mut [half::bf16]) {
+    assert_eq!(tensor_data.len() % 2, 0);
+    assert_eq!(dst.len(), tensor_data.len() / 2);
 
-            let new_key_str = format!(
-                "model.layers.{}.mlp.experts.{}.weight",
-                layer_idx, proj_name
-            );
-            let new_key = path(new_key_str.split(".").collect()).expect("invalid param path");
-            let concatenated_dtype = concatenated.dtype();
+    dst.par_iter_mut()
+        .zip(tensor_data.par_chunks_exact(2))
+        .for_each(|(out, bytes)| {
+            *out = half::bf16::from_le_bytes(bytes.try_into().unwrap());
+        });
+}
 
-            println!("concatenated dtype: {:?}", concatenated_dtype);
-            parameter_values
-                .0
-                .insert(new_key.clone(), interpreter::Value::Tensor(concatenated));
+#[derive(Debug)]
+struct PendingMoeTensor<T> {
+    data: Vec<T>,
+    expert_shape: Vec<usize>,
+    loaded_experts: usize,
+}
 
-            let vne: Vec<NatExpr> = new_shape_dims.into_iter().map(NatExpr::Constant).collect();
-            let tensor_type = typecheck::Type::Tensor(TypeExpr::NdArrayType(NdArrayType {
-                dtype: DtypeExpr::Constant(concatenated_dtype),
-                shape: ShapeExpr::Shape(vne),
-            }));
-            parameter_types.0.insert(new_key, tensor_type);
+fn get_num_experts(config_json: &serde_json::Value) -> Option<usize> {
+    ["num_experts", "n_routed_experts", "num_local_experts"]
+        .into_iter()
+        .find_map(|key| {
+            config_json
+                .get(key)
+                .and_then(serde_json::Value::as_u64)
+                .filter(|count| *count > 0)
+                .map(|count| count as usize)
+        })
+}
 
-            // Remove original experts
-            for key in expert_keys {
-                parameter_values.0.remove(&key);
-                parameter_types.0.remove(&key);
-            }
-        }
+fn get_packed_moe_key(name: &str) -> Result<Option<(catgrad::prelude::Path, usize)>> {
+    let components: Vec<&str> = name.split('.').collect();
+    let Some(layer_idx) = components
+        .iter()
+        .position(|component| *component == "layers")
+    else {
+        return Ok(None);
+    };
+    if components
+        .get(layer_idx + 1)
+        .and_then(|component| component.parse::<usize>().ok())
+        .is_none()
+    {
+        return Ok(None);
     }
 
+    let Some(experts_rel_idx) = components[layer_idx + 2..]
+        .iter()
+        .position(|component| *component == "experts")
+    else {
+        return Ok(None);
+    };
+    let experts_idx = layer_idx + 2 + experts_rel_idx;
+    let Some(expert_idx) = components
+        .get(experts_idx + 1)
+        .and_then(|component| component.parse::<usize>().ok())
+    else {
+        return Ok(None);
+    };
+
+    let mut packed_components = Vec::with_capacity(components.len() - 1);
+    packed_components.extend_from_slice(&components[..experts_idx + 1]);
+    packed_components.extend_from_slice(&components[experts_idx + 2..]);
+    let key = path(packed_components).map_err(|err| {
+        LLMError::InvalidModelConfig(format!("invalid packed MoE param path {name}: {}", err.0))
+    })?;
+    Ok(Some((key, expert_idx)))
+}
+
+fn insert_tensor_type(
+    key: catgrad::prelude::Path,
+    shape: Vec<usize>,
+    dtype: Dtype,
+    type_map: &mut BTreeMap<catgrad::prelude::Path, typecheck::Type>,
+) {
+    use catgrad::typecheck::*;
+
+    let tensor_type = Type::Tensor(TypeExpr::NdArrayType(NdArrayType {
+        dtype: DtypeExpr::Constant(dtype),
+        shape: ShapeExpr::Shape(shape.into_iter().map(NatExpr::Constant).collect()),
+    }));
+    type_map.insert(key, tensor_type);
+}
+
+fn insert_tensor_value<B: interpreter::Backend, T: interpreter::IntoTagged<B, 1>>(
+    backend: &B,
+    key: catgrad::prelude::Path,
+    shape: Vec<usize>,
+    dtype: Dtype,
+    data: Vec<T>,
+    data_map: &mut BTreeMap<catgrad::prelude::Path, interpreter::Value<B>>,
+    type_map: &mut BTreeMap<catgrad::prelude::Path, typecheck::Type>,
+) -> Result<()> {
+    let tensor =
+        interpreter::tensor(backend, interpreter::Shape(shape.clone()), data).map_err(|err| {
+            LLMError::InvalidModelConfig(format!("failed to create tensor {key}: {err:?}"))
+        })?;
+    data_map.insert(key.clone(), tensor);
+    insert_tensor_type(key, shape, dtype, type_map);
     Ok(())
 }
 
-pub fn post_process_weights<B: interpreter::Backend>(
-    post_process: WeightPostProcess,
-    config: &dyn LLMConfig,
-    backend: &B,
-    parameter_values: &mut interpreter::Parameters<B>,
-    parameter_types: &mut typecheck::Parameters,
-) -> Result<()> {
-    match post_process {
-        WeightPostProcess::None => Ok(()),
-        WeightPostProcess::ConcatMoeExperts { num_local_experts } => concat_moe_experts(
-            config,
-            num_local_experts,
-            backend,
-            parameter_values,
-            parameter_types,
-        ),
-    }
-}
-
-pub fn post_process_model_weights<B: interpreter::Backend>(
-    model: &dyn LLMModel,
-    backend: &B,
-    parameter_values: &mut interpreter::Parameters<B>,
-    parameter_types: &mut typecheck::Parameters,
-) -> Result<()> {
-    post_process_weights(
-        model.weight_post_process(),
-        model.config(),
-        backend,
-        parameter_values,
-        parameter_types,
-    )
-}
-
-pub fn load_model_weights<B: interpreter::Backend>(
+fn load_model_weights_for_dtype<B, T, DecodeF32, DecodeBF16>(
     model_paths: Vec<PathBuf>,
     backend: &B,
     dtype: Dtype,
-) -> Result<(interpreter::Parameters<B>, typecheck::Parameters, usize)> {
-    if !matches!(dtype, Dtype::F32 | Dtype::F16 | Dtype::BF16) {
-        return Err(LLMError::UnsupportedDtype(format!("{dtype:?}")));
-    }
-
-    // Read each tensor
+    expert_count: Option<usize>,
+    zero: T,
+    decode_f32: DecodeF32,
+    decode_bf16: DecodeBF16,
+) -> Result<(interpreter::Parameters<B>, typecheck::Parameters, usize)>
+where
+    B: interpreter::Backend,
+    T: interpreter::IntoTagged<B, 1> + Clone,
+    DecodeF32: Fn(&[u8], &mut [T]),
+    DecodeBF16: Fn(&[u8], &mut [T]),
+{
     let mut type_map = BTreeMap::new();
     let mut data_map = BTreeMap::new();
+    let mut pending_moe_tensors: BTreeMap<catgrad::prelude::Path, PendingMoeTensor<T>> =
+        BTreeMap::new();
     let mut total_params = 0;
 
     for file_path in model_paths {
@@ -555,89 +587,128 @@ pub fn load_model_weights<B: interpreter::Backend>(
         for (name, view) in tensors.tensors() {
             let shape = view.shape().to_vec();
             let tensor_data = view.data();
+            let elements = match view.dtype() {
+                safetensors::Dtype::F32 => tensor_data.len() / 4,
+                safetensors::Dtype::BF16 => tensor_data.len() / 2,
+                _ => {
+                    return Err(LLMError::UnsupportedDtype(format!("{:?}", view.dtype())));
+                }
+            };
 
-            use catgrad::typecheck::*;
-            let tensor = match dtype {
-                Dtype::F32 => {
-                    let data: Vec<f32> = match view.dtype() {
-                        safetensors::Dtype::F32 => tensor_data
-                            .par_chunks_exact(4)
-                            .map(|b| f32::from_le_bytes(b.try_into().unwrap()))
-                            .collect(),
-                        safetensors::Dtype::BF16 => tensor_data
-                            .par_chunks_exact(2)
-                            .map(|b| half::bf16::from_le_bytes(b.try_into().unwrap()).to_f32())
-                            .collect(),
-                        _ => {
-                            return Err(LLMError::UnsupportedDtype(format!("{:?}", view.dtype())));
-                        }
-                    };
-                    total_params += data.len();
-                    interpreter::tensor(backend, interpreter::Shape(shape.clone()), data)
+            if let Some(num_experts) = expert_count
+                && let Some((packed_key, expert_idx)) = get_packed_moe_key(&name)?
+            {
+                let pending = pending_moe_tensors
+                    .entry(packed_key.clone())
+                    .or_insert_with(|| PendingMoeTensor {
+                        data: vec![zero; num_experts * elements],
+                        expert_shape: shape.clone(),
+                        loaded_experts: 0,
+                    });
+                let start = expert_idx * elements;
+                let end = start + elements;
+                match view.dtype() {
+                    safetensors::Dtype::F32 => {
+                        decode_f32(tensor_data, &mut pending.data[start..end])
+                    }
+                    safetensors::Dtype::BF16 => {
+                        decode_bf16(tensor_data, &mut pending.data[start..end])
+                    }
+                    _ => unreachable!(),
                 }
-                Dtype::F16 => {
-                    let data: Vec<half::f16> = match view.dtype() {
-                        safetensors::Dtype::F32 => tensor_data
-                            .par_chunks_exact(4)
-                            .map(|b| half::f16::from_f32(f32::from_le_bytes(b.try_into().unwrap())))
-                            .collect(),
-                        safetensors::Dtype::BF16 => tensor_data
-                            .par_chunks_exact(2)
-                            .map(|b| {
-                                half::f16::from_f32(
-                                    half::bf16::from_le_bytes(b.try_into().unwrap()).to_f32(),
-                                )
-                            })
-                            .collect(),
-                        _ => {
-                            return Err(LLMError::UnsupportedDtype(format!("{:?}", view.dtype())));
-                        }
-                    };
-                    total_params += data.len();
-                    interpreter::tensor(backend, interpreter::Shape(shape.clone()), data)
+                pending.loaded_experts += 1;
+                total_params += elements;
+
+                if pending.loaded_experts == num_experts {
+                    let pending = pending_moe_tensors
+                        .remove(&packed_key)
+                        .expect("completed MoE tensor missing");
+                    let mut packed_shape = vec![num_experts];
+                    packed_shape.extend(pending.expert_shape);
+                    insert_tensor_value(
+                        backend,
+                        packed_key,
+                        packed_shape,
+                        dtype,
+                        pending.data,
+                        &mut data_map,
+                        &mut type_map,
+                    )?;
                 }
-                Dtype::BF16 => {
-                    let data: Vec<half::bf16> = match view.dtype() {
-                        safetensors::Dtype::F32 => tensor_data
-                            .par_chunks_exact(4)
-                            .map(|b| {
-                                half::bf16::from_f32(f32::from_le_bytes(b.try_into().unwrap()))
-                            })
-                            .collect(),
-                        safetensors::Dtype::BF16 => tensor_data
-                            .par_chunks_exact(2)
-                            .map(|b| half::bf16::from_le_bytes(b.try_into().unwrap()))
-                            .collect(),
-                        _ => {
-                            return Err(LLMError::UnsupportedDtype(format!("{:?}", view.dtype())));
-                        }
-                    };
-                    total_params += data.len();
-                    interpreter::tensor(backend, interpreter::Shape(shape.clone()), data)
-                }
-                Dtype::U32 => unreachable!(),
+                continue;
             }
-            .map_err(|err| {
-                LLMError::InvalidModelConfig(format!("failed to create tensor {name}: {err:?}"))
-            })?;
-            let key = path(name.split(".").collect()).map_err(|err| {
+
+            let mut tensor = vec![zero; elements];
+            match view.dtype() {
+                safetensors::Dtype::F32 => decode_f32(tensor_data, &mut tensor),
+                safetensors::Dtype::BF16 => decode_bf16(tensor_data, &mut tensor),
+                _ => unreachable!(),
+            }
+            total_params += tensor.len();
+
+            let key = path(name.split('.').collect()).map_err(|err| {
                 LLMError::InvalidModelConfig(format!("invalid param path {name}: {}", err.0))
             })?;
-            data_map.insert(key.clone(), tensor);
-
-            let vne = shape.into_iter().map(NatExpr::Constant).collect();
-            let tensor_type = Type::Tensor(TypeExpr::NdArrayType(NdArrayType {
-                dtype: DtypeExpr::Constant(dtype),
-                shape: ShapeExpr::Shape(vne),
-            }));
-            type_map.insert(key, tensor_type);
+            insert_tensor_value(
+                backend,
+                key,
+                shape,
+                dtype,
+                tensor,
+                &mut data_map,
+                &mut type_map,
+            )?;
         }
     }
+
+    debug_assert!(pending_moe_tensors.is_empty());
 
     let parameter_values = interpreter::Parameters::from(data_map);
     let parameter_types = typecheck::Parameters::from(type_map);
 
     Ok((parameter_values, parameter_types, total_params))
+}
+
+pub fn load_model_weights<B: interpreter::Backend>(
+    model_paths: Vec<PathBuf>,
+    backend: &B,
+    dtype: Dtype,
+    expert_count: Option<usize>,
+) -> Result<(interpreter::Parameters<B>, typecheck::Parameters, usize)> {
+    if !matches!(dtype, Dtype::F32 | Dtype::F16 | Dtype::BF16) {
+        return Err(LLMError::UnsupportedDtype(format!("{dtype:?}")));
+    }
+
+    match dtype {
+        Dtype::F32 => load_model_weights_for_dtype(
+            model_paths,
+            backend,
+            dtype,
+            expert_count,
+            0.0f32,
+            decode_f32_into,
+            decode_bf16_to_f32_into,
+        ),
+        Dtype::F16 => load_model_weights_for_dtype(
+            model_paths,
+            backend,
+            dtype,
+            expert_count,
+            half::f16::from_f32(0.0),
+            decode_f32_to_f16_into,
+            decode_bf16_to_f16_into,
+        ),
+        Dtype::BF16 => load_model_weights_for_dtype(
+            model_paths,
+            backend,
+            dtype,
+            expert_count,
+            half::bf16::from_f32(0.0),
+            decode_f32_to_bf16_into,
+            decode_bf16_into,
+        ),
+        Dtype::U32 => unreachable!(),
+    }
 }
 
 pub fn load_model<B: interpreter::Backend>(
@@ -662,7 +733,7 @@ pub fn load_model<B: interpreter::Backend>(
         from_json_str(&std::fs::read_to_string(&tokenizer_config_path)?)?;
 
     let (parameter_values, parameter_types, total_params) =
-        load_model_weights(model_paths, backend, dtype)?;
+        load_model_weights(model_paths, backend, dtype, get_num_experts(&config_json))?;
 
     Ok((
         parameter_values,

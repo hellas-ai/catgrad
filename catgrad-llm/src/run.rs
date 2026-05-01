@@ -346,19 +346,13 @@ impl ModelRunner {
         prepared: &PreparedPrompt,
     ) -> Result<Self> {
         let backend = engine.inner.backend.clone();
-        let mut parameter_values = engine.inner.parameter_values.clone();
-        let mut parameter_types = engine.inner.parameter_types.clone();
+        let parameter_values = engine.inner.parameter_values.clone();
+        let parameter_types = engine.inner.parameter_types.clone();
         let model = get_model(
             &engine.inner.config_json,
             max_sequence_length,
             prepared.multimodal.runtime_context.as_ref(),
             engine.inner.dtype,
-        )?;
-        post_process_model_weights(
-            model.as_ref(),
-            &backend,
-            &mut parameter_values,
-            &mut parameter_types,
         )?;
 
         let typed_term = if prepared.multimodal.image.is_some() {
