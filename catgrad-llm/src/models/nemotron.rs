@@ -129,6 +129,7 @@ impl LLMConfig for NemotronConfig {
 }
 
 pub struct NemotronModel {
+    root: String,
     config: NemotronConfig,
     layer_kinds: Vec<LayerKind>,
     layer_to_cache_id: Vec<Option<usize>>,
@@ -193,7 +194,8 @@ impl LLMModel for NemotronModel {
 }
 
 impl NemotronModel {
-    pub fn new(config_json: &serde_json::Value, dtype: Dtype) -> crate::Result<Self> {
+    pub fn new(root: &str, config_json: &serde_json::Value, dtype: Dtype) -> crate::Result<Self> {
+        let config_json = config_json.get("llm_config").unwrap_or(config_json);
         let config: NemotronConfig = serde_json::from_value(config_json.clone())?;
         let mut layer_kinds = Vec::with_capacity(config.num_hidden_layers);
         for ch in config.hybrid_override_pattern.chars() {
@@ -239,6 +241,7 @@ impl NemotronModel {
         }
 
         Ok(Self {
+            root: root.to_string(),
             config,
             layer_kinds,
             layer_to_cache_id,
@@ -246,6 +249,14 @@ impl NemotronModel {
             num_mamba_layers: next_mamba_id,
             dtype,
         })
+    }
+
+    fn root_path(&self, prefix: Path) -> Path {
+        if self.root.is_empty() {
+            prefix
+        } else {
+            prefix.extend(self.root.split('.')).unwrap()
+        }
     }
 
     fn add_bias_3d(&self, builder: &Builder, bias: Var, x: Var) -> Var {
@@ -1063,7 +1074,7 @@ impl DynModule for NemotronModel {
     fn def(&self, builder: &Builder, args: Vec<Var>) -> Vec<Var> {
         let [x, in_k, in_v, in_conv, in_ssm, max_positions]: [Var; 6] =
             args.try_into().expect("expected 6 inputs");
-        let root = self.path();
+        let root = self.root_path(self.path());
         let in_v_out = in_v.clone();
         let mut cache =
             self.init_cache(builder, in_k.clone(), in_v, in_conv, in_ssm, max_positions);

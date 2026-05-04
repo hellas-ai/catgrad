@@ -335,9 +335,16 @@ pub fn get_model(
             "MistralForCausalLM" | "LlamaForCausalLM" | "SmolLM3ForCausalLM" => {
                 Box::new(models::llama::LlamaModel::new("", config_json, dtype)?)
             }
-            "NemotronHForCausalLM" => {
-                Box::new(models::nemotron::NemotronModel::new(config_json, dtype)?)
-            }
+            "NemotronHForCausalLM" => Box::new(models::nemotron::NemotronModel::new(
+                "",
+                config_json,
+                dtype,
+            )?),
+            "NemotronH_Nano_Omni_Reasoning_V3" => Box::new(models::nemotron::NemotronModel::new(
+                "language_model",
+                config_json,
+                dtype,
+            )?),
             "SmolVLMForConditionalGeneration" => {
                 Box::new(models::smolvlm2::SmolVLM2Model::new(config_json, dtype)?)
             }
@@ -474,15 +481,21 @@ struct PendingMoeTensor<T> {
     loaded_experts: usize,
 }
 
+// Heuristic to get the number of experts from the config JSON.
 fn get_num_experts(config_json: &serde_json::Value) -> Option<usize> {
-    ["num_experts", "n_routed_experts", "num_local_experts"]
+    [config_json.get("llm_config"), Some(config_json)]
         .into_iter()
-        .find_map(|key| {
-            config_json
-                .get(key)
-                .and_then(serde_json::Value::as_u64)
-                .filter(|count| *count > 0)
-                .map(|count| count as usize)
+        .flatten()
+        .find_map(|config| {
+            ["num_experts", "n_routed_experts", "num_local_experts"]
+                .into_iter()
+                .find_map(|key| {
+                    config
+                        .get(key)
+                        .and_then(serde_json::Value::as_u64)
+                        .filter(|count| *count > 0)
+                        .map(|count| count as usize)
+                })
         })
 }
 
@@ -587,6 +600,10 @@ where
         for (name, view) in tensors.tensors() {
             let shape = view.shape().to_vec();
             let tensor_data = view.data();
+            // Skip for now (seen only as a num_batches_tracked weight used for training in Nemotron-Omni)
+            if view.dtype() == safetensors::Dtype::I64 {
+                continue;
+            }
             let elements = match view.dtype() {
                 safetensors::Dtype::F32 => tensor_data.len() / 4,
                 safetensors::Dtype::BF16 => tensor_data.len() / 2,
