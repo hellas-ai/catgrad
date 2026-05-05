@@ -24,6 +24,7 @@ pub enum Dtype {
     F32,
     F16,
     BF16,
+    F8,
     U32,
 }
 
@@ -35,6 +36,7 @@ impl std::str::FromStr for Dtype {
             "f32" => Ok(Self::F32),
             "f16" => Ok(Self::F16),
             "bf16" => Ok(Self::BF16),
+            "fp8" => Ok(Self::F8),
             "u32" => Ok(Self::U32),
             _ => Err(format!("unsupported dtype `{s}`")),
         }

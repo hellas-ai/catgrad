@@ -23,6 +23,7 @@ impl Backend for ShapeOnlyBackend {
             Dtype::F32 => TaggedTensor::F32([ShapeOnly(shape)]),
             Dtype::F16 => TaggedTensor::F16([ShapeOnly(shape)]),
             Dtype::BF16 => TaggedTensor::BF16([ShapeOnly(shape)]),
+            Dtype::F8 => TaggedTensor::FP8([ShapeOnly(shape)]),
             Dtype::U32 => TaggedTensor::U32([ShapeOnly(shape)]),
         }
     }
@@ -51,6 +52,14 @@ impl Backend for ShapeOnlyBackend {
         Ok(TaggedTensor::BF16([ShapeOnly(shape)]))
     }
 
+    fn ndarray_from_vec_fp8(
+        &self,
+        _data: Vec<float8::F8E4M3>,
+        shape: Shape,
+    ) -> Result<TaggedTensor<Self>, BackendError> {
+        Ok(TaggedTensor::FP8([ShapeOnly(shape)]))
+    }
+
     fn ndarray_from_vec_u32(
         &self,
         _data: Vec<u32>,
@@ -65,18 +74,27 @@ impl Backend for ShapeOnlyBackend {
             (F32([shape]), Dtype::F32) => F32([shape]),
             (F32([shape]), Dtype::F16) => F16([shape]),
             (F32([shape]), Dtype::BF16) => BF16([shape]),
+            (F32([shape]), Dtype::F8) => FP8([shape]),
             (F32([shape]), Dtype::U32) => U32([shape]),
             (F16([shape]), Dtype::F32) => F32([shape]),
             (F16([shape]), Dtype::F16) => F16([shape]),
             (F16([shape]), Dtype::BF16) => BF16([shape]),
+            (F16([shape]), Dtype::F8) => FP8([shape]),
             (BF16([shape]), Dtype::F32) => F32([shape]),
             (BF16([shape]), Dtype::F16) => F16([shape]),
             (BF16([shape]), Dtype::BF16) => BF16([shape]),
+            (BF16([shape]), Dtype::F8) => FP8([shape]),
             (BF16([shape]), Dtype::U32) => U32([shape]),
+            (FP8([shape]), Dtype::F32) => F32([shape]),
+            (FP8([shape]), Dtype::F16) => F16([shape]),
+            (FP8([shape]), Dtype::BF16) => BF16([shape]),
+            (FP8([shape]), Dtype::F8) => FP8([shape]),
+            (FP8([shape]), Dtype::U32) => U32([shape]),
             (F16([shape]), Dtype::U32) => U32([shape]),
             (U32([shape]), Dtype::F32) => F32([shape]),
             (U32([shape]), Dtype::F16) => F16([shape]),
             (U32([shape]), Dtype::BF16) => BF16([shape]),
+            (U32([shape]), Dtype::F8) => FP8([shape]),
             (U32([shape]), Dtype::U32) => U32([shape]),
         }
     }
@@ -87,6 +105,7 @@ impl Backend for ShapeOnlyBackend {
             F32([x, y]) => F32([Self::matmul_shape(x, y)]),
             F16([x, y]) => F16([Self::matmul_shape(x, y)]),
             BF16([x, y]) => BF16([Self::matmul_shape(x, y)]),
+            FP8([x, y]) => FP8([Self::matmul_shape(x, y)]),
             U32([x, y]) => U32([Self::matmul_shape(x, y)]),
         }
     }
@@ -149,6 +168,11 @@ impl Backend for ShapeOnlyBackend {
                 Self::exact_shape_match(x.clone(), y);
                 BF16([x])
             }
+            FP8([mask, x, y]) => {
+                Self::exact_shape_match(mask, x.clone());
+                Self::exact_shape_match(x.clone(), y);
+                FP8([x])
+            }
             U32([mask, x, y]) => {
                 Self::exact_shape_match(mask, x.clone());
                 Self::exact_shape_match(x.clone(), y);
@@ -183,6 +207,7 @@ impl Backend for ShapeOnlyBackend {
             F32([arr]) => F32([Self::broadcast(arr, shape)]),
             F16([arr]) => F16([Self::broadcast(arr, shape)]),
             BF16([arr]) => BF16([Self::broadcast(arr, shape)]),
+            FP8([arr]) => FP8([Self::broadcast(arr, shape)]),
             U32([arr]) => U32([Self::broadcast(arr, shape)]),
         }
     }
@@ -193,6 +218,7 @@ impl Backend for ShapeOnlyBackend {
             F32(_) => F32([ShapeOnly(new_shape)]),
             F16(_) => F16([ShapeOnly(new_shape)]),
             BF16(_) => BF16([ShapeOnly(new_shape)]),
+            FP8(_) => FP8([ShapeOnly(new_shape)]),
             U32(_) => U32([ShapeOnly(new_shape)]),
         }
     }
@@ -206,6 +232,7 @@ impl Backend for ShapeOnlyBackend {
             F32(_) => F32([ShapeOnly(shape)]),
             F16(_) => F16([ShapeOnly(shape)]),
             BF16(_) => BF16([ShapeOnly(shape)]),
+            FP8(_) => FP8([ShapeOnly(shape)]),
             U32(_) => U32([ShapeOnly(shape)]),
         }
     }
@@ -216,6 +243,7 @@ impl Backend for ShapeOnlyBackend {
             F32([arr]) => F32([Self::reduce_last_dim(arr)]),
             F16([arr]) => F16([Self::reduce_last_dim(arr)]),
             BF16([arr]) => BF16([Self::reduce_last_dim(arr)]),
+            FP8([arr]) => FP8([Self::reduce_last_dim(arr)]),
             U32([arr]) => U32([Self::reduce_last_dim(arr)]),
         }
     }
@@ -226,6 +254,7 @@ impl Backend for ShapeOnlyBackend {
             F32([arr]) => F32([Self::reduce_last_dim(arr)]),
             F16([arr]) => F16([Self::reduce_last_dim(arr)]),
             BF16([arr]) => BF16([Self::reduce_last_dim(arr)]),
+            FP8([arr]) => FP8([Self::reduce_last_dim(arr)]),
             U32([arr]) => U32([Self::reduce_last_dim(arr)]),
         }
     }
@@ -236,6 +265,7 @@ impl Backend for ShapeOnlyBackend {
             F32([arr]) => U32([Self::reduce_last_dim(arr)]),
             F16([arr]) => U32([Self::reduce_last_dim(arr)]),
             BF16([arr]) => U32([Self::reduce_last_dim(arr)]),
+            FP8([arr]) => U32([Self::reduce_last_dim(arr)]),
             U32([arr]) => U32([Self::reduce_last_dim(arr)]),
         }
     }
@@ -261,6 +291,12 @@ impl Backend for ShapeOnlyBackend {
                 let indices = TaggedTensor::U32([new_shape]);
                 (values, indices)
             }
+            FP8([arr]) => {
+                let new_shape = Self::topk(arr, k);
+                let values = TaggedTensor::FP8([new_shape.clone()]);
+                let indices = TaggedTensor::U32([new_shape]);
+                (values, indices)
+            }
             U32([arr]) => {
                 let new_shape = Self::topk(arr, k);
                 let values = TaggedTensor::U32([new_shape.clone()]);
@@ -276,6 +312,7 @@ impl Backend for ShapeOnlyBackend {
             F32([a, b]) => a.0 == b.0,
             F16([a, b]) => a.0 == b.0,
             BF16([a, b]) => a.0 == b.0,
+            FP8([a, b]) => a.0 == b.0,
             U32([a, b]) => a.0 == b.0,
         }
     }
@@ -312,6 +349,11 @@ impl Backend for ShapeOnlyBackend {
                 s[dim] = a[dim] + b[dim];
                 BF16([ShapeOnly(s)])
             }
+            (FP8([ShapeOnly(a)]), FP8([ShapeOnly(b)])) => {
+                let mut s = a.clone();
+                s[dim] = a[dim] + b[dim];
+                FP8([ShapeOnly(s)])
+            }
             (U32([ShapeOnly(a)]), U32([ShapeOnly(b)])) => {
                 let mut s = a.clone();
                 s[dim] = a[dim] + b[dim];
@@ -332,6 +374,7 @@ impl Backend for ShapeOnlyBackend {
             F32([shape]) => shape,
             F16([shape]) => shape,
             BF16([shape]) => shape,
+            FP8([shape]) => shape,
             U32([shape]) => shape,
         }
         .0;
@@ -350,6 +393,10 @@ impl Backend for ShapeOnlyBackend {
             BF16([ShapeOnly(mut s)]) => {
                 s[dim] = n;
                 BF16([ShapeOnly(s)])
+            }
+            FP8([ShapeOnly(mut s)]) => {
+                s[dim] = n;
+                FP8([ShapeOnly(s)])
             }
             U32([ShapeOnly(mut s)]) => {
                 s[dim] = n;
@@ -378,6 +425,10 @@ impl Backend for ShapeOnlyBackend {
             BF16([ShapeOnly(mut s)]) => {
                 s[dim] = len;
                 BF16([ShapeOnly(s)])
+            }
+            FP8([ShapeOnly(mut s)]) => {
+                s[dim] = len;
+                FP8([ShapeOnly(s)])
             }
             U32([ShapeOnly(mut s)]) => {
                 s[dim] = len;
@@ -428,6 +479,7 @@ impl ShapeOnlyBackend {
             F32([x, y]) => F32([Self::exact_shape_match(x, y)]),
             F16([x, y]) => F16([Self::exact_shape_match(x, y)]),
             BF16([x, y]) => BF16([Self::exact_shape_match(x, y)]),
+            FP8([x, y]) => FP8([Self::exact_shape_match(x, y)]),
             U32([x, y]) => U32([Self::exact_shape_match(x, y)]),
         }
     }

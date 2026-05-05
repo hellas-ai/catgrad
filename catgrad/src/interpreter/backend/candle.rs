@@ -5,6 +5,7 @@ use candle_core::{
     D, DType, Device, Tensor,
     utils::{cuda_is_available, metal_is_available},
 };
+use float8::F8E4M3;
 
 // ============================================================================
 // CANDLE BACKEND ARCHITECTURE EXPLANATION
@@ -199,6 +200,10 @@ impl Backend for CandleBackend {
                 let x = x.materialize();
                 TaggedVec::BF16(x.flatten_all().unwrap().to_vec1().unwrap())
             }
+            TaggedTensor::FP8([x]) => {
+                let x = x.materialize();
+                TaggedVec::FP8(x.flatten_all().unwrap().to_vec1().unwrap())
+            }
             TaggedTensor::U32([x]) => {
                 let x = x.materialize();
                 TaggedVec::U32(x.flatten_all().unwrap().to_vec1().unwrap())
@@ -211,6 +216,7 @@ impl Backend for CandleBackend {
             TaggedTensor::F32([x]) => format!("{}", x.materialize()),
             TaggedTensor::F16([x]) => format!("{}", x.materialize()),
             TaggedTensor::BF16([x]) => format!("{}", x.materialize()),
+            TaggedTensor::FP8([x]) => format!("{}", x.materialize()),
             TaggedTensor::U32([x]) => format!("{}", x.materialize()),
         }
     }
@@ -230,6 +236,10 @@ impl Backend for CandleBackend {
                 self.ensure_dtype_supported(DType::BF16);
                 let tensor = Tensor::zeros(dims, DType::BF16, &self.device).unwrap();
                 TaggedTensor::BF16([tensor.into()])
+            }
+            Dtype::F8 => {
+                let tensor = Tensor::zeros(dims, DType::F8E4M3, &self.device).unwrap();
+                TaggedTensor::FP8([tensor.into()])
             }
             Dtype::U32 => {
                 let tensor = Tensor::zeros(dims, DType::U32, &self.device).unwrap();
@@ -272,6 +282,17 @@ impl Backend for CandleBackend {
         Ok(TaggedTensor::BF16([tensor.into()]))
     }
 
+    fn ndarray_from_vec_fp8(
+        &self,
+        data: Vec<F8E4M3>,
+        shape: Shape,
+    ) -> Result<TaggedTensor<Self>, BackendError> {
+        let dims: &[usize] = &shape.0;
+        let tensor =
+            Tensor::from_vec(data, dims, &self.device).map_err(|_| BackendError::ShapeError)?;
+        Ok(TaggedTensor::FP8([tensor.into()]))
+    }
+
     fn ndarray_from_vec_u32(
         &self,
         data: Vec<u32>,
@@ -292,12 +313,14 @@ impl Backend for CandleBackend {
             TaggedTensor::F32([arr])
             | TaggedTensor::F16([arr])
             | TaggedTensor::BF16([arr])
+            | TaggedTensor::FP8([arr])
             | TaggedTensor::U32([arr]) => arr.materialize(),
         };
         let target_dtype = match target_dtype {
             Dtype::F32 => DType::F32,
             Dtype::F16 => DType::F16,
             Dtype::BF16 => DType::BF16,
+            Dtype::F8 => DType::F8E4M3,
             Dtype::U32 => DType::U32,
         };
         self.ensure_dtype_supported(target_dtype);
@@ -306,6 +329,7 @@ impl Backend for CandleBackend {
             DType::F32 => TaggedTensor::F32([tensor]),
             DType::F16 => TaggedTensor::F16([tensor]),
             DType::BF16 => TaggedTensor::BF16([tensor]),
+            DType::F8E4M3 => TaggedTensor::FP8([tensor]),
             DType::U32 => TaggedTensor::U32([tensor]),
             _ => unreachable!(),
         }
@@ -317,6 +341,7 @@ impl Backend for CandleBackend {
             F32([x, y]) => F32([Self::matmul_tensors(x, y)]),
             F16([x, y]) => F16([Self::matmul_tensors(x, y)]),
             BF16([x, y]) => BF16([Self::matmul_tensors(x, y)]),
+            FP8([x, y]) => FP8([Self::matmul_tensors(x, y)]),
             U32([x, y]) => U32([Self::matmul_tensors(x, y)]),
         }
     }
@@ -327,6 +352,7 @@ impl Backend for CandleBackend {
             F32([x, y]) => F32([Self::binary_eager(x, y, Self::add)]),
             F16([x, y]) => F16([Self::binary_eager(x, y, Self::add)]),
             BF16([x, y]) => BF16([Self::binary_eager(x, y, Self::add)]),
+            FP8([x, y]) => FP8([Self::binary_eager(x, y, Self::add)]),
             U32([x, y]) => U32([Self::binary_eager(x, y, Self::add)]),
         }
     }
@@ -337,6 +363,7 @@ impl Backend for CandleBackend {
             F32([x, y]) => F32([Self::binary_eager(x, y, Self::sub)]),
             F16([x, y]) => F16([Self::binary_eager(x, y, Self::sub)]),
             BF16([x, y]) => BF16([Self::binary_eager(x, y, Self::sub)]),
+            FP8([x, y]) => FP8([Self::binary_eager(x, y, Self::sub)]),
             U32([x, y]) => U32([Self::binary_eager(x, y, Self::sub)]),
         }
     }
@@ -347,6 +374,7 @@ impl Backend for CandleBackend {
             F32([x, y]) => F32([Self::binary_eager(x, y, Self::mul)]),
             F16([x, y]) => F16([Self::binary_eager(x, y, Self::mul)]),
             BF16([x, y]) => BF16([Self::binary_eager(x, y, Self::mul)]),
+            FP8([x, y]) => FP8([Self::binary_eager(x, y, Self::mul)]),
             U32([x, y]) => U32([Self::binary_eager(x, y, Self::mul)]),
         }
     }
@@ -357,6 +385,7 @@ impl Backend for CandleBackend {
             F32([x, y]) => F32([Self::binary_eager(x, y, Self::div)]),
             F16([x, y]) => F16([Self::binary_eager(x, y, Self::div)]),
             BF16([x, y]) => BF16([Self::binary_eager(x, y, Self::div)]),
+            FP8([x, y]) => FP8([Self::binary_eager(x, y, Self::div)]),
             U32([x, y]) => U32([Self::binary_eager(x, y, Self::div)]),
         }
     }
@@ -367,6 +396,7 @@ impl Backend for CandleBackend {
             F32([x, y]) => F32([Self::binary_eager(x, y, Self::lt)]),
             F16([x, y]) => F16([Self::binary_eager(x, y, Self::lt)]),
             BF16([x, y]) => BF16([Self::binary_eager(x, y, Self::lt)]),
+            FP8([x, y]) => FP8([Self::binary_eager(x, y, Self::lt)]),
             U32([x, y]) => U32([Self::binary_eager(x, y, Self::lt)]),
         }
     }
@@ -377,6 +407,7 @@ impl Backend for CandleBackend {
             F32([x, y]) => F32([Self::binary_eager(x, y, Self::gt)]),
             F16([x, y]) => F16([Self::binary_eager(x, y, Self::gt)]),
             BF16([x, y]) => BF16([Self::binary_eager(x, y, Self::gt)]),
+            FP8([x, y]) => FP8([Self::binary_eager(x, y, Self::gt)]),
             U32([x, y]) => U32([Self::binary_eager(x, y, Self::gt)]),
         }
     }
@@ -387,6 +418,7 @@ impl Backend for CandleBackend {
             F32([x, y]) => F32([Self::binary_eager(x, y, Self::gte)]),
             F16([x, y]) => F16([Self::binary_eager(x, y, Self::gte)]),
             BF16([x, y]) => BF16([Self::binary_eager(x, y, Self::gte)]),
+            FP8([x, y]) => FP8([Self::binary_eager(x, y, Self::gte)]),
             U32([x, y]) => U32([Self::binary_eager(x, y, Self::gte)]),
         }
     }
@@ -397,6 +429,7 @@ impl Backend for CandleBackend {
             F32([x, y]) => F32([Self::binary_eager(x, y, Self::lte)]),
             F16([x, y]) => F16([Self::binary_eager(x, y, Self::lte)]),
             BF16([x, y]) => BF16([Self::binary_eager(x, y, Self::lte)]),
+            FP8([x, y]) => FP8([Self::binary_eager(x, y, Self::lte)]),
             U32([x, y]) => U32([Self::binary_eager(x, y, Self::lte)]),
         }
     }
@@ -407,6 +440,7 @@ impl Backend for CandleBackend {
             F32([x, y]) => F32([Self::binary_eager(x, y, Self::eq)]),
             F16([x, y]) => F16([Self::binary_eager(x, y, Self::eq)]),
             BF16([x, y]) => BF16([Self::binary_eager(x, y, Self::eq)]),
+            FP8([x, y]) => FP8([Self::binary_eager(x, y, Self::eq)]),
             U32([x, y]) => U32([Self::binary_eager(x, y, Self::eq)]),
         }
     }
@@ -417,6 +451,7 @@ impl Backend for CandleBackend {
             F32([mask, x, y]) => F32([Self::ternary_eager(mask, x, y, Self::where_cond)]),
             F16([mask, x, y]) => F16([Self::ternary_eager(mask, x, y, Self::where_cond)]),
             BF16([mask, x, y]) => BF16([Self::ternary_eager(mask, x, y, Self::where_cond)]),
+            FP8([mask, x, y]) => FP8([Self::ternary_eager(mask, x, y, Self::where_cond)]),
             U32([mask, x, y]) => U32([Self::ternary_eager(mask, x, y, Self::where_cond)]),
         }
     }
@@ -427,6 +462,7 @@ impl Backend for CandleBackend {
             F32([x, y]) => F32([Self::binary_eager(x, y, Self::pow)]),
             F16([x, y]) => F16([Self::binary_eager(x, y, Self::pow)]),
             BF16([x, y]) => BF16([Self::binary_eager(x, y, Self::pow)]),
+            FP8([x, y]) => FP8([Self::binary_eager(x, y, Self::pow)]),
             U32([x, y]) => U32([Self::binary_eager(x, y, Self::pow)]),
         }
     }
@@ -437,6 +473,7 @@ impl Backend for CandleBackend {
             F32([arr]) => F32([Self::unary_eager(arr, Self::neg)]),
             F16([arr]) => F16([Self::unary_eager(arr, Self::neg)]),
             BF16([arr]) => BF16([Self::unary_eager(arr, Self::neg)]),
+            FP8([arr]) => FP8([Self::unary_eager(arr, Self::neg)]),
             U32([arr]) => U32([Self::unary_eager(arr, Self::neg)]),
         }
     }
@@ -447,6 +484,7 @@ impl Backend for CandleBackend {
             F32([arr]) => F32([Self::unary_eager(arr, Self::sin)]),
             F16([arr]) => F16([Self::unary_eager(arr, Self::sin)]),
             BF16([arr]) => BF16([Self::unary_eager(arr, Self::sin)]),
+            FP8([arr]) => FP8([Self::unary_eager(arr, Self::sin)]),
             _ => panic!("Invalid type for sin"),
         }
     }
@@ -457,6 +495,7 @@ impl Backend for CandleBackend {
             F32([arr]) => F32([Self::unary_eager(arr, Self::cos)]),
             F16([arr]) => F16([Self::unary_eager(arr, Self::cos)]),
             BF16([arr]) => BF16([Self::unary_eager(arr, Self::cos)]),
+            FP8([arr]) => FP8([Self::unary_eager(arr, Self::cos)]),
             _ => panic!("Invalid type for cos"),
         }
     }
@@ -467,6 +506,7 @@ impl Backend for CandleBackend {
             F32([arr]) => F32([Self::unary_eager(arr, Self::log)]),
             F16([arr]) => F16([Self::unary_eager(arr, Self::log)]),
             BF16([arr]) => BF16([Self::unary_eager(arr, Self::log)]),
+            FP8([arr]) => FP8([Self::unary_eager(arr, Self::log)]),
             _ => panic!("Invalid type for log"),
         }
     }
@@ -477,6 +517,7 @@ impl Backend for CandleBackend {
             F32([arr]) => F32([Self::unary_eager(arr, Self::floor)]),
             F16([arr]) => F16([Self::unary_eager(arr, Self::floor)]),
             BF16([arr]) => BF16([Self::unary_eager(arr, Self::floor)]),
+            FP8([arr]) => FP8([Self::unary_eager(arr, Self::floor)]),
             _ => panic!("Invalid type for floor"),
         }
     }
@@ -487,6 +528,7 @@ impl Backend for CandleBackend {
             F32([arr]) => F32([Self::unary_eager(arr, Self::max)]),
             F16([arr]) => F16([Self::unary_eager(arr, Self::max)]),
             BF16([arr]) => BF16([Self::unary_eager(arr, Self::max)]),
+            FP8([arr]) => FP8([Self::unary_eager(arr, Self::max)]),
             U32([arr]) => U32([Self::unary_eager(arr, Self::max)]),
         }
     }
@@ -497,6 +539,7 @@ impl Backend for CandleBackend {
             F32([arr]) => F32([Self::unary_eager(arr, Self::sum)]),
             F16([arr]) => F16([Self::unary_eager(arr, Self::sum)]),
             BF16([arr]) => BF16([Self::unary_eager(arr, Self::sum)]),
+            FP8([arr]) => FP8([Self::unary_eager(arr, Self::sum)]),
             U32([arr]) => U32([Self::unary_eager(arr, Self::sum)]),
         }
     }
@@ -507,6 +550,7 @@ impl Backend for CandleBackend {
             F32([arr]) => U32([Self::unary_eager(arr, Self::argmax)]),
             F16([arr]) => U32([Self::unary_eager(arr, Self::argmax)]),
             BF16([arr]) => U32([Self::unary_eager(arr, Self::argmax)]),
+            FP8([arr]) => U32([Self::unary_eager(arr, Self::argmax)]),
             U32([arr]) => U32([Self::unary_eager(arr, Self::argmax)]),
         }
     }
@@ -529,6 +573,11 @@ impl Backend for CandleBackend {
                 let (values, indices) = Self::topk_f32(&arr, k);
                 (BF16([values.into()]), U32([indices.into()]))
             }
+            FP8([arr]) => {
+                let arr = arr.materialize();
+                let (values, indices) = Self::topk_f32(&arr, k);
+                (FP8([values.into()]), U32([indices.into()]))
+            }
             _ => panic!("Unsupported type for topk"),
         }
     }
@@ -547,6 +596,10 @@ impl Backend for CandleBackend {
             BF16([arr]) => {
                 let arr = arr.materialize();
                 BF16([Self::broadcast_tensor(&arr, shape).into()])
+            }
+            FP8([arr]) => {
+                let arr = arr.materialize();
+                FP8([Self::broadcast_tensor(&arr, shape).into()])
             }
             U32([arr]) => {
                 let arr = arr.materialize();
@@ -570,6 +623,10 @@ impl Backend for CandleBackend {
                 let arr = arr.materialize();
                 BF16([Self::reshape_tensor(&arr, new_shape).into()])
             }
+            FP8([arr]) => {
+                let arr = arr.materialize();
+                FP8([Self::reshape_tensor(&arr, new_shape).into()])
+            }
             U32([arr]) => {
                 let arr = arr.materialize();
                 U32([Self::reshape_tensor(&arr, new_shape).into()])
@@ -583,6 +640,7 @@ impl Backend for CandleBackend {
             F32([arr]) => F32([arr.transpose(dim0, dim1)]),
             F16([arr]) => F16([arr.transpose(dim0, dim1)]),
             BF16([arr]) => BF16([arr.transpose(dim0, dim1)]),
+            FP8([arr]) => FP8([arr.transpose(dim0, dim1)]),
             U32([arr]) => U32([arr.transpose(dim0, dim1)]),
         }
     }
@@ -618,6 +676,14 @@ impl Backend for CandleBackend {
                 .and_then(|m| m.to_scalar::<u8>().ok())
                 .map(|s| s == 1)
                 .unwrap_or(false),
+            TaggedTensor::FP8([x]) => x
+                .materialize()
+                .gt(F8E4M3::ZERO)
+                .ok()
+                .and_then(|t| t.max_all().ok())
+                .and_then(|m| m.to_scalar::<u8>().ok())
+                .map(|s| s == 1)
+                .unwrap_or(false),
             TaggedTensor::U32([x]) => x
                 .materialize()
                 .ne(0u32)
@@ -640,6 +706,7 @@ impl Backend for CandleBackend {
             (F32([arr]), U32([indices])) => F32([Self::index_tensor(arr, dim, indices)]),
             (F16([arr]), U32([indices])) => F16([Self::index_tensor(arr, dim, indices)]),
             (BF16([arr]), U32([indices])) => BF16([Self::index_tensor(arr, dim, indices)]),
+            (FP8([arr]), U32([indices])) => FP8([Self::index_tensor(arr, dim, indices)]),
             (U32([arr]), U32([indices])) => U32([Self::index_tensor(arr, dim, indices)]),
             _ => panic!("Invalid index type"),
         }
@@ -657,6 +724,7 @@ impl Backend for CandleBackend {
             F32([arr]) => F32([arr.slice(dim, start, len)]),
             F16([arr]) => F16([arr.slice(dim, start, len)]),
             BF16([arr]) => BF16([arr.slice(dim, start, len)]),
+            FP8([arr]) => FP8([arr.slice(dim, start, len)]),
             U32([arr]) => U32([arr.slice(dim, start, len)]),
         }
     }
@@ -667,6 +735,7 @@ impl Backend for CandleBackend {
             F32([a, b]) => Self::compare_tensors(&a.materialize(), &b.materialize()),
             F16([a, b]) => Self::compare_tensors(&a.materialize(), &b.materialize()),
             BF16([a, b]) => Self::compare_tensors(&a.materialize(), &b.materialize()),
+            FP8([a, b]) => Self::compare_tensors(&a.materialize(), &b.materialize()),
             U32([a, b]) => Self::compare_tensors(&a.materialize(), &b.materialize()),
         }
     }
@@ -688,6 +757,9 @@ impl Backend for CandleBackend {
             (BF16([a]), BF16([b])) => {
                 BF16([Self::concat_tensors(&a.materialize(), &b.materialize(), dim).into()])
             }
+            (FP8([a]), FP8([b])) => {
+                FP8([Self::concat_tensors(&a.materialize(), &b.materialize(), dim).into()])
+            }
             (U32([a]), U32([b])) => {
                 U32([Self::concat_tensors(&a.materialize(), &b.materialize(), dim).into()])
             }
@@ -700,7 +772,7 @@ impl CandleBackend {
     fn float_tensor_to_f32_vec(tensor: &Tensor) -> Vec<f32> {
         let tensor = match tensor.dtype() {
             DType::F32 => tensor.clone(),
-            DType::F16 | DType::BF16 => tensor.to_dtype(DType::F32).unwrap(),
+            DType::F16 | DType::BF16 | DType::F8E4M3 => tensor.to_dtype(DType::F32).unwrap(),
             dtype => panic!("Unsupported float tensor dtype {dtype:?}"),
         };
 
@@ -943,6 +1015,7 @@ impl CandleBackend {
     fn where_cond(mask: &Tensor, x: &Tensor, y: &Tensor) -> CandleTensor {
         let mask = match mask.dtype() {
             DType::F32 | DType::F16 | DType::BF16 => mask.gt(0.).unwrap(),
+            DType::F8E4M3 => mask.gt(F8E4M3::ZERO).unwrap(),
             DType::U32 => mask.ne(0u32).unwrap(),
             _ => mask.clone(), // already U8 (boolean) or other type
         };

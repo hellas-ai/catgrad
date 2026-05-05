@@ -103,7 +103,7 @@ fn parse_model_dtype(s: &str) -> Result<Dtype, String> {
     let dtype: Dtype = s.parse()?;
     match dtype {
         Dtype::F32 | Dtype::F16 | Dtype::BF16 => Ok(dtype),
-        Dtype::U32 => Err("model dtype must be f32, f16, or bf16".to_string()),
+        Dtype::F8 | Dtype::U32 => Err("model dtype must be f32, f16, or bf16".to_string()),
     }
 }
 
@@ -112,6 +112,7 @@ fn dtype_size_bytes(dtype: Dtype) -> usize {
         Dtype::F32 => 4,
         Dtype::F16 => 2,
         Dtype::BF16 => 2,
+        Dtype::F8 => 1,
         Dtype::U32 => 4,
     }
 }
@@ -740,6 +741,7 @@ fn to_f32_vec<B: interpreter::Backend>(
             interpreter::TaggedVec::F32(v) => Ok(v),
             interpreter::TaggedVec::F16(v) => Ok(v.into_iter().map(|x| x.to_f32()).collect()),
             interpreter::TaggedVec::BF16(v) => Ok(v.into_iter().map(|x| x.to_f32()).collect()),
+            interpreter::TaggedVec::FP8(v) => Ok(v.into_iter().map(|x| x.to_f32()).collect()),
             _ => Err(anyhow::anyhow!("Unexpected output dtype")),
         },
         t => Err(anyhow::anyhow!("Output was not a tensor: {:?}", t)),
