@@ -399,6 +399,7 @@ name = "catgrad"
 version = "0.2.1"
 dependencies = [
  "candle-core",
+ "float8",
  "graphviz-rust",
  "half",
  "ndarray",
@@ -416,6 +417,7 @@ dependencies = [
  "chrono",
  "clap",
  "env_logger",
+ "float8",
  "graphviz-rust",
  "half",
  "hf-hub",

@@ -23,6 +23,7 @@ memmap2 = { workspace = true }
 safetensors = {workspace = true}
 log = "0.4.27"
 half = { workspace = true }
+float8 = { workspace = true }
 thiserror = "2.0"
 rayon = "1.11.0"
 image = "0.25.6"
