@@ -1,5 +1,5 @@
 #![allow(clippy::too_many_arguments)]
-use crate::config::{EosTokenId, LLMConfig, RopeScaling};
+use crate::config::{EosTokenId, LLMConfig, QuantizationConfig, RopeScaling};
 use crate::helpers::*;
 use catgrad::prelude::ops::*;
 use catgrad::prelude::*;
@@ -28,6 +28,7 @@ struct GraniteConfig {
     eos_token_id: Option<EosTokenId>,
     vocab_size: usize,
     model_type: String,
+    quantization_config: Option<QuantizationConfig>,
 }
 
 fn default_partial_rotary_factor() -> f32 {
@@ -62,6 +63,10 @@ impl LLMConfig for GraniteConfig {
     fn eos_token_id(&self) -> Option<EosTokenId> {
         self.eos_token_id.clone()
     }
+
+    fn quantization_config(&self) -> Option<&QuantizationConfig> {
+        self.quantization_config.as_ref()
+    }
 }
 
 pub struct GraniteModel {
@@ -89,15 +94,42 @@ impl GraniteModel {
         Ok(Self { config, dtype })
     }
 
+    fn use_scaled_fp8_linears(&self) -> bool {
+        self.config.uses_dynamic_fp8()
+    }
+
+    fn use_scaled_linear_for_path(&self, p: &Path) -> bool {
+        self.use_scaled_fp8_linears()
+            && p.iter().last().is_some_and(|component| {
+                self.config
+                    .uses_dynamic_fp8_for_module(&component.to_string())
+            })
+    }
+
+    fn linear_no_bias(
+        &self,
+        builder: &Builder,
+        in_dim: usize,
+        out_dim: usize,
+        p: Path,
+        x: Var,
+    ) -> Var {
+        if self.use_scaled_linear_for_path(&p) {
+            nn::linear_no_bias_scaled(builder, in_dim, out_dim, p, x)
+        } else {
+            nn::linear_no_bias(builder, in_dim, out_dim, p, x)
+        }
+    }
+
     fn mlp(&self, builder: &Builder, p: Path, x: Var) -> Var {
-        let gate = linear_no_bias(
+        let gate = self.linear_no_bias(
             builder,
             self.config.hidden_size,
             self.config.intermediate_size,
             p.extend(["gate_proj"]).unwrap(),
             x.clone(),
         );
-        let up = linear_no_bias(
+        let up = self.linear_no_bias(
             builder,
             self.config.hidden_size,
             self.config.intermediate_size,
@@ -105,7 +137,7 @@ impl GraniteModel {
             x,
         );
         let x = silu(builder, gate) * up;
-        linear_no_bias(
+        self.linear_no_bias(
             builder,
             self.config.intermediate_size,
             self.config.hidden_size,
@@ -115,7 +147,7 @@ impl GraniteModel {
     }
 
     fn shared_mlp(&self, builder: &Builder, p: Path, x: Var) -> Var {
-        let gate_up = linear_no_bias(
+        let gate_up = self.linear_no_bias(
             builder,
             self.config.hidden_size,
             2 * self.config.intermediate_size,
@@ -128,7 +160,7 @@ impl GraniteModel {
         let up = gate_up[1].clone();
         let x = silu(builder, gate) * up;
 
-        linear_no_bias(
+        self.linear_no_bias(
             builder,
             self.config.intermediate_size,
             self.config.hidden_size,
@@ -142,7 +174,7 @@ impl GraniteModel {
 
         let moe_input = param(builder, &p.extend(["input_linear", "weight"]).unwrap());
         let moe_output = param(builder, &p.extend(["output_linear", "weight"]).unwrap());
-        let routed = linear_no_bias(
+        let routed = self.linear_no_bias(
             builder,
             self.config.hidden_size,
             self.config.num_local_experts,
@@ -210,9 +242,9 @@ impl GraniteModel {
 
         let [b, s, _] = unpack::<3>(builder, shape(builder, x.clone()));
 
-        let q = linear_no_bias(builder, dim, dim, p.extend(["q_proj"]).unwrap(), x.clone());
+        let q = self.linear_no_bias(builder, dim, dim, p.extend(["q_proj"]).unwrap(), x.clone());
 
-        let k = linear_no_bias(
+        let k = self.linear_no_bias(
             builder,
             dim,
             dim / rep,
@@ -220,7 +252,7 @@ impl GraniteModel {
             x.clone(),
         );
 
-        let v = linear_no_bias(builder, dim, dim / rep, p.extend(["v_proj"]).unwrap(), x);
+        let v = self.linear_no_bias(builder, dim, dim / rep, p.extend(["v_proj"]).unwrap(), x);
 
         let sh = shape!(builder, b, s, num_kv_heads, head_dim);
         let k = reshape(builder, sh.clone(), k);
@@ -273,7 +305,7 @@ impl GraniteModel {
         let sh = shape!(builder, b, s, dim);
         let attn = reshape(builder, sh, attn);
 
-        linear_no_bias(builder, dim, dim, p.extend(["o_proj"]).unwrap(), attn)
+        self.linear_no_bias(builder, dim, dim, p.extend(["o_proj"]).unwrap(), attn)
     }
 
     fn layer(
@@ -375,7 +407,7 @@ impl DynModule for GraniteModel {
             x,
         );
 
-        x = linear_no_bias(
+        x = nn::linear_no_bias(
             builder,
             self.config.hidden_size,
             self.config.vocab_size,
