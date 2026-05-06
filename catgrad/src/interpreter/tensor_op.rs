@@ -246,6 +246,7 @@ pub(crate) fn try_into_tagged_ndarrays<B: Backend, const N: usize>(
     let mut f32_arrays = Vec::new();
     let mut f16_arrays = Vec::new();
     let mut bf16_arrays = Vec::new();
+    let mut fp8_arrays = Vec::new();
     let mut u32_arrays = Vec::new();
     for x in tensors {
         if x.dtype() != dtype {
@@ -256,6 +257,7 @@ pub(crate) fn try_into_tagged_ndarrays<B: Backend, const N: usize>(
             TaggedTensorTuple::F32([x]) => f32_arrays.push(x),
             TaggedTensorTuple::F16([x]) => f16_arrays.push(x),
             TaggedTensorTuple::BF16([x]) => bf16_arrays.push(x),
+            TaggedTensorTuple::FP8([x]) => fp8_arrays.push(x),
             TaggedTensorTuple::U32([x]) => u32_arrays.push(x),
         }
     }
@@ -264,6 +266,7 @@ pub(crate) fn try_into_tagged_ndarrays<B: Backend, const N: usize>(
         Dtype::F32 => f32_arrays.try_into().ok().map(TaggedTensorTuple::F32),
         Dtype::F16 => f16_arrays.try_into().ok().map(TaggedTensorTuple::F16),
         Dtype::BF16 => bf16_arrays.try_into().ok().map(TaggedTensorTuple::BF16),
+        Dtype::F8 => fp8_arrays.try_into().ok().map(TaggedTensorTuple::FP8),
         Dtype::U32 => u32_arrays.try_into().ok().map(TaggedTensorTuple::U32),
     }
     .unwrap()) // unwrap OK: we already checked arity!

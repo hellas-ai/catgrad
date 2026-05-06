@@ -12,6 +12,7 @@ pub mod tensor_op;
 
 pub use crate::category::core::{Dtype, Shape};
 pub use backend::{Backend, BackendError};
+use float8::F8E4M3;
 use half::{bf16, f16};
 
 #[cfg(all(test, feature = "ndarray-backend"))]
@@ -48,6 +49,11 @@ pub fn float_tensor<B: Backend>(
             backend,
             shape,
             data.into_iter().map(bf16::from_f32).collect::<Vec<_>>(),
+        ),
+        Dtype::F8 => tensor(
+            backend,
+            shape,
+            data.into_iter().map(F8E4M3::from_f32).collect::<Vec<_>>(),
         ),
         Dtype::U32 => panic!("float_tensor requires a floating-point dtype"),
     }

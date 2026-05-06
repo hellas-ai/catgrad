@@ -4,6 +4,7 @@ use super::backend::*;
 use super::interpreter::Interpreter;
 use crate::abstract_interpreter;
 use crate::category::core::{Dtype, Shape};
+use float8::F8E4M3;
 use half::{bf16, f16};
 
 pub type Value<B> = abstract_interpreter::Value<Interpreter<B>>;
@@ -18,6 +19,7 @@ pub enum TaggedVec {
     F32(Vec<f32>),
     F16(Vec<f16>),
     BF16(Vec<bf16>),
+    FP8(Vec<F8E4M3>),
     U32(Vec<u32>),
 }
 
@@ -27,6 +29,7 @@ pub enum TaggedTensorTuple<B: Backend, const N: usize> {
     F32([B::BackendTensor; N]),
     F16([B::BackendTensor; N]),
     BF16([B::BackendTensor; N]),
+    FP8([B::BackendTensor; N]),
     U32([B::BackendTensor; N]),
 }
 
@@ -86,6 +89,20 @@ impl<B: Backend, const N: usize> IntoTagged<B, N> for bf16 {
     }
 }
 
+impl<B: Backend, const N: usize> IntoTagged<B, N> for F8E4M3 {
+    fn into_tagged(arrs: [B::BackendTensor; N]) -> TaggedTensorTuple<B, N> {
+        TaggedTensorTuple::FP8(arrs)
+    }
+
+    fn ndarray_from_vec(
+        backend: &B,
+        data: Vec<Self>,
+        shape: Shape,
+    ) -> Result<TaggedTensor<B>, BackendError> {
+        backend.ndarray_from_vec_fp8(data, shape)
+    }
+}
+
 impl<B: Backend, const N: usize> IntoTagged<B, N> for u32 {
     fn into_tagged(arrs: [B::BackendTensor; N]) -> TaggedTensorTuple<B, N> {
         TaggedTensorTuple::U32(arrs)
@@ -112,6 +129,7 @@ impl<B: Backend> TaggedTensor<B> {
             Self::F32(x) => x[0].shape(),
             Self::F16(x) => x[0].shape(),
             Self::BF16(x) => x[0].shape(),
+            Self::FP8(x) => x[0].shape(),
             Self::U32(x) => x[0].shape(),
         }
     }
@@ -121,6 +139,7 @@ impl<B: Backend> TaggedTensor<B> {
             Self::F32(_) => Dtype::F32,
             Self::F16(_) => Dtype::F16,
             Self::BF16(_) => Dtype::BF16,
+            Self::FP8(_) => Dtype::F8,
             Self::U32(_) => Dtype::U32,
         }
     }

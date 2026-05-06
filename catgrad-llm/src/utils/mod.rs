@@ -1,4 +1,5 @@
 use catgrad::prelude::Dtype;
+use float8::F8E4M3;
 use hf_hub::{Repo, RepoType, api::sync::ApiBuilder};
 use rayon::prelude::*;
 use serde::de::DeserializeOwned;
@@ -474,6 +475,16 @@ fn decode_bf16_into(tensor_data: &[u8], dst: &mut [half::bf16]) {
         });
 }
 
+fn decode_f8_e4m3_into(tensor_data: &[u8], dst: &mut [F8E4M3]) {
+    assert_eq!(dst.len(), tensor_data.len());
+
+    dst.par_iter_mut()
+        .zip(tensor_data.par_iter())
+        .for_each(|(out, byte)| {
+            *out = F8E4M3::from_bits(*byte);
+        });
+}
+
 #[derive(Debug)]
 struct PendingMoeTensor<T> {
     data: Vec<T>,
@@ -604,17 +615,16 @@ where
             if view.dtype() == safetensors::Dtype::I64 {
                 continue;
             }
-            let elements = match view.dtype() {
-                safetensors::Dtype::F32 => tensor_data.len() / 4,
-                safetensors::Dtype::BF16 => tensor_data.len() / 2,
-                _ => {
-                    return Err(LLMError::UnsupportedDtype(format!("{:?}", view.dtype())));
-                }
-            };
+            let elements = shape.iter().product();
 
             if let Some(num_experts) = expert_count
                 && let Some((packed_key, expert_idx)) = get_packed_moe_key(&name)?
             {
+                if view.dtype() == safetensors::Dtype::F8_E4M3 {
+                    return Err(LLMError::InvalidModelConfig(
+                        "fp8 loading does not support packed MoE tensors yet".to_string(),
+                    ));
+                }
                 let pending = pending_moe_tensors
                     .entry(packed_key.clone())
                     .or_insert_with(|| PendingMoeTensor {
@@ -631,7 +641,7 @@ where
                     safetensors::Dtype::BF16 => {
                         decode_bf16(tensor_data, &mut pending.data[start..end])
                     }
-                    _ => unreachable!(),
+                    _ => return Err(LLMError::UnsupportedDtype(format!("{:?}", view.dtype()))),
                 }
                 pending.loaded_experts += 1;
                 total_params += elements;
@@ -655,30 +665,46 @@ where
                 continue;
             }
 
-            let mut tensor = vec![zero; elements];
-            match view.dtype() {
-                safetensors::Dtype::F32 => decode_f32(tensor_data, &mut tensor),
-                safetensors::Dtype::BF16 => decode_bf16(tensor_data, &mut tensor),
-                _ => unreachable!(),
-            }
-            total_params += tensor.len();
-
             let key = path(name.split('.').collect()).map_err(|err| {
                 LLMError::InvalidModelConfig(format!("invalid param path {name}: {}", err.0))
             })?;
-            insert_tensor_value(
-                backend,
-                key,
-                shape,
-                dtype,
-                tensor,
-                &mut data_map,
-                &mut type_map,
-            )?;
+            match view.dtype() {
+                safetensors::Dtype::F32 | safetensors::Dtype::BF16 => {
+                    let mut tensor = vec![zero; elements];
+                    match view.dtype() {
+                        safetensors::Dtype::F32 => decode_f32(tensor_data, &mut tensor),
+                        safetensors::Dtype::BF16 => decode_bf16(tensor_data, &mut tensor),
+                        _ => unreachable!(),
+                    }
+                    total_params += tensor.len();
+                    insert_tensor_value(
+                        backend,
+                        key,
+                        shape,
+                        dtype,
+                        tensor,
+                        &mut data_map,
+                        &mut type_map,
+                    )?;
+                }
+                safetensors::Dtype::F8_E4M3 => {
+                    let mut tensor = vec![F8E4M3::ZERO; elements];
+                    decode_f8_e4m3_into(tensor_data, &mut tensor);
+                    total_params += tensor.len();
+                    insert_tensor_value(
+                        backend,
+                        key,
+                        shape,
+                        Dtype::F8,
+                        tensor,
+                        &mut data_map,
+                        &mut type_map,
+                    )?;
+                }
+                dtype => return Err(LLMError::UnsupportedDtype(format!("{dtype:?}"))),
+            }
         }
     }
-
-    debug_assert!(pending_moe_tensors.is_empty());
 
     let parameter_values = interpreter::Parameters::from(data_map);
     let parameter_types = typecheck::Parameters::from(type_map);
@@ -724,7 +750,7 @@ pub fn load_model_weights<B: interpreter::Backend>(
             decode_f32_to_bf16_into,
             decode_bf16_into,
         ),
-        Dtype::U32 => unreachable!(),
+        _ => unreachable!(),
     }
 }
 

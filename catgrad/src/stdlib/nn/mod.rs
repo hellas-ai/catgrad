@@ -220,6 +220,22 @@ pub fn linear_no_bias_param(
     linear_b_param(builder, in_dim, out_dim, weight, None, x)
 }
 
+pub fn linear_no_bias_scaled(
+    builder: &Builder,
+    in_dim: usize,
+    out_dim: usize,
+    p: Path,
+    x: Var,
+) -> Var {
+    let weight = param(builder, &p.extend(["weight"]).unwrap());
+    let weight_scale = param(builder, &p.extend(["weight_scale"]).unwrap());
+    let x_dtype = dtype(builder, x.clone());
+    let weight = cast(builder, weight, x_dtype.clone());
+    let weight_scale = cast(builder, weight_scale, x_dtype);
+    let weight = weight.clone() * broadcast(builder, shape(builder, weight), weight_scale);
+    linear_no_bias_param(builder, in_dim, out_dim, weight, x)
+}
+
 pub fn linear_param(
     builder: &Builder,
     in_dim: usize,

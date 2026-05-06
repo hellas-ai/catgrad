@@ -121,6 +121,7 @@ impl Display for Dtype {
             Dtype::F32 => write!(f, "f32"),
             Dtype::F16 => write!(f, "f16"),
             Dtype::BF16 => write!(f, "bf16"),
+            Dtype::F8 => write!(f, "fp8"),
             Dtype::U32 => write!(f, "u32"),
         }
     }

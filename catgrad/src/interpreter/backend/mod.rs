@@ -1,5 +1,6 @@
 use super::types::*;
 use crate::category::core::{Dtype, Shape};
+use float8::F8E4M3;
 use half::{bf16, f16};
 use std::fmt::Debug;
 
@@ -41,6 +42,12 @@ pub trait Backend: Clone + Debug {
     fn ndarray_from_vec_bf16(
         &self,
         data: Vec<bf16>,
+        shape: Shape,
+    ) -> Result<TaggedTensor<Self>, BackendError>;
+
+    fn ndarray_from_vec_fp8(
+        &self,
+        data: Vec<F8E4M3>,
         shape: Shape,
     ) -> Result<TaggedTensor<Self>, BackendError>;
 
@@ -106,6 +113,7 @@ pub trait Backend: Clone + Debug {
             TaggedTensor::F32([x]) => format!("{x:?}"),
             TaggedTensor::F16([x]) => format!("{x:?}"),
             TaggedTensor::BF16([x]) => format!("{x:?}"),
+            TaggedTensor::FP8([x]) => format!("{x:?}"),
             TaggedTensor::U32([x]) => format!("{x:?}"),
         }
     }

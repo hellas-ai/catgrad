@@ -1,24 +1,27 @@
 #![allow(clippy::too_many_arguments)]
-use crate::config::{EosTokenId, LLMConfig};
+use crate::config::{EosTokenId, LLMConfig, QuantizationConfig};
 use crate::helpers::*;
 use crate::models::siglip::{SiglipVisionBackbone, SiglipVisionConfig};
 use crate::utils::load_and_preprocess_dynamic_image;
 use catgrad::prelude::ops::*;
 use catgrad::prelude::*;
-use catgrad::stdlib::nn::*;
+use catgrad::stdlib::nn::{self, *};
 use serde::Deserialize;
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
 pub enum GemmaConfig {
-    #[serde(untagged)]
     VLM {
         text_config: GemmaTextConfig,
         vision_config: SiglipVisionConfig,
         image_token_index: usize,
         #[serde(default = "default_mm_tokens_per_image")]
         mm_tokens_per_image: usize,
+        #[serde(default)]
+        quantization_config: Option<QuantizationConfig>,
+        #[serde(default)]
+        eos_token_id: Option<EosTokenId>,
     },
-    #[serde(untagged)]
     Text(GemmaTextConfig),
 }
 
@@ -66,9 +69,10 @@ pub struct GemmaTextConfig {
     pub rms_norm_eps: f32,
     #[serde(default = "default_rope_theta")]
     pub rope_theta: f32,
-    #[serde(default = "default_sliding_window_pattern")]
-    #[serde(alias = "_sliding_window_pattern")]
-    pub sliding_window_pattern: usize,
+    #[serde(default)]
+    pub sliding_window_pattern: Option<usize>,
+    #[serde(rename = "_sliding_window_pattern", default)]
+    pub legacy_sliding_window_pattern: Option<usize>,
     pub sliding_window: usize,
     #[serde(default = "default_rope_local_base_freq")]
     pub rope_local_base_freq: f32,
@@ -88,6 +92,15 @@ pub struct GemmaTextConfig {
     pub eos_token_id: Option<EosTokenId>,
     #[serde(default)]
     pub tie_word_embeddings: bool,
+    pub quantization_config: Option<QuantizationConfig>,
+}
+
+impl GemmaTextConfig {
+    fn sliding_window_pattern_value(&self) -> usize {
+        self.sliding_window_pattern
+            .or(self.legacy_sliding_window_pattern)
+            .unwrap_or_else(default_sliding_window_pattern)
+    }
 }
 
 fn default_query_pre_attn_scalar() -> usize {
@@ -157,6 +170,10 @@ impl LLMConfig for GemmaTextConfig {
 
     fn eos_token_id(&self) -> Option<EosTokenId> {
         self.eos_token_id.clone()
+    }
+
+    fn quantization_config(&self) -> Option<&QuantizationConfig> {
+        self.quantization_config.as_ref()
     }
 }
 
@@ -454,11 +471,21 @@ impl Gemma3Model {
         let (config, multimodal) = match serde_json::from_value(config_json.clone())? {
             GemmaConfig::Text(config) => (config, None),
             GemmaConfig::VLM {
-                mut text_config,
+                text_config,
                 vision_config,
                 image_token_index,
                 mut mm_tokens_per_image,
+                quantization_config,
+                eos_token_id,
             } => {
+                let mut text_config = text_config;
+                if text_config.quantization_config.is_none() {
+                    text_config.quantization_config = quantization_config;
+                }
+                if text_config.eos_token_id.is_none() {
+                    text_config.eos_token_id = eos_token_id;
+                }
+
                 let is_paligemma = text_config.model_type == "gemma2";
                 if is_paligemma {
                     text_config.max_position_embeddings = 8192;
@@ -488,8 +515,36 @@ impl Gemma3Model {
         self.config.model_type == "gemma3_text"
     }
 
+    fn use_scaled_fp8_linears(&self) -> bool {
+        self.config.uses_dynamic_fp8()
+    }
+
+    fn use_scaled_linear_for_path(&self, p: &Path) -> bool {
+        self.use_scaled_fp8_linears()
+            && p.iter().last().is_some_and(|component| {
+                self.config
+                    .uses_dynamic_fp8_for_module(&component.to_string())
+            })
+    }
+
+    fn linear_no_bias(
+        &self,
+        builder: &Builder,
+        in_dim: usize,
+        out_dim: usize,
+        p: Path,
+        x: Var,
+    ) -> Var {
+        if self.use_scaled_linear_for_path(&p) {
+            nn::linear_no_bias_scaled(builder, in_dim, out_dim, p, x)
+        } else {
+            nn::linear_no_bias(builder, in_dim, out_dim, p, x)
+        }
+    }
+
     fn is_local_attention_layer(&self, layer_id: usize) -> bool {
-        self.is_gemma3() && !(layer_id + 1).is_multiple_of(self.config.sliding_window_pattern)
+        self.is_gemma3()
+            && !(layer_id + 1).is_multiple_of(self.config.sliding_window_pattern_value())
     }
 
     fn normalize(&self, builder: &Builder, x: Var) -> Var {
@@ -508,14 +563,14 @@ impl Gemma3Model {
         x * s
     }
     fn mlp(&self, builder: &Builder, p: Path, x: Var) -> Var {
-        let gate = linear_no_bias(
+        let gate = self.linear_no_bias(
             builder,
             self.config.hidden_size,
             self.config.intermediate_size,
             p.extend(["gate_proj"]).unwrap(),
             x.clone(),
         );
-        let up = linear_no_bias(
+        let up = self.linear_no_bias(
             builder,
             self.config.hidden_size,
             self.config.intermediate_size,
@@ -523,7 +578,7 @@ impl Gemma3Model {
             x,
         );
         let x = gelu(builder, gate) * up;
-        linear_no_bias(
+        self.linear_no_bias(
             builder,
             self.config.intermediate_size,
             self.config.hidden_size,
@@ -550,7 +605,7 @@ impl Gemma3Model {
 
         let [b, s, _] = unpack::<3>(builder, shape(builder, x.clone()));
 
-        let q = linear_no_bias(
+        let q = self.linear_no_bias(
             builder,
             dim,
             num_heads * head_dim,
@@ -558,7 +613,7 @@ impl Gemma3Model {
             x.clone(),
         );
 
-        let k = linear_no_bias(
+        let k = self.linear_no_bias(
             builder,
             dim,
             num_kv_heads * head_dim,
@@ -566,7 +621,7 @@ impl Gemma3Model {
             x.clone(),
         );
 
-        let v = linear_no_bias(
+        let v = self.linear_no_bias(
             builder,
             dim,
             num_kv_heads * head_dim,
@@ -673,7 +728,7 @@ impl Gemma3Model {
         let sh = shape!(builder, b, s, num_heads * head_dim);
         let attn = reshape(builder, sh, attn);
 
-        linear_no_bias(
+        self.linear_no_bias(
             builder,
             num_heads * head_dim,
             dim,
@@ -815,7 +870,7 @@ impl Gemma3Model {
             x,
         );
 
-        x = linear_no_bias(
+        x = nn::linear_no_bias(
             builder,
             self.config.hidden_size,
             self.config.vocab_size,
