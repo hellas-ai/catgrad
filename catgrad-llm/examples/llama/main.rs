@@ -27,6 +27,9 @@ struct Args {
     /// Model revision (branch, tag, or commit)
     #[arg(short = 'r', long, default_value = "main")]
     revision: String,
+    /// Load weights from this GGUF file in the Hugging Face model repo.
+    #[arg(long, value_name = "FILENAME")]
+    gguf_file: Option<String>,
     /// TOML config file overriding model aliases.
     #[arg(short = 'c', long, value_name = "PATH")]
     config_file: Option<PathBuf>,
@@ -177,17 +180,31 @@ fn main() -> Result<()> {
     }
 
     let app_config = get_app_config(&args)?;
+    let resolved_model_name = get_model_name(&args, &app_config);
+    let gguf_file = args
+        .gguf_file
+        .clone()
+        .or_else(|| default_gguf_filename(&resolved_model_name));
     if args.list_models {
         for (model, alias) in get_models(&app_config) {
             println!("{model} ({alias})");
         }
         return Ok(());
     }
+    if gguf_file.is_some() && !matches!(args.backend, BackendChoice::Candle) {
+        anyhow::bail!("GGUF loading currently requires the candle backend");
+    }
     match args.backend {
         BackendChoice::Ndarray => run_with_backend(&args, &app_config, NdArrayBackend),
-        BackendChoice::Candle => {
-            run_with_backend(&args, &app_config, CandleBackend::new_accel(!args.no_accel))
-        }
+        BackendChoice::Candle => match &gguf_file {
+            Some(gguf_file) => run_with_candle_gguf(
+                &args,
+                &app_config,
+                CandleBackend::new_accel(!args.no_accel),
+                gguf_file,
+            ),
+            None => run_with_backend(&args, &app_config, CandleBackend::new_accel(!args.no_accel)),
+        },
     }
 }
 
@@ -197,6 +214,13 @@ fn get_model_name(args: &Args, app_config: &AppConfig) -> String {
         .get(args.model_name.as_str())
         .cloned()
         .unwrap_or_else(|| args.model_name.clone())
+}
+
+fn default_gguf_filename(model_name: &str) -> Option<String> {
+    let basename = model_name.rsplit('/').next().unwrap_or(model_name);
+    basename
+        .contains("GGUF")
+        .then(|| basename.replacen("GGUF", "BF16.gguf", 1))
 }
 
 fn get_models(app_config: &AppConfig) -> Vec<(&str, &str)> {
@@ -340,19 +364,93 @@ fn run_with_backend<B: interpreter::Backend>(
     let start_load = std::time::Instant::now();
     let (parameter_values, parameter_types, config_json, tokenizer, tokenizer_config, total_params) =
         load_model(&model_name, &args.revision, &backend, model_dtype)?;
+    let chat_template = match get_model_chat_template(&model_name, &args.revision) {
+        Ok(template) => template,
+        Err(err) if args.tool_use => return Err(err.into()),
+        Err(_) => String::new(),
+    };
     let elapsed_load = start_load.elapsed();
 
+    run_loaded_model(
+        args,
+        backend,
+        model_name,
+        parameter_values,
+        parameter_types,
+        config_json,
+        tokenizer,
+        tokenizer_config,
+        chat_template,
+        model_dtype,
+        total_params,
+        elapsed_load,
+    )
+}
+
+fn run_with_candle_gguf(
+    args: &Args,
+    app_config: &AppConfig,
+    backend: CandleBackend,
+    gguf_file: &str,
+) -> Result<()> {
+    let model_name = get_model_name(args, app_config);
+    let model_dtype = args.dtype;
+
+    let start_load = std::time::Instant::now();
+    let (
+        parameter_values,
+        parameter_types,
+        config_json,
+        tokenizer,
+        tokenizer_config,
+        chat_template,
+        total_params,
+    ) = load_gguf_model(
+        &model_name,
+        &args.revision,
+        gguf_file,
+        &backend,
+        model_dtype,
+    )?;
+    let elapsed_load = start_load.elapsed();
+
+    run_loaded_model(
+        args,
+        backend,
+        model_name,
+        parameter_values,
+        parameter_types,
+        config_json,
+        tokenizer,
+        tokenizer_config,
+        chat_template,
+        model_dtype,
+        total_params,
+        elapsed_load,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_loaded_model<B: interpreter::Backend>(
+    args: &Args,
+    backend: B,
+    model_name: String,
+    parameter_values: interpreter::Parameters<B>,
+    parameter_types: typecheck::Parameters,
+    config_json: serde_json::Value,
+    tokenizer: tokenizers::Tokenizer,
+    tokenizer_config: serde_json::Value,
+    chat_template: String,
+    model_dtype: Dtype,
+    total_params: usize,
+    elapsed_load: std::time::Duration,
+) -> Result<()> {
     eprintln!(
         "Model weights loaded for {} in {:.2} seconds",
         model_name,
         elapsed_load.as_secs_f64()
     );
 
-    let chat_template = match get_model_chat_template(&model_name, &args.revision) {
-        Ok(template) => template,
-        Err(err) if args.tool_use => return Err(err.into()),
-        Err(_) => String::new(),
-    };
     let tool_schemas = if args.tool_use {
         tools::tool_schemas()
             .into_iter()

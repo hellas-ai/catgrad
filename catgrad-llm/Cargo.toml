@@ -21,6 +21,7 @@ minijinja = { version = "2.11.0", features = ["json", "preserve_order"] }
 minijinja-contrib = { version = "2.11.0", features = ["pycompat"] }
 memmap2 = { workspace = true }
 safetensors = {workspace = true}
+candle-core = "0.10.1"
 log = "0.4.27"
 half = { workspace = true }
 float8 = { workspace = true }
