@@ -59,16 +59,20 @@ pub fn from_json_reader<T: DeserializeOwned, R: Read>(reader: R) -> Result<T> {
     serde_path_to_error::deserialize(&mut deserializer).map_err(LLMError::from)
 }
 
+pub(crate) fn get_model_repo(model: &str, revision: &str) -> Result<hf_hub::api::sync::ApiRepo> {
+    let api = build_hf_api()?;
+    Ok(api.repo(Repo::with_revision(
+        model.to_string(),
+        RepoType::Model,
+        revision.to_string(),
+    )))
+}
+
 pub fn get_model_files(
     model: &str,
     revision: &str,
 ) -> Result<(Vec<PathBuf>, PathBuf, PathBuf, PathBuf)> {
-    let api = build_hf_api()?;
-    let repo = api.repo(Repo::with_revision(
-        model.to_string(),
-        RepoType::Model,
-        revision.to_string(),
-    ));
+    let repo = get_model_repo(model, revision)?;
 
     // Get the model.safetensor file(s)
     let m = if let Ok(index) = repo.get("model.safetensors.index.json") {
@@ -103,15 +107,15 @@ pub fn get_model_files(
     Ok((m, c, t, tc))
 }
 
-// Try getting the model's chat template from the repository
-pub fn get_model_chat_template(model: &str, revision: &str) -> Result<String> {
-    let api = build_hf_api()?;
-    let repo = api.repo(Repo::with_revision(
-        model.to_string(),
-        RepoType::Model,
-        revision.to_string(),
-    ));
+fn sanitize_chat_template(chat_template: String) -> String {
+    chat_template
+        .replace("{% generation %}", "")
+        .replace("{%- generation -%}", "")
+        .replace("{% endgeneration %}", "")
+        .replace("{%- endgeneration -%}", "")
+}
 
+fn get_repo_chat_template(repo: &hf_hub::api::sync::ApiRepo) -> Result<String> {
     let chat_template = if let Ok(ct) = repo.get("chat_template.jinja") {
         std::fs::read_to_string(ct)?
     } else {
@@ -126,13 +130,13 @@ pub fn get_model_chat_template(model: &str, revision: &str) -> Result<String> {
             ))?
             .to_string()
     };
-    // Some chat templates contain these tags that are not used for inference.
-    // If more variants show up a regex may be needed later on.
-    Ok(chat_template
-        .replace("{% generation %}", "")
-        .replace("{%- generation -%}", "")
-        .replace("{% endgeneration %}", "")
-        .replace("{%- endgeneration -%}", ""))
+    Ok(sanitize_chat_template(chat_template))
+}
+
+// Try getting the model's chat template from the repository
+pub fn get_model_chat_template(model: &str, revision: &str) -> Result<String> {
+    let repo = get_model_repo(model, revision)?;
+    get_repo_chat_template(&repo)
 }
 
 #[derive(Debug, Clone)]
