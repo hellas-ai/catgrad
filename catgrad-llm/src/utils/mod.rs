@@ -28,6 +28,9 @@ pub use images::*;
 mod audio;
 pub use audio::*;
 
+mod gguf;
+pub use gguf::load_gguf_model;
+
 fn build_hf_api() -> Result<hf_hub::api::sync::Api> {
     let mut builder = ApiBuilder::from_env();
     let env_token = std::env::var("HF_TOKEN")
