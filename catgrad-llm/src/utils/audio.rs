@@ -1,3 +1,4 @@
+use crate::model_media::{AUDIO_FEATURE_SIZE, PreparedAudioFeatures};
 use crate::{LLMError, Result};
 use hound::{SampleFormat, WavReader};
 use rustfft::{FftPlanner, num_complex::Complex32};
@@ -6,23 +7,12 @@ use std::path::Path;
 // This has Gemma4 specific audio constants as it is only used by the Gemma 4 multimodal models
 // Clean up when other models support audio
 pub const AUDIO_SAMPLE_RATE: u32 = 16_000;
-pub const AUDIO_FEATURE_SIZE: usize = 128;
 pub const AUDIO_FRAME_LENGTH: usize = 320;
 pub const AUDIO_HOP_LENGTH: usize = 160;
 pub const AUDIO_FFT_LENGTH: usize = 512;
 pub const AUDIO_MEL_FLOOR: f32 = 1e-3;
 const GEMMA4_AUDIO_MAX_SAMPLES: usize = 480_000;
 const GEMMA4_AUDIO_PAD_TO_MULTIPLE_OF: usize = 128;
-
-#[derive(Debug, Clone)]
-pub struct PreparedAudioFeatures {
-    pub features: Vec<f32>,
-    pub feature_shape: Vec<usize>,
-    pub mask: Vec<f32>,
-    pub mask_shape: Vec<usize>,
-    pub num_mel_frames: usize,
-    pub valid_mel_frames: usize,
-}
 
 pub fn load_wav_file(path: &Path) -> Result<Vec<f32>> {
     let mut reader =
@@ -167,6 +157,14 @@ pub fn prepare_audio_features(path: &Path) -> Result<PreparedAudioFeatures> {
         num_mel_frames,
         valid_mel_frames,
     })
+}
+
+pub fn prepare_gemma4_audio_input(
+    audio_path: &Path,
+    config_json: &serde_json::Value,
+) -> Result<crate::models::gemma4::Gemma4PreparedAudioInput> {
+    let prepared = prepare_audio_features(audio_path)?;
+    Ok(crate::models::gemma4::prepare_gemma4_audio_input_from_features(prepared, config_json)?)
 }
 
 fn hann_window() -> Vec<f32> {

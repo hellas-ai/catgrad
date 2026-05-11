@@ -21,7 +21,6 @@ pub use prompt::{
 };
 
 mod images;
-pub(crate) use images::convert_image_to_patches;
 pub use images::*;
 
 mod audio;

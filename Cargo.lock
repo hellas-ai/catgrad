@@ -415,6 +415,7 @@ dependencies = [
  "anyhow",
  "candle-core",
  "catgrad",
+ "catgrad-llm-models",
  "chrono",
  "clap",
  "env_logger",
@@ -445,6 +446,20 @@ dependencies = [
  "typed-builder",
  "ureq",
  "url",
+]
+
+[[package]]
+name = "catgrad-llm-models"
+version = "0.2.1"
+dependencies = [
+ "catgrad",
+ "float8",
+ "half",
+ "image",
+ "open-hypergraphs",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.17",
 ]
 
 [[package]]

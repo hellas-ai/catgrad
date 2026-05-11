@@ -1,0 +1,19 @@
+[package]
+name = "catgrad-llm-models"
+description = "Model-building support for large language models in catgrad"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+documentation.workspace = true
+
+[dependencies]
+catgrad = { version = "0.2.1", path = "../catgrad" }
+open-hypergraphs = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true, features = ["preserve_order"] }
+half = { workspace = true }
+float8 = { workspace = true }
+thiserror = "2.0"
+image = "0.25.6"

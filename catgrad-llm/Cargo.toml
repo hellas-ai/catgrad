@@ -9,6 +9,7 @@ repository.workspace = true
 documentation.workspace = true
 
 [dependencies]
+catgrad-llm-models = { path = "../catgrad-llm-models" }
 catgrad = {version = "0.2.1", path = "../catgrad", features=["candle-backend"]}
 open-hypergraphs = { workspace = true }
 serde = { workspace = true }

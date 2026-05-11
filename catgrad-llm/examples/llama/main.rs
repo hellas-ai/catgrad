@@ -2,13 +2,11 @@ use anyhow::Result;
 use catgrad::interpreter::backend::candle::CandleBackend;
 use catgrad::interpreter::backend::ndarray::NdArrayBackend;
 use catgrad::prelude::*;
-use catgrad_llm::helpers::{LLMModel, ToolCall, ToolUseStep};
-use catgrad_llm::model_utils::{
-    ModelRuntimeContext, get_model, interpolate_multimodal_prompt, prepare_multimodal_input,
-    split_placeholder_tokens,
-};
-use catgrad_llm::models;
 use catgrad_llm::utils::*;
+use catgrad_llm_models::helpers::{LLMModel, ToolCall, ToolUseStep};
+use catgrad_llm_models::model_utils::{
+    ModelRuntimeContext, get_model, interpolate_multimodal_prompt, split_placeholder_tokens,
+};
 use clap::{Parser, ValueEnum};
 use minijinja::{Value, context};
 use serde::Deserialize;
@@ -519,7 +517,7 @@ fn run_loaded_model<B: interpreter::Backend>(
                 .audio
                 .as_ref()
                 .expect("audio existence already checked");
-            let prepared = models::gemma4::prepare_gemma4_audio_input(audio_path, &config_json)?;
+            let prepared = prepare_gemma4_audio_input(audio_path, &config_json)?;
             (
                 None,
                 Some(prepared.clone()),

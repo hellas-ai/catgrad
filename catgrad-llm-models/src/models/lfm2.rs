@@ -1,8 +1,8 @@
 #![allow(clippy::too_many_arguments)]
 use crate::config::{EosTokenId, LLMConfig};
 use crate::helpers::*;
+use crate::model_media::convert_image_to_patches;
 use crate::models::siglip::{SiglipVisionBackbone, SiglipVisionConfig};
-use crate::utils::convert_image_to_patches;
 use catgrad::prelude::ops::*;
 use catgrad::prelude::*;
 use nn::*;

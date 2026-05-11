@@ -1,9 +1,7 @@
 use catgrad::prelude::Dtype;
-use std::path::Path;
 
 use crate::helpers::LLMModel;
 use crate::models;
-use crate::utils::{load_image, load_image_from_bytes};
 use crate::{LLMError, Result};
 
 #[derive(Debug, Clone)]
@@ -34,33 +32,10 @@ pub fn get_model_architecture(config_json: &serde_json::Value) -> Result<&str> {
         ))
 }
 
-pub fn prepare_multimodal_input(
+pub fn prepare_multimodal_image_input(
     config_json: &serde_json::Value,
-    image_path: Option<&Path>,
+    image: &image::DynamicImage,
 ) -> Result<PreparedMultimodalInput> {
-    let Some(image_path) = image_path else {
-        return Ok(PreparedMultimodalInput::default());
-    };
-    let image = load_image(image_path)?;
-    prepare_multimodal_input_from_image(config_json, Some(&image))
-}
-
-pub fn prepare_multimodal_input_from_bytes(
-    config_json: &serde_json::Value,
-    image_bytes: &[u8],
-) -> Result<PreparedMultimodalInput> {
-    let image = load_image_from_bytes(image_bytes)?;
-    prepare_multimodal_input_from_image(config_json, Some(&image))
-}
-
-fn prepare_multimodal_input_from_image(
-    config_json: &serde_json::Value,
-    image: Option<&image::DynamicImage>,
-) -> Result<PreparedMultimodalInput> {
-    let Some(image) = image else {
-        return Ok(PreparedMultimodalInput::default());
-    };
-
     match get_model_architecture(config_json)? {
         "Gemma3ForConditionalGeneration" | "PaliGemmaForConditionalGeneration" => {
             let (data, shape) = models::gemma3::prepare_gemma3_image_input(image, config_json)?;

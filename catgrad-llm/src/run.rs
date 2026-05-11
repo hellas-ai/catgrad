@@ -11,7 +11,7 @@
 use crate::helpers::LLMModel;
 use crate::model_utils::{
     PreparedImageInput, PreparedMultimodalInput, get_model, interpolate_multimodal_prompt,
-    prepare_multimodal_input, prepare_multimodal_input_from_bytes, split_placeholder_tokens,
+    split_placeholder_tokens,
 };
 use crate::types;
 use crate::utils::*;

@@ -1,9 +1,9 @@
 #![allow(clippy::too_many_arguments)]
 use crate::config::LLMConfig;
 use crate::helpers::*;
+use crate::model_media::load_and_preprocess_dynamic_image;
 use crate::models::llama::{LlamaConfig, LlamaModel};
 use crate::models::siglip::{SiglipVisionBackbone, SiglipVisionConfig};
-use crate::utils::load_and_preprocess_dynamic_image;
 use catgrad::prelude::ops::*;
 use catgrad::prelude::*;
 use nn::*;
