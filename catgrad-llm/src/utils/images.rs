@@ -1,6 +1,10 @@
-use crate::model_media::PatchedImageInput;
-use crate::model_utils::{PreparedMultimodalInput, prepare_multimodal_image_input};
 use crate::{LLMError, Result};
+use catgrad_llm_models::utils::{
+    PatchedImageInput, PreparedMultimodalInput,
+    load_and_patchify_dynamic_image as model_load_and_patchify_dynamic_image,
+    load_and_preprocess_dynamic_image as model_load_and_preprocess_dynamic_image,
+    prepare_multimodal_image_input,
+};
 use std::path::{Path, PathBuf};
 use std::{fs::File, io::Read};
 
@@ -28,7 +32,7 @@ pub fn load_and_preprocess_dynamic_image(
     image_size: usize,
     patch_size: usize,
 ) -> Result<(Vec<f32>, Vec<usize>)> {
-    Ok(crate::model_media::load_and_preprocess_dynamic_image(
+    Ok(model_load_and_preprocess_dynamic_image(
         img, image_size, patch_size,
     )?)
 }
@@ -69,7 +73,7 @@ pub fn load_and_patchify_dynamic_image(
     max_soft_tokens: usize,
     pooling_kernel_size: usize,
 ) -> Result<PatchedImageInput> {
-    Ok(crate::model_media::load_and_patchify_dynamic_image(
+    Ok(model_load_and_patchify_dynamic_image(
         img,
         patch_size,
         max_soft_tokens,

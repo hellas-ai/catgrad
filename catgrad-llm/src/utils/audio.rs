@@ -1,5 +1,5 @@
-use crate::model_media::{AUDIO_FEATURE_SIZE, PreparedAudioFeatures};
 use crate::{LLMError, Result};
+use catgrad_llm_models::utils::{AUDIO_FEATURE_SIZE, PreparedAudioFeatures};
 use hound::{SampleFormat, WavReader};
 use rustfft::{FftPlanner, num_complex::Complex32};
 use std::path::Path;

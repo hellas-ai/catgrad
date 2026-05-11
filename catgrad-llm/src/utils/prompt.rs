@@ -1,5 +1,5 @@
-use crate::model_utils::PreparedMultimodalInput;
 use crate::{Result, types};
+use catgrad_llm_models::utils::PreparedMultimodalInput;
 use chrono::Local;
 use minijinja::{Environment, Error, ErrorKind, State, Value, context};
 use minijinja_contrib::pycompat::unknown_method_callback;

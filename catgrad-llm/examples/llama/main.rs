@@ -4,7 +4,7 @@ use catgrad::interpreter::backend::ndarray::NdArrayBackend;
 use catgrad::prelude::*;
 use catgrad_llm::utils::*;
 use catgrad_llm_models::helpers::{LLMModel, ToolCall, ToolUseStep};
-use catgrad_llm_models::model_utils::{
+use catgrad_llm_models::utils::{
     ModelRuntimeContext, get_model, interpolate_multimodal_prompt, split_placeholder_tokens,
 };
 use clap::{Parser, ValueEnum};

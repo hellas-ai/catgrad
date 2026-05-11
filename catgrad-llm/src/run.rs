@@ -9,16 +9,16 @@
 //! token position, and generated text do not leak across requests. If you want prior conversation
 //! to influence generation, include that history in the prepared prompt or message list.
 use crate::helpers::LLMModel;
-use crate::model_utils::{
-    PreparedImageInput, PreparedMultimodalInput, get_model, interpolate_multimodal_prompt,
-    split_placeholder_tokens,
-};
 use crate::types;
 use crate::utils::*;
 use crate::{Detokenizer, LLMError, PreparedPrompt, Result};
 use catgrad::interpreter::backend::candle::CandleBackend;
 use catgrad::interpreter::{self, Backend};
 use catgrad::prelude::{Dtype, Shape, TypedTerm, stdlib, to_load_ops};
+use catgrad_llm_models::utils::{
+    PreparedImageInput, PreparedMultimodalInput, get_model, interpolate_multimodal_prompt,
+    split_placeholder_tokens,
+};
 use std::io::Read;
 use std::path::PathBuf;
 use std::rc::Rc;

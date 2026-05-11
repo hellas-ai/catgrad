@@ -1,9 +1,8 @@
 pub mod config;
 mod error;
 pub mod helpers;
-pub mod model_media;
-pub mod model_utils;
 pub mod models;
+pub mod utils;
 
 pub use error::ModelError;
 pub use error::ModelError as LLMError;

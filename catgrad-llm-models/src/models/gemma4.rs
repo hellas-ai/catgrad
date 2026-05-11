@@ -1,10 +1,8 @@
 #![allow(clippy::too_many_arguments)]
 use crate::config::{EosTokenId, LLMConfig};
 use crate::helpers::*;
-use crate::model_media::{
-    AUDIO_FEATURE_SIZE, PreparedAudioFeatures, load_and_patchify_dynamic_image,
-};
 use crate::models::conformer::{Gemma4AudioConfig, Gemma4AudioTower};
+use crate::utils::{AUDIO_FEATURE_SIZE, PreparedAudioFeatures, load_and_patchify_dynamic_image};
 use catgrad::prelude::ops::*;
 use catgrad::prelude::*;
 use nn::*;
