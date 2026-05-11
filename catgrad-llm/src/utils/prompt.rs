@@ -1,4 +1,4 @@
-use super::PreparedMultimodalInput;
+use crate::model_utils::PreparedMultimodalInput;
 use crate::{Result, types};
 use chrono::Local;
 use minijinja::{Environment, Error, ErrorKind, State, Value, context};

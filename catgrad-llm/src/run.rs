@@ -9,6 +9,10 @@
 //! token position, and generated text do not leak across requests. If you want prior conversation
 //! to influence generation, include that history in the prepared prompt or message list.
 use crate::helpers::LLMModel;
+use crate::model_utils::{
+    PreparedImageInput, PreparedMultimodalInput, get_model, interpolate_multimodal_prompt,
+    prepare_multimodal_input, prepare_multimodal_input_from_bytes, split_placeholder_tokens,
+};
 use crate::types;
 use crate::utils::*;
 use crate::{Detokenizer, LLMError, PreparedPrompt, Result};
@@ -314,7 +318,7 @@ impl ModelEngine {
     fn prepare_multimodal_messages(
         &self,
         messages: &[types::Message],
-    ) -> Result<crate::utils::PreparedMultimodalInput> {
+    ) -> Result<PreparedMultimodalInput> {
         let Some(image_url) = extract_openai_image_url(messages)? else {
             return Ok(Default::default());
         };
@@ -484,7 +488,7 @@ enum ImageSource {
 fn build_multimodal_state(
     model: &dyn LLMModel,
     interpreter: &interpreter::Interpreter<CandleBackend>,
-    image: &crate::utils::PreparedImageInput,
+    image: &PreparedImageInput,
 ) -> Result<MultimodalState> {
     let metadata = model.multimodal_metadata().ok_or_else(|| {
         LLMError::InvalidModelConfig("Model does not provide multimodal metadata".to_string())

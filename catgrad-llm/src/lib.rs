@@ -3,6 +3,7 @@
 pub mod config;
 mod error;
 pub mod helpers;
+pub mod model_utils;
 pub mod models;
 pub mod run;
 pub mod types;

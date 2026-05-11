@@ -3,6 +3,10 @@ use catgrad::interpreter::backend::candle::CandleBackend;
 use catgrad::interpreter::backend::ndarray::NdArrayBackend;
 use catgrad::prelude::*;
 use catgrad_llm::helpers::{LLMModel, ToolCall, ToolUseStep};
+use catgrad_llm::model_utils::{
+    ModelRuntimeContext, get_model, interpolate_multimodal_prompt, prepare_multimodal_input,
+    split_placeholder_tokens,
+};
 use catgrad_llm::models;
 use catgrad_llm::utils::*;
 use clap::{Parser, ValueEnum};
