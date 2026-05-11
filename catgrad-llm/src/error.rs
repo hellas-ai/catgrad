@@ -2,6 +2,9 @@ use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum LLMError {
+    #[error(transparent)]
+    ModelError(#[from] catgrad_llm_models::ModelError),
+
     #[error("IO error occurred: {0}")]
     IoError(#[from] std::io::Error),
 

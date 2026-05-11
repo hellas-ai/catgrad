@@ -2,12 +2,11 @@
 use crate::config::{EosTokenId, LLMConfig};
 use crate::helpers::*;
 use crate::models::conformer::{Gemma4AudioConfig, Gemma4AudioTower};
-use crate::utils::{AUDIO_FEATURE_SIZE, load_and_patchify_dynamic_image, prepare_audio_features};
+use crate::utils::{AUDIO_FEATURE_SIZE, PreparedAudioFeatures, load_and_patchify_dynamic_image};
 use catgrad::prelude::ops::*;
 use catgrad::prelude::*;
 use nn::*;
 use serde::{Deserialize, Serialize};
-use std::path::Path as FsPath;
 
 #[derive(Debug, Clone, Deserialize)]
 struct Gemma4Config {
@@ -241,15 +240,14 @@ pub fn prepare_gemma4_image_input(
     })
 }
 
-pub fn prepare_gemma4_audio_input(
-    audio_path: &FsPath,
+pub fn prepare_gemma4_audio_input_from_features(
+    prepared: PreparedAudioFeatures,
     config_json: &serde_json::Value,
 ) -> crate::Result<Gemma4PreparedAudioInput> {
     let config: Gemma4Config = serde_json::from_value(config_json.clone())?;
     let audio_config = config.audio_config.ok_or_else(|| {
         crate::LLMError::InvalidModelConfig("gemma4 missing audio_config".to_string())
     })?;
-    let prepared = prepare_audio_features(audio_path)?;
     let num_soft_tokens_per_audio =
         audio_config.num_soft_tokens_for_frames(prepared.valid_mel_frames);
     Ok(Gemma4PreparedAudioInput {

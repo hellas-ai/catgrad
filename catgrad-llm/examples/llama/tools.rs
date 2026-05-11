@@ -1,5 +1,5 @@
 use anyhow::{Result, anyhow};
-use catgrad_llm::helpers::ToolCall;
+use catgrad_llm_models::helpers::ToolCall;
 use serde_json::{Map, Value as JsonValue, json};
 
 pub fn tool_schemas() -> Vec<JsonValue> {

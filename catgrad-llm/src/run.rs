@@ -15,6 +15,10 @@ use crate::{Detokenizer, LLMError, PreparedPrompt, Result};
 use catgrad::interpreter::backend::candle::CandleBackend;
 use catgrad::interpreter::{self, Backend};
 use catgrad::prelude::{Dtype, Shape, TypedTerm, stdlib, to_load_ops};
+use catgrad_llm_models::utils::{
+    PreparedImageInput, PreparedMultimodalInput, get_model, interpolate_multimodal_prompt,
+    split_placeholder_tokens,
+};
 use std::io::Read;
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -314,7 +318,7 @@ impl ModelEngine {
     fn prepare_multimodal_messages(
         &self,
         messages: &[types::Message],
-    ) -> Result<crate::utils::PreparedMultimodalInput> {
+    ) -> Result<PreparedMultimodalInput> {
         let Some(image_url) = extract_openai_image_url(messages)? else {
             return Ok(Default::default());
         };
@@ -484,7 +488,7 @@ enum ImageSource {
 fn build_multimodal_state(
     model: &dyn LLMModel,
     interpreter: &interpreter::Interpreter<CandleBackend>,
-    image: &crate::utils::PreparedImageInput,
+    image: &PreparedImageInput,
 ) -> Result<MultimodalState> {
     let metadata = model.multimodal_metadata().ok_or_else(|| {
         LLMError::InvalidModelConfig("Model does not provide multimodal metadata".to_string())
