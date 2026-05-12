@@ -452,14 +452,19 @@ dependencies = [
 name = "catgrad-llm-models"
 version = "0.2.1"
 dependencies = [
+ "anyhow",
  "catgrad",
+ "clap",
+ "env_logger",
  "float8",
  "half",
+ "hf-hub",
  "image",
  "open-hypergraphs",
  "serde",
  "serde_json",
  "thiserror 2.0.17",
+ "toml",
 ]
 
 [[package]]
