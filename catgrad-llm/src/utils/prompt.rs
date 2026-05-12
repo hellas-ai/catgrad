@@ -16,7 +16,7 @@ pub struct PreparedPrompt {
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct RenderChatTemplateOptions<'a> {
-    pub enable_thinking: bool,
+    pub thinking: types::ThinkingPolicy,
     pub tools: Option<&'a [Value]>,
 }
 
@@ -125,7 +125,7 @@ pub(crate) fn render_chat_prompt(
         tokenizer_config,
         messages,
         RenderChatTemplateOptions {
-            enable_thinking: false,
+            thinking: types::ThinkingPolicy::Default,
             tools: None,
         },
     )
@@ -170,7 +170,7 @@ fn render_chat_messages(
             .map(Value::from_serialize)
             .unwrap_or(Value::UNDEFINED),
         add_generation_prompt => true,
-        enable_thinking => options.enable_thinking,
+        enable_thinking => options.thinking.enables_template_thinking(),
         bos_token => bos_token
     ))?;
 
@@ -257,7 +257,7 @@ pub fn render_chat_template(
         tokenizer_config,
         &messages,
         RenderChatTemplateOptions {
-            enable_thinking,
+            thinking: enable_thinking.into(),
             tools: None,
         },
     )

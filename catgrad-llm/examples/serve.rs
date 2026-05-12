@@ -239,7 +239,7 @@ fn serve_openai(request: Request, engine: &InferenceEngine, req: openai::ChatCom
         .as_ref()
         .and_then(|opts| opts.include_usage)
         .unwrap_or(false);
-    let prepared = match engine.engine.prepare_openai_chat_request(&req) {
+    let prepared = match engine.engine.prepare_openai(&req) {
         Ok(prepared) => prepared,
         Err(err) => {
             respond_llm_error(request, err);
@@ -366,8 +366,7 @@ fn serve_anthropic(request: Request, engine: &InferenceEngine, req: &anthropic::
     let model = engine.model_name.clone();
     let max_tokens = req.max_tokens;
     let stream = req.stream == Some(true);
-    let messages: Vec<_> = req.into();
-    let prepared = match engine.engine.prepare_messages(&messages) {
+    let prepared = match engine.engine.prepare_anthropic(req) {
         Ok(prepared) => prepared,
         Err(err) => {
             respond_llm_error(request, err);

@@ -308,7 +308,7 @@ fn render_tool_prompt(
         tokenizer_config,
         &[user_message(prompt, None)],
         RenderChatTemplateOptions {
-            enable_thinking,
+            thinking: enable_thinking.into(),
             tools: Some(tools),
         },
     )?)
@@ -349,7 +349,7 @@ fn render_tool_follow_up_prompt(
         tokenizer_config,
         &messages,
         RenderChatTemplateOptions {
-            enable_thinking,
+            thinking: enable_thinking.into(),
             tools: Some(tools),
         },
     )?)
@@ -501,7 +501,7 @@ fn run_loaded_model<B: interpreter::Backend>(
             &tokenizer_config,
             &[user_message(&args.prompt, modality)],
             RenderChatTemplateOptions {
-                enable_thinking: args.thinking,
+                thinking: args.thinking.into(),
                 tools: None,
             },
         )?
