@@ -1,22 +1,34 @@
+//! Demo HTTP server exposing OpenAI and Anthropic chat surfaces over a
+//! single in-process `ModelEngine`.
+//!
+//! `ModelEngine` is `!Send` (Rc-backed), so the engine lives on a dedicated
+//! worker thread. Handlers post closures into the worker via a
+//! `tokio::sync::mpsc` channel; the closure runs on the worker thread with
+//! `&Worker` and writes its result back through a `oneshot` or SSE channel.
+//!
+//! Known limitation: user-provided stop strings are ignored; only
+//! model-native EOS stopping is supported.
+
+use std::convert::Infallible;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use axum::extract::State;
+use axum::http::StatusCode;
+use axum::response::sse::{Event, Sse};
+use axum::response::{IntoResponse, Response};
+use axum::routing::post;
+use axum::{Json, Router};
 use catgrad::prelude::Dtype;
 use clap::Parser;
 use serde::Serialize;
 use serde_json::json;
-use std::io::{Cursor, Read};
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::mpsc::{self, Receiver, Sender};
-use std::thread;
-use std::time::{SystemTime, UNIX_EPOCH};
-use tiny_http::{Header, Method, Request, Response, Server, StatusCode};
+use tokio::sync::{mpsc, oneshot};
+use tokio_stream::wrappers::UnboundedReceiverStream;
 
-use catgrad_llm::LLMError;
-use catgrad_llm::run::ModelEngine;
-use catgrad_llm::types::{anthropic, openai, plain};
-use catgrad_llm::utils::from_json_slice;
-
-// Known limitations of this demo server:
-// - User-provided stop strings are ignored; only model-native EOS stopping is supported.
-// - /v1/completions only supports string prompts.
+use catgrad_llm::run::{GenerationOutput, ModelEngine};
+use catgrad_llm::types::{anthropic, openai};
+use catgrad_llm::{LLMError, Result as LlmResult};
 
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -43,120 +55,14 @@ struct Args {
     default_max_tokens: u32,
 }
 
-struct InferenceEngine {
-    engine: ModelEngine,
-    model_name: String,
-    default_max_tokens: u32,
-}
-
-impl InferenceEngine {
-    fn new(model: &str, use_kv_cache: bool, default_max_tokens: u32) -> anyhow::Result<Self> {
-        Ok(Self {
-            engine: ModelEngine::new(model, use_kv_cache, Dtype::F32)?,
-            model_name: model.to_string(),
-            default_max_tokens,
-        })
-    }
-}
-
-struct ChannelReader {
-    rx: Receiver<Vec<u8>>,
-    current: Cursor<Vec<u8>>,
-    done: bool,
-}
-
-impl ChannelReader {
-    fn new(rx: Receiver<Vec<u8>>) -> Self {
-        Self {
-            rx,
-            current: Cursor::new(Vec::new()),
-            done: false,
-        }
-    }
-}
-
-impl Read for ChannelReader {
-    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        loop {
-            let read = self.current.read(buf)?;
-            if read > 0 {
-                return Ok(read);
-            }
-
-            if self.done {
-                return Ok(0);
-            }
-
-            if let Ok(next) = self.rx.recv() {
-                self.current = Cursor::new(next);
-            } else {
-                self.done = true;
-                return Ok(0);
-            }
-        }
-    }
-}
+/// SSE events flow back as `Result<Event, Infallible>` so the receiver
+/// stream plugs straight into `Sse::new(...)` with no mapping.
+type SseSink = mpsc::UnboundedSender<Result<Event, Infallible>>;
+type Job = Box<dyn FnOnce(&Worker) + Send + 'static>;
 
 #[derive(Clone)]
-struct SseSender {
-    tx: Sender<Vec<u8>>,
-}
-
-impl SseSender {
-    fn new(tx: Sender<Vec<u8>>) -> Self {
-        Self { tx }
-    }
-
-    fn send_data<T: Serialize>(&self, payload: &T) -> anyhow::Result<()> {
-        let mut frame = b"data: ".to_vec();
-        frame.extend(serde_json::to_vec(payload)?);
-        frame.extend(b"\n\n");
-        self.tx
-            .send(frame)
-            .map_err(|_| anyhow::anyhow!("stream receiver disconnected"))
-    }
-
-    fn send_event_data<T: Serialize>(&self, event: &str, payload: &T) -> anyhow::Result<()> {
-        let mut frame = b"event: ".to_vec();
-        frame.extend(event.as_bytes());
-        frame.extend(b"\n");
-        frame.extend(b"data: ");
-        frame.extend(serde_json::to_vec(payload)?);
-        frame.extend(b"\n\n");
-        self.tx
-            .send(frame)
-            .map_err(|_| anyhow::anyhow!("stream receiver disconnected"))
-    }
-
-    fn send_done(&self) -> anyhow::Result<()> {
-        self.tx
-            .send(b"data: [DONE]\n\n".to_vec())
-            .map_err(|_| anyhow::anyhow!("stream receiver disconnected"))
-    }
-
-    fn send_error(&self, message: &str) -> anyhow::Result<()> {
-        self.send_event_data(
-            "error",
-            &json!({
-                "error": {
-                    "message": message
-                }
-            }),
-        )
-    }
-}
-
-fn sse_response(rx: Receiver<Vec<u8>>) -> Response<ChannelReader> {
-    let headers = vec![
-        Header::from_bytes("Content-Type", "text/event-stream")
-            .expect("failed to construct content-type header"),
-        Header::from_bytes("Cache-Control", "no-cache")
-            .expect("failed to construct cache-control header"),
-        Header::from_bytes("Connection", "keep-alive")
-            .expect("failed to construct connection header"),
-    ];
-
-    Response::new(StatusCode(200), headers, ChannelReader::new(rx), None, None)
+struct AppState {
+    jobs: mpsc::UnboundedSender<Job>,
 }
 
 fn now_unix() -> i64 {
@@ -167,466 +73,401 @@ fn now_unix() -> i64 {
 }
 
 fn next_id(prefix: &str) -> String {
-    let n = NEXT_ID.fetch_add(1, Ordering::Relaxed);
-    format!("{prefix}-{n}")
+    format!("{prefix}-{}", NEXT_ID.fetch_add(1, Ordering::Relaxed))
 }
 
-fn json_response<T: Serialize>(status: u16, value: &T) -> Response<std::io::Cursor<Vec<u8>>> {
-    let body = serde_json::to_vec(value).unwrap_or_else(|_| b"{}".to_vec());
-    let mut response = Response::from_data(body).with_status_code(StatusCode(status));
-    response.add_header(
-        Header::from_bytes("Content-Type", "application/json")
-            .expect("failed to construct content-type header"),
-    );
-    response
+fn data_event<T: Serialize>(payload: &T) -> Event {
+    Event::default().data(serde_json::to_string(payload).unwrap_or_else(|_| "{}".into()))
 }
 
-fn error_response(status: u16, message: &str) -> Response<std::io::Cursor<Vec<u8>>> {
-    json_response(
-        status,
-        &json!({
-            "error": {
-                "message": message
-            }
-        }),
-    )
+fn named_event<T: Serialize>(name: &str, payload: &T) -> Event {
+    Event::default()
+        .event(name)
+        .data(serde_json::to_string(payload).unwrap_or_else(|_| "{}".into()))
 }
 
-fn request_body(request: &mut Request) -> Result<Vec<u8>, std::io::Error> {
-    let mut body = Vec::new();
-    request.as_reader().read_to_end(&mut body)?;
-    Ok(body)
-}
-
-fn respond_llm_error(request: Request, err: LLMError) {
-    let status = match err {
-        LLMError::UnsupportedTemplateFeature(_) => 400,
-        _ => 500,
-    };
-    let message = match status {
-        400 => err.to_string(),
-        _ => format!("Inference error: {err}"),
-    };
-    let _ = request.respond(error_response(status, &message));
-}
-
-fn respond_with_sse_stream<F>(request: Request, f: F)
+/// Emit an event when an SSE sink is attached. Lazy: the closure only
+/// runs in streaming mode. Returns `Err(IoError)` when the client has
+/// disconnected, so the generation loop can short-circuit.
+fn emit_maybe<F>(sse: Option<&SseSink>, event: F) -> LlmResult<()>
 where
-    F: FnOnce(SseSender) -> anyhow::Result<()>,
+    F: FnOnce() -> Event,
 {
-    let (tx, rx) = mpsc::channel::<Vec<u8>>();
-    let sender = SseSender::new(tx);
-    let error_sender = sender.clone();
-    let response = sse_response(rx);
-
-    let handle = thread::spawn(move || {
-        let _ = request.respond(response);
-    });
-
-    if let Err(err) = f(sender) {
-        log::error!("streaming response failed: {err}");
-        let _ = error_sender.send_error(&format!("{err:#}"));
+    match sse {
+        Some(sse) => sse
+            .send(Ok(event()))
+            .map_err(|_| std::io::Error::other("client disconnected").into()),
+        None => Ok(()),
     }
-    let _ = handle.join();
 }
 
-fn serve_openai(request: Request, engine: &InferenceEngine, req: openai::ChatCompletionRequest) {
-    let model = engine.model_name.clone();
-    let max_tokens = req.max_tokens;
-    let stream = req.stream == Some(true);
-    let stream_include_usage = req
-        .stream_options
-        .as_ref()
-        .and_then(|opts| opts.include_usage)
-        .unwrap_or(false);
-    let prepared = match engine.engine.prepare_openai(&req) {
-        Ok(prepared) => prepared,
-        Err(err) => {
-            respond_llm_error(request, err);
-            return;
-        }
+fn error_response(status: StatusCode, message: impl Into<String>) -> Response {
+    (
+        status,
+        Json(json!({ "error": { "message": message.into() } })),
+    )
+        .into_response()
+}
+
+fn llm_error_response(err: LLMError) -> Response {
+    let status = match err {
+        LLMError::UnsupportedTemplateFeature(_) => StatusCode::BAD_REQUEST,
+        _ => StatusCode::INTERNAL_SERVER_ERROR,
     };
+    error_response(status, err.to_string())
+}
 
-    if stream {
-        respond_with_sse_stream(request, |sse| {
-            let id = next_id("chatcmpl");
-            let created = now_unix();
-
-            let start_chunk = openai::ChatCompletionChunk::builder()
-                .id(id.clone())
-                .object("chat.completion.chunk".to_string())
-                .created(created)
-                .model(model.clone())
-                .choices(vec![
-                    openai::ChatStreamChoice::builder()
-                        .index(0)
-                        .delta(openai::ChatDelta {
-                            role: Some("assistant".to_string()),
-                            ..Default::default()
-                        })
-                        .build(),
-                ])
-                .build();
-            sse.send_data(&start_chunk)?;
-
-            let generated = engine.engine.generate_from_prepared(
-                &prepared,
-                max_tokens.unwrap_or(engine.default_max_tokens),
-                |delta| {
-                    let chunk = openai::ChatCompletionChunk::builder()
-                        .id(id.clone())
-                        .object("chat.completion.chunk".to_string())
-                        .created(created)
-                        .model(model.clone())
-                        .choices(vec![
-                            openai::ChatStreamChoice::builder()
-                                .index(0)
-                                .delta(openai::ChatDelta {
-                                    content: Some(delta.to_string()),
-                                    ..Default::default()
-                                })
-                                .build(),
-                        ])
-                        .build();
-                    sse.send_data(&chunk).map_err(std::io::Error::other)?;
-                    Ok(())
-                },
-            )?;
-
-            let final_chunk = openai::ChatCompletionChunk::builder()
-                .id(id.clone())
-                .object("chat.completion.chunk".to_string())
-                .created(created)
-                .model(model.clone())
-                .choices(vec![
-                    openai::ChatStreamChoice::builder()
-                        .index(0)
-                        .delta(openai::ChatDelta::default())
-                        .finish_reason(Some(generated.termination.into()))
-                        .build(),
-                ])
-                .build();
-            sse.send_data(&final_chunk)?;
-
-            if stream_include_usage {
-                let usage_chunk = openai::ChatCompletionChunk::builder()
-                    .id(id)
-                    .object("chat.completion.chunk".to_string())
-                    .created(created)
-                    .model(model)
-                    .choices(vec![])
-                    .usage(Some(openai::Usage::from_counts(
-                        generated.prompt_tokens,
-                        generated.completion_tokens,
-                    )))
-                    .build();
-                sse.send_data(&usage_chunk)?;
-            }
-
-            sse.send_done()?;
-            Ok(())
-        });
-        return;
+/// Dispatch a request to the worker, returning either a single typed
+/// JSON response (non-streaming) or an SSE stream the worker fills as
+/// it goes. The worker closure sees `Option<&SseSink>` and emits
+/// events through `emit_maybe` when one is attached.
+async fn respond<T, F>(jobs: &mpsc::UnboundedSender<Job>, streaming: bool, f: F) -> Response
+where
+    T: Serialize + Send + 'static,
+    F: FnOnce(&Worker, Option<&SseSink>) -> LlmResult<T> + Send + 'static,
+{
+    let worker_dead = || {
+        error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "inference worker terminated",
+        )
+    };
+    if streaming {
+        let (tx, rx) = mpsc::unbounded_channel();
+        if jobs
+            .send(Box::new(move |w| {
+                if let Err(err) = f(w, Some(&tx)) {
+                    let _ = tx.send(Ok(named_event(
+                        "error",
+                        &json!({ "message": err.to_string() }),
+                    )));
+                }
+            }))
+            .is_err()
+        {
+            return worker_dead();
+        }
+        Sse::new(UnboundedReceiverStream::new(rx)).into_response()
+    } else {
+        let (tx, rx) = oneshot::channel();
+        if jobs
+            .send(Box::new(move |w| {
+                let _ = tx.send(f(w, None));
+            }))
+            .is_err()
+        {
+            return worker_dead();
+        }
+        match rx.await {
+            Ok(Ok(t)) => Json(t).into_response(),
+            Ok(Err(err)) => llm_error_response(err),
+            Err(_) => worker_dead(),
+        }
     }
+}
 
-    let generated = match engine.engine.generate_from_prepared(
-        &prepared,
-        max_tokens.unwrap_or(engine.default_max_tokens),
-        |_| Ok(()),
-    ) {
-        Ok(out) => out,
-        Err(err) => {
-            let _ = request.respond(error_response(500, &format!("Inference error: {err}")));
-            return;
-        }
-    };
+// --- Handlers ---
 
-    let response = openai::ChatCompletionResponse::builder()
-        .id(next_id("chatcmpl"))
-        .object("chat.completion".to_string())
-        .created(now_unix())
+async fn handle_openai(
+    State(state): State<AppState>,
+    Json(req): Json<openai::ChatCompletionRequest>,
+) -> Response {
+    respond(&state.jobs, req.stream == Some(true), move |w, sse| {
+        w.serve_openai(req, sse)
+    })
+    .await
+}
+
+async fn handle_anthropic(
+    State(state): State<AppState>,
+    Json(req): Json<anthropic::MessageRequest>,
+) -> Response {
+    respond(&state.jobs, req.stream == Some(true), move |w, sse| {
+        w.serve_anthropic(req, sse)
+    })
+    .await
+}
+
+// --- Worker ---
+
+fn openai_chunk(
+    id: &str,
+    created: i64,
+    model: &str,
+    delta: openai::ChatDelta,
+    finish_reason: Option<openai::FinishReason>,
+) -> openai::ChatCompletionChunk {
+    openai::ChatCompletionChunk::builder()
+        .id(id.into())
+        .object("chat.completion.chunk".into())
+        .created(created)
+        .model(model.into())
+        .choices(vec![
+            openai::ChatStreamChoice::builder()
+                .index(0)
+                .delta(delta)
+                .finish_reason(finish_reason)
+                .build(),
+        ])
+        .build()
+}
+
+fn openai_response(
+    id: String,
+    created: i64,
+    model: String,
+    g: GenerationOutput,
+) -> openai::ChatCompletionResponse {
+    openai::ChatCompletionResponse::builder()
+        .id(id)
+        .object("chat.completion".into())
+        .created(created)
         .model(model)
         .choices(vec![
             openai::ChatChoice::builder()
                 .index(0)
-                .message(openai::ChatMessage::assistant(generated.text))
-                .finish_reason(Some(generated.termination.into()))
+                .message(openai::ChatMessage::assistant(g.text))
+                .finish_reason(Some(g.termination.into()))
                 .build(),
         ])
         .usage(Some(openai::Usage::from_counts(
-            generated.prompt_tokens,
-            generated.completion_tokens,
+            g.prompt_tokens,
+            g.completion_tokens,
         )))
-        .build();
-
-    let _ = request.respond(json_response(200, &response));
+        .build()
 }
 
-fn serve_anthropic(request: Request, engine: &InferenceEngine, req: &anthropic::MessageRequest) {
-    let model = engine.model_name.clone();
-    let max_tokens = req.max_tokens;
-    let stream = req.stream == Some(true);
-    let prepared = match engine.engine.prepare_anthropic(req) {
-        Ok(prepared) => prepared,
-        Err(err) => {
-            respond_llm_error(request, err);
-            return;
-        }
-    };
+fn anthropic_response(
+    id: String,
+    model: String,
+    g: GenerationOutput,
+) -> anthropic::MessageResponse {
+    anthropic::MessageResponse::builder()
+        .id(id)
+        .message_type(Some("message".into()))
+        .role("assistant".into())
+        .content(vec![anthropic::ContentBlock::Text { text: g.text }])
+        .model(model)
+        .stop_reason(Some(g.termination.into()))
+        .usage(anthropic::AnthropicUsage::new(
+            g.prompt_tokens,
+            g.completion_tokens,
+        ))
+        .build()
+}
 
-    if stream {
-        respond_with_sse_stream(request, |sse| {
-            let id = next_id("msg");
-            let created_usage = anthropic::AnthropicUsage::new(prepared.input_ids.len() as u32, 0);
-            let message_start = anthropic::MessageStreamEvent::MessageStart {
+struct Worker {
+    engine: ModelEngine,
+    model_name: String,
+    default_max_tokens: u32,
+}
+
+impl Worker {
+    fn new(model: &str, use_kv_cache: bool, default_max_tokens: u32) -> anyhow::Result<Self> {
+        Ok(Self {
+            engine: ModelEngine::new(model, use_kv_cache, Dtype::F32)?,
+            model_name: model.to_string(),
+            default_max_tokens,
+        })
+    }
+
+    fn run(self, mut jobs: mpsc::UnboundedReceiver<Job>) {
+        while let Some(job) = jobs.blocking_recv() {
+            job(&self);
+        }
+    }
+
+    fn serve_openai(
+        &self,
+        req: openai::ChatCompletionRequest,
+        sse: Option<&SseSink>,
+    ) -> LlmResult<openai::ChatCompletionResponse> {
+        let max_tokens = req.max_tokens.unwrap_or(self.default_max_tokens);
+        let include_usage = req
+            .stream_options
+            .as_ref()
+            .and_then(|o| o.include_usage)
+            .unwrap_or(false);
+        let prepared = self.engine.prepare_openai(&req)?;
+
+        let id = next_id("chatcmpl");
+        let created = now_unix();
+        let model = self.model_name.clone();
+
+        emit_maybe(sse, || {
+            data_event(&openai_chunk(
+                &id,
+                created,
+                &model,
+                openai::ChatDelta {
+                    role: Some("assistant".into()),
+                    ..Default::default()
+                },
+                None,
+            ))
+        })?;
+
+        let g = self
+            .engine
+            .generate_from_prepared(&prepared, max_tokens, |delta| {
+                emit_maybe(sse, || {
+                    data_event(&openai_chunk(
+                        &id,
+                        created,
+                        &model,
+                        openai::ChatDelta {
+                            content: Some(delta.into()),
+                            ..Default::default()
+                        },
+                        None,
+                    ))
+                })
+            })?;
+
+        emit_maybe(sse, || {
+            data_event(&openai_chunk(
+                &id,
+                created,
+                &model,
+                openai::ChatDelta::default(),
+                Some(g.termination.into()),
+            ))
+        })?;
+
+        if include_usage {
+            emit_maybe(sse, || {
+                let chunk = openai::ChatCompletionChunk::builder()
+                    .id(id.clone())
+                    .object("chat.completion.chunk".into())
+                    .created(created)
+                    .model(model.clone())
+                    .choices(vec![])
+                    .usage(Some(openai::Usage::from_counts(
+                        g.prompt_tokens,
+                        g.completion_tokens,
+                    )))
+                    .build();
+                data_event(&chunk)
+            })?;
+        }
+        emit_maybe(sse, || Event::default().data("[DONE]"))?;
+
+        Ok(openai_response(id, created, model, g))
+    }
+
+    fn serve_anthropic(
+        &self,
+        req: anthropic::MessageRequest,
+        sse: Option<&SseSink>,
+    ) -> LlmResult<anthropic::MessageResponse> {
+        use anthropic::MessageStreamEvent::*;
+        let prepared = self.engine.prepare_anthropic(&req)?;
+        let id = next_id("msg");
+        let model = self.model_name.clone();
+        let emit =
+            |name, ev: anthropic::MessageStreamEvent| emit_maybe(sse, || named_event(name, &ev));
+
+        emit(
+            "message_start",
+            MessageStart {
                 message: anthropic::MessageResponse::builder()
-                    .id(id)
-                    .message_type(Some("message".to_string()))
-                    .role("assistant".to_string())
+                    .id(id.clone())
+                    .message_type(Some("message".into()))
+                    .role("assistant".into())
                     .content(vec![])
                     .model(model.clone())
-                    .usage(created_usage)
+                    .usage(anthropic::AnthropicUsage::new(
+                        prepared.input_ids.len() as u32,
+                        0,
+                    ))
                     .build(),
-            };
-            sse.send_event_data("message_start", &message_start)?;
-
-            let block_start = anthropic::MessageStreamEvent::ContentBlockStart {
+            },
+        )?;
+        emit(
+            "content_block_start",
+            ContentBlockStart {
                 index: 0,
                 content_block: anthropic::ContentBlock::Text {
                     text: String::new(),
                 },
-            };
-            sse.send_event_data("content_block_start", &block_start)?;
+            },
+        )?;
 
-            let generated =
-                engine
-                    .engine
-                    .generate_from_prepared(&prepared, max_tokens, |delta| {
-                        let event = anthropic::MessageStreamEvent::ContentBlockDelta {
-                            index: 0,
-                            delta: anthropic::ContentBlockDelta::TextDelta {
-                                text: delta.to_string(),
-                            },
-                        };
-                        sse.send_event_data("content_block_delta", &event)
-                            .map_err(std::io::Error::other)?;
-                        Ok(())
-                    })?;
+        let g = self
+            .engine
+            .generate_from_prepared(&prepared, req.max_tokens, |delta| {
+                emit(
+                    "content_block_delta",
+                    ContentBlockDelta {
+                        index: 0,
+                        delta: anthropic::ContentBlockDelta::TextDelta { text: delta.into() },
+                    },
+                )
+            })?;
 
-            sse.send_event_data(
-                "content_block_stop",
-                &anthropic::MessageStreamEvent::ContentBlockStop { index: 0 },
-            )?;
-
-            let message_delta = anthropic::MessageStreamEvent::MessageDelta {
+        emit("content_block_stop", ContentBlockStop { index: 0 })?;
+        emit(
+            "message_delta",
+            MessageDelta {
                 delta: anthropic::StreamMessageDelta {
-                    stop_reason: Some(generated.termination.into()),
+                    stop_reason: Some(g.termination.into()),
                 },
-                usage: anthropic::AnthropicUsage::new(
-                    generated.prompt_tokens,
-                    generated.completion_tokens,
-                ),
-            };
-            sse.send_event_data("message_delta", &message_delta)?;
-            sse.send_event_data("message_stop", &anthropic::MessageStreamEvent::MessageStop)?;
-            Ok(())
-        });
-        return;
+                usage: anthropic::AnthropicUsage::new(g.prompt_tokens, g.completion_tokens),
+            },
+        )?;
+        emit("message_stop", MessageStop)?;
+
+        Ok(anthropic_response(id, model, g))
     }
-
-    let generated = match engine
-        .engine
-        .generate_from_prepared(&prepared, max_tokens, |_| Ok(()))
-    {
-        Ok(out) => out,
-        Err(err) => {
-            let _ = request.respond(error_response(500, &format!("Inference error: {err}")));
-            return;
-        }
-    };
-
-    let response = anthropic::MessageResponse::builder()
-        .id(next_id("msg"))
-        .message_type(Some("message".to_string()))
-        .role("assistant".to_string())
-        .content(vec![anthropic::ContentBlock::Text {
-            text: generated.text,
-        }])
-        .model(model)
-        .stop_reason(Some(generated.termination.into()))
-        .usage(anthropic::AnthropicUsage::new(
-            generated.prompt_tokens,
-            generated.completion_tokens,
-        ))
-        .build();
-
-    let _ = request.respond(json_response(200, &response));
 }
 
-fn serve_plain(request: Request, engine: &InferenceEngine, req: &plain::CompletionRequest) {
-    let model = engine.model_name.clone();
-    let max_tokens = req.max_tokens;
-    let stream = req.stream == Some(true);
-    let input = match engine.engine.prepare_prompt(&req.prompt) {
-        Ok(input) => input,
-        Err(err) => {
-            let _ = request.respond(error_response(
-                400,
-                &format!("Invalid completion prompt: {err}"),
-            ));
-            return;
-        }
-    };
-
-    if stream {
-        respond_with_sse_stream(request, |sse| {
-            let id = next_id("cmpl");
-            let created = now_unix();
-
-            let generated = engine.engine.generate_from_prepared(
-                &input,
-                max_tokens.unwrap_or(engine.default_max_tokens),
-                |delta| {
-                    let chunk = plain::CompletionChunk::builder()
-                        .id(id.clone())
-                        .object("text_completion".to_string())
-                        .created(created)
-                        .model(model.clone())
-                        .choices(vec![
-                            plain::CompletionChoice::builder()
-                                .index(0)
-                                .text(delta.to_string())
-                                .build(),
-                        ])
-                        .build();
-                    sse.send_data(&chunk).map_err(std::io::Error::other)?;
-                    Ok(())
-                },
-            )?;
-
-            let final_chunk = plain::CompletionChunk::builder()
-                .id(id)
-                .object("text_completion".to_string())
-                .created(created)
-                .model(model)
-                .choices(vec![
-                    plain::CompletionChoice::builder()
-                        .index(0)
-                        .text(String::new())
-                        .finish_reason(Some(generated.termination.into()))
-                        .build(),
-                ])
-                .build();
-            sse.send_data(&final_chunk)?;
-            sse.send_done()?;
-            Ok(())
-        });
-        return;
-    }
-
-    let generated = match engine.engine.generate_from_prepared(
-        &input,
-        max_tokens.unwrap_or(engine.default_max_tokens),
-        |_| Ok(()),
-    ) {
-        Ok(out) => out,
-        Err(err) => {
-            let _ = request.respond(error_response(
-                400,
-                &format!("Invalid completion prompt: {err}"),
-            ));
-            return;
-        }
-    };
-
-    let response = plain::CompletionResponse::builder()
-        .id(next_id("cmpl"))
-        .object("text_completion".to_string())
-        .created(now_unix())
-        .model(model)
-        .choices(vec![
-            plain::CompletionChoice::builder()
-                .index(0)
-                .text(generated.text)
-                .finish_reason(Some(generated.termination.into()))
-                .build(),
-        ])
-        .usage(Some(openai::Usage::from_counts(
-            generated.prompt_tokens,
-            generated.completion_tokens,
-        )))
-        .build();
-
-    let _ = request.respond(json_response(200, &response));
-}
+// --- main ---
 
 fn main() -> anyhow::Result<()> {
     let args = Args::parse();
 
-    println!("Loading model `{}` (this can take a while)...", args.model);
-    let engine = InferenceEngine::new(&args.model, args.use_kv_cache, args.default_max_tokens)?;
+    let (jobs_tx, jobs_rx) = mpsc::unbounded_channel::<Job>();
+    let (ready_tx, ready_rx) = std::sync::mpsc::channel::<anyhow::Result<()>>();
 
+    // ModelEngine is `!Send` (Rc-backed). Construct it on the worker
+    // thread, signal readiness, then run the dispatch loop.
+    let model = args.model.clone();
+    let use_kv_cache = args.use_kv_cache;
+    let default_max_tokens = args.default_max_tokens;
+    let worker_handle = std::thread::Builder::new()
+        .name("inference".into())
+        .spawn(move || {
+            println!("Loading model `{model}` (this can take a while)...");
+            let worker = match Worker::new(&model, use_kv_cache, default_max_tokens) {
+                Ok(w) => w,
+                Err(err) => {
+                    let _ = ready_tx.send(Err(err));
+                    return;
+                }
+            };
+            let _ = ready_tx.send(Ok(()));
+            worker.run(jobs_rx);
+        })?;
+    ready_rx.recv()??;
+
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_io()
+        .build()?;
+    rt.block_on(serve(args, jobs_tx))?;
+    let _ = worker_handle.join();
+    Ok(())
+}
+
+async fn serve(args: Args, jobs: mpsc::UnboundedSender<Job>) -> anyhow::Result<()> {
+    let app = Router::new()
+        .route("/v1/chat/completions", post(handle_openai))
+        .route("/v1/messages", post(handle_anthropic))
+        .with_state(AppState { jobs });
     let addr = format!("{}:{}", args.host, args.port);
-    let server =
-        Server::http(&addr).map_err(|err| anyhow::anyhow!("failed to bind {addr}: {err}"))?;
-
+    let listener = tokio::net::TcpListener::bind(&addr).await?;
     println!("catgrad demo API server listening on http://{addr}");
     println!("POST /v1/chat/completions (OpenAI)");
     println!("POST /v1/messages (Anthropic)");
-    println!("POST /v1/completions (plain)");
-
-    for mut request in server.incoming_requests() {
-        if request.method() != &Method::Post {
-            let _ = request.respond(error_response(405, "Only POST is supported."));
-            continue;
-        }
-
-        let path = request
-            .url()
-            .split('?')
-            .next()
-            .unwrap_or_else(|| request.url())
-            .to_string();
-
-        let Ok(body) = request_body(&mut request) else {
-            let _ = request.respond(error_response(400, "Failed to read request body."));
-            continue;
-        };
-
-        match path.as_str() {
-            "/v1/chat/completions" => match from_json_slice::<openai::ChatCompletionRequest>(&body)
-            {
-                Ok(req) => serve_openai(request, &engine, req),
-                Err(err) => {
-                    let _ = request.respond(error_response(
-                        400,
-                        &format!("Invalid OpenAI request: {err}"),
-                    ));
-                }
-            },
-            "/v1/messages" => match from_json_slice::<anthropic::MessageRequest>(&body) {
-                Ok(req) => serve_anthropic(request, &engine, &req),
-                Err(err) => {
-                    let _ = request.respond(error_response(
-                        400,
-                        &format!("Invalid Anthropic request: {err}"),
-                    ));
-                }
-            },
-            "/v1/completions" => match from_json_slice::<plain::CompletionRequest>(&body) {
-                Ok(req) => serve_plain(request, &engine, &req),
-                Err(err) => {
-                    let _ = request.respond(error_response(
-                        400,
-                        &format!("Invalid completion request: {err}"),
-                    ));
-                }
-            },
-            _ => {
-                let _ = request.respond(error_response(404, "Unknown route."));
-            }
-        }
-    }
-
+    axum::serve(listener, app).await?;
     Ok(())
 }
