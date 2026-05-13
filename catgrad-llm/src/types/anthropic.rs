@@ -58,6 +58,13 @@ pub enum SystemBlockType {
     Text,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ThinkingConfig {
+    Enabled { budget_tokens: u32 },
+    Disabled,
+}
+
 /// Messages API request.
 #[skip_serializing_none]
 #[derive(Debug, Clone, Serialize, Deserialize, TypedBuilder, PartialEq)]
@@ -71,6 +78,7 @@ pub struct MessageRequest {
     pub max_tokens: u32,
     pub system: Option<SystemPrompt>,
     pub stream: Option<bool>,
+    pub thinking: Option<ThinkingConfig>,
 }
 
 /// Typed message content blocks.
@@ -315,6 +323,9 @@ mod tests {
                 .max_tokens(64)
                 .system(Some(SystemPrompt::Text("You are concise.".to_string())))
                 .stream(Some(false))
+                .thinking(Some(ThinkingConfig::Enabled {
+                    budget_tokens: 1024,
+                }))
                 .build()
         );
     }

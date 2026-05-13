@@ -181,7 +181,7 @@ impl ModelEngine {
         self.prepare_chat_messages(
             messages,
             RenderChatTemplateOptions {
-                enable_thinking,
+                thinking: enable_thinking.into(),
                 tools: None,
             },
         )
@@ -189,6 +189,14 @@ impl ModelEngine {
 
     /// Renders an OpenAI chat-completions request through the model chat template.
     pub fn prepare_openai_chat_request(
+        &self,
+        request: &types::openai::ChatCompletionRequest,
+    ) -> Result<PreparedPrompt> {
+        self.prepare_openai(request)
+    }
+
+    /// Renders an OpenAI chat-completions request through the model chat template.
+    pub fn prepare_openai(
         &self,
         request: &types::openai::ChatCompletionRequest,
     ) -> Result<PreparedPrompt> {
@@ -208,15 +216,26 @@ impl ModelEngine {
                     .map(minijinja::Value::from_serialize)
                     .collect::<Vec<_>>()
             });
-        let enable_thinking = request
-            .reasoning_effort
-            .is_some_and(|effort| effort != types::openai::ReasoningEffort::None);
-
         self.prepare_chat_messages(
             &messages,
             RenderChatTemplateOptions {
-                enable_thinking,
+                thinking: request.reasoning_effort.into(),
                 tools: tools.as_deref(),
+            },
+        )
+    }
+
+    /// Renders an Anthropic Messages API request through the model chat template.
+    pub fn prepare_anthropic(
+        &self,
+        request: &types::anthropic::MessageRequest,
+    ) -> Result<PreparedPrompt> {
+        let messages: Vec<types::Message> = request.into();
+        self.prepare_chat_messages(
+            &messages,
+            RenderChatTemplateOptions {
+                thinking: request.thinking.into(),
+                tools: None,
             },
         )
     }
