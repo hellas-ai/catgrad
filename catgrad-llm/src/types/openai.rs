@@ -1,4 +1,4 @@
-//! OpenAI chat-completions wire format.
+//! OpenAI wire-format types.
 use crate::LLMError;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
@@ -354,5 +354,673 @@ mod tests {
         let parsed: ChatCompletionChunk = serde_json::from_value(sample.clone()).unwrap();
         let serialized = serde_json::to_value(parsed).unwrap();
         assert_eq!(serialized, sample);
+    }
+}
+
+pub mod responses {
+    use crate::LLMError;
+    use serde::{Deserialize, Serialize};
+    use serde_json::Value as JsonValue;
+    use serde_with::skip_serializing_none;
+    use typed_builder::TypedBuilder;
+
+    /// Responses API request.
+    #[skip_serializing_none]
+    #[derive(Debug, Clone, Serialize, Deserialize, TypedBuilder, PartialEq)]
+    pub struct ResponseRequest {
+        pub model: String,
+        pub input: ResponseInput,
+        #[builder(default)]
+        pub instructions: Option<String>,
+        #[builder(default)]
+        pub tools: Option<Vec<JsonValue>>,
+        #[builder(default)]
+        pub max_output_tokens: Option<u32>,
+        #[builder(default)]
+        pub stream: Option<bool>,
+    }
+
+    /// Top-level response input payload.
+    #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+    #[serde(untagged)]
+    pub enum ResponseInput {
+        Text(String),
+        Items(Vec<ResponseInputItem>),
+    }
+
+    /// A single item in a structured Responses API input array.
+    #[derive(Debug, Clone, Serialize, Deserialize, TypedBuilder, PartialEq)]
+    pub struct ResponseInputItem {
+        pub role: String,
+        pub content: ResponseInputMessageContent,
+    }
+
+    /// Content payload for a structured input message.
+    #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+    #[serde(untagged)]
+    pub enum ResponseInputMessageContent {
+        Text(String),
+        Parts(Vec<ResponseInputContentPart>),
+    }
+
+    /// A supported content part in structured response input.
+    #[derive(Debug, Clone, Serialize, Deserialize, TypedBuilder, PartialEq, Eq)]
+    pub struct ResponseInputContentPart {
+        #[serde(rename = "type")]
+        pub content_type: String,
+        pub text: String,
+    }
+
+    impl ResponseRequest {
+        pub fn to_messages(&self) -> Result<Vec<super::super::Message>, LLMError> {
+            let mut messages = Vec::with_capacity(
+                match &self.input {
+                    ResponseInput::Text(_) => 1,
+                    ResponseInput::Items(items) => items.len(),
+                } + usize::from(self.instructions.is_some()),
+            );
+
+            if let Some(instructions) = &self.instructions {
+                messages.push(super::super::Message::openai(super::ChatMessage::system(
+                    instructions.clone(),
+                )));
+            }
+
+            match &self.input {
+                ResponseInput::Text(text) => {
+                    messages.push(super::super::Message::openai(super::ChatMessage::user(
+                        text.clone(),
+                    )));
+                }
+                ResponseInput::Items(items) => {
+                    for item in items {
+                        let message: super::ChatMessage = item.clone().try_into()?;
+                        messages.push(super::super::Message::openai(message));
+                    }
+                }
+            }
+
+            Ok(messages)
+        }
+    }
+
+    impl TryFrom<ResponseInputItem> for super::ChatMessage {
+        type Error = LLMError;
+
+        fn try_from(value: ResponseInputItem) -> Result<Self, Self::Error> {
+            Ok(super::ChatMessage::builder()
+                .role(value.role)
+                .content(Some(value.content.try_into()?))
+                .build())
+        }
+    }
+
+    impl TryFrom<ResponseInputMessageContent> for super::MessageContent {
+        type Error = LLMError;
+
+        fn try_from(value: ResponseInputMessageContent) -> Result<Self, Self::Error> {
+            match value {
+                ResponseInputMessageContent::Text(text) => Ok(Self::Text(text)),
+                ResponseInputMessageContent::Parts(parts) => Ok(Self::Parts(
+                    parts
+                        .into_iter()
+                        .map(TryInto::try_into)
+                        .collect::<Result<Vec<_>, _>>()?,
+                )),
+            }
+        }
+    }
+
+    impl TryFrom<ResponseInputContentPart> for super::ContentPart {
+        type Error = LLMError;
+
+        fn try_from(value: ResponseInputContentPart) -> Result<Self, Self::Error> {
+            match value.content_type.as_str() {
+                "input_text" | "output_text" => Ok(Self::Text { text: value.text }),
+                other => Err(LLMError::UnsupportedWireConversion(format!(
+                    "Unsupported responses input content type `{other}`"
+                ))),
+            }
+        }
+    }
+
+    /// Overall response status.
+    #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+    #[serde(rename_all = "snake_case")]
+    pub enum ResponseStatus {
+        Queued,
+        InProgress,
+        Completed,
+    }
+
+    /// Responses API token usage details.
+    #[derive(Debug, Clone, Serialize, Deserialize, TypedBuilder, PartialEq, Eq)]
+    pub struct ResponseUsage {
+        pub input_tokens: u32,
+        pub output_tokens: u32,
+        pub total_tokens: u32,
+    }
+
+    impl ResponseUsage {
+        pub fn from_counts(input_tokens: u32, output_tokens: u32) -> Self {
+            Self::builder()
+                .input_tokens(input_tokens)
+                .output_tokens(output_tokens)
+                .total_tokens(input_tokens + output_tokens)
+                .build()
+        }
+    }
+
+    /// Text content item in an assistant response message.
+    #[skip_serializing_none]
+    #[derive(Debug, Clone, Serialize, Deserialize, TypedBuilder, PartialEq, Eq)]
+    pub struct ResponseOutputText {
+        #[serde(rename = "type")]
+        pub content_type: String,
+        pub text: String,
+        #[builder(default)]
+        pub annotations: Option<Vec<JsonValue>>,
+    }
+
+    /// Assistant message item in the response output array.
+    #[skip_serializing_none]
+    #[derive(Debug, Clone, Serialize, Deserialize, TypedBuilder, PartialEq, Eq)]
+    pub struct ResponseOutputMessage {
+        pub id: String,
+        #[serde(rename = "type")]
+        pub item_type: String,
+        pub status: ResponseStatus,
+        pub role: String,
+        pub content: Vec<ResponseOutputText>,
+        #[builder(default)]
+        pub annotations: Option<Vec<JsonValue>>,
+    }
+
+    /// Responses API response.
+    #[skip_serializing_none]
+    #[derive(Debug, Clone, Serialize, Deserialize, TypedBuilder, PartialEq, Eq)]
+    pub struct Response {
+        pub id: String,
+        pub object: String,
+        pub created_at: i64,
+        pub status: ResponseStatus,
+        pub model: String,
+        pub output: Vec<ResponseOutputMessage>,
+        #[builder(default)]
+        pub usage: Option<ResponseUsage>,
+    }
+
+    /// Streaming event payloads for the Responses API.
+    #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+    #[serde(tag = "type")]
+    pub enum ResponseStreamEvent {
+        #[serde(rename = "response.created")]
+        Created {
+            sequence_number: u64,
+            response: Response,
+        },
+        #[serde(rename = "response.in_progress")]
+        InProgress {
+            sequence_number: u64,
+            response: Response,
+        },
+        #[serde(rename = "response.output_item.added")]
+        OutputItemAdded {
+            sequence_number: u64,
+            output_index: u32,
+            item: ResponseOutputMessage,
+        },
+        #[serde(rename = "response.content_part.added")]
+        ContentPartAdded {
+            sequence_number: u64,
+            item_id: String,
+            output_index: u32,
+            content_index: u32,
+            part: ResponseOutputText,
+        },
+        #[serde(rename = "response.output_text.delta")]
+        OutputTextDelta {
+            sequence_number: u64,
+            item_id: String,
+            output_index: u32,
+            content_index: u32,
+            delta: String,
+        },
+        #[serde(rename = "response.output_text.done")]
+        OutputTextDone {
+            sequence_number: u64,
+            item_id: String,
+            output_index: u32,
+            content_index: u32,
+            text: String,
+        },
+        #[serde(rename = "response.content_part.done")]
+        ContentPartDone {
+            sequence_number: u64,
+            item_id: String,
+            output_index: u32,
+            content_index: u32,
+            part: ResponseOutputText,
+        },
+        #[serde(rename = "response.output_item.done")]
+        OutputItemDone {
+            sequence_number: u64,
+            output_index: u32,
+            item: ResponseOutputMessage,
+        },
+        #[serde(rename = "response.completed")]
+        Completed {
+            sequence_number: u64,
+            response: Response,
+        },
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use crate::types::Message;
+        use crate::types::openai::{ChatMessage, ContentPart, MessageContent};
+        use serde_json::json;
+
+        #[test]
+        fn response_request_parses_minimal_string_input() {
+            let parsed: ResponseRequest = serde_json::from_value(json!({
+                "model": "gpt-4.1-mini",
+                "input": "Hello"
+            }))
+            .unwrap();
+
+            assert_eq!(
+                parsed,
+                ResponseRequest::builder()
+                    .model("gpt-4.1-mini".to_string())
+                    .input(ResponseInput::Text("Hello".to_string()))
+                    .build()
+            );
+        }
+
+        #[test]
+        fn response_request_supports_message_list_instructions_and_tools() {
+            let parsed: ResponseRequest = serde_json::from_value(json!({
+                "model": "gpt-4.1-mini",
+                "input": [
+                    {
+                        "type": "message",
+                        "role": "developer",
+                        "content": [
+                            {"type": "input_text", "text": "You are helpful."},
+                            {"type": "input_text", "text": "Answer briefly."}
+                        ]
+                    },
+                    {
+                        "type": "message",
+                        "role": "user",
+                        "content": [
+                            {"type": "input_text", "text": "Tell a story about a unicorn."}
+                        ]
+                    }
+                ],
+                "instructions": "You are a nice LLM",
+                "tools": [
+                    {
+                        "type": "function",
+                        "name": "lookup_weather",
+                        "parameters": {"type": "object"}
+                    }
+                ],
+                "max_output_tokens": 64,
+                "stream": false,
+                "temperature": 0.2
+            }))
+            .unwrap();
+
+            assert_eq!(
+                parsed,
+                ResponseRequest::builder()
+                    .model("gpt-4.1-mini".to_string())
+                    .input(ResponseInput::Items(vec![
+                        ResponseInputItem::builder()
+                            .role("developer".to_string())
+                            .content(ResponseInputMessageContent::Parts(vec![
+                                ResponseInputContentPart::builder()
+                                    .content_type("input_text".to_string())
+                                    .text("You are helpful.".to_string())
+                                    .build(),
+                                ResponseInputContentPart::builder()
+                                    .content_type("input_text".to_string())
+                                    .text("Answer briefly.".to_string())
+                                    .build(),
+                            ]))
+                            .build(),
+                        ResponseInputItem::builder()
+                            .role("user".to_string())
+                            .content(ResponseInputMessageContent::Parts(vec![
+                                ResponseInputContentPart::builder()
+                                    .content_type("input_text".to_string())
+                                    .text("Tell a story about a unicorn.".to_string())
+                                    .build(),
+                            ]))
+                            .build(),
+                    ]))
+                    .instructions(Some("You are a nice LLM".to_string()))
+                    .tools(Some(vec![json!({
+                        "type": "function",
+                        "name": "lookup_weather",
+                        "parameters": {"type": "object"}
+                    })]))
+                    .max_output_tokens(Some(64))
+                    .stream(Some(false))
+                    .build()
+            );
+        }
+
+        #[test]
+        fn response_round_trips_through_serde() {
+            let sample = json!({
+                "id": "resp-1",
+                "object": "response",
+                "created_at": 1234567890,
+                "status": "completed",
+                "model": "gpt-4.1-mini",
+                "output": [
+                    {
+                        "id": "msg-1",
+                        "type": "message",
+                        "status": "completed",
+                        "role": "assistant",
+                        "content": [
+                            {
+                                "type": "output_text",
+                                "text": "Hello world"
+                            }
+                        ]
+                    }
+                ],
+                "usage": {
+                    "input_tokens": 5,
+                    "output_tokens": 2,
+                    "total_tokens": 7
+                }
+            });
+
+            let parsed: Response = serde_json::from_value(sample.clone()).unwrap();
+            let serialized = serde_json::to_value(parsed).unwrap();
+            assert_eq!(serialized, sample);
+        }
+
+        #[test]
+        fn response_created_event_round_trips_through_serde() {
+            let sample = json!({
+                "type": "response.created",
+                "sequence_number": 0,
+                "response": {
+                    "id": "resp-1",
+                    "object": "response",
+                    "created_at": 1234567890,
+                    "status": "queued",
+                    "model": "gpt-4.1-mini",
+                    "output": []
+                }
+            });
+
+            let parsed: ResponseStreamEvent = serde_json::from_value(sample.clone()).unwrap();
+            let serialized = serde_json::to_value(parsed).unwrap();
+            assert_eq!(serialized, sample);
+        }
+
+        #[test]
+        fn response_in_progress_event_round_trips_through_serde() {
+            let sample = json!({
+                "type": "response.in_progress",
+                "sequence_number": 1,
+                "response": {
+                    "id": "resp-1",
+                    "object": "response",
+                    "created_at": 1234567890,
+                    "status": "in_progress",
+                    "model": "gpt-4.1-mini",
+                    "output": []
+                }
+            });
+
+            let parsed: ResponseStreamEvent = serde_json::from_value(sample.clone()).unwrap();
+            let serialized = serde_json::to_value(parsed).unwrap();
+            assert_eq!(serialized, sample);
+        }
+
+        #[test]
+        fn response_output_item_added_event_round_trips_through_serde() {
+            let sample = json!({
+                "type": "response.output_item.added",
+                "sequence_number": 2,
+                "output_index": 0,
+                "item": {
+                    "id": "msg-1",
+                    "type": "message",
+                    "status": "in_progress",
+                    "role": "assistant",
+                    "content": [],
+                    "annotations": []
+                }
+            });
+
+            let parsed: ResponseStreamEvent = serde_json::from_value(sample.clone()).unwrap();
+            let serialized = serde_json::to_value(parsed).unwrap();
+            assert_eq!(serialized, sample);
+        }
+
+        #[test]
+        fn response_content_part_added_event_round_trips_through_serde() {
+            let sample = json!({
+                "type": "response.content_part.added",
+                "sequence_number": 3,
+                "item_id": "msg-1",
+                "output_index": 0,
+                "content_index": 0,
+                "part": {
+                    "type": "output_text",
+                    "text": "",
+                    "annotations": []
+                }
+            });
+
+            let parsed: ResponseStreamEvent = serde_json::from_value(sample.clone()).unwrap();
+            let serialized = serde_json::to_value(parsed).unwrap();
+            assert_eq!(serialized, sample);
+        }
+
+        #[test]
+        fn response_output_text_delta_event_round_trips_through_serde() {
+            let sample = json!({
+                "type": "response.output_text.delta",
+                "sequence_number": 4,
+                "item_id": "msg-1",
+                "output_index": 0,
+                "content_index": 0,
+                "delta": "Hello"
+            });
+
+            let parsed: ResponseStreamEvent = serde_json::from_value(sample.clone()).unwrap();
+            let serialized = serde_json::to_value(parsed).unwrap();
+            assert_eq!(serialized, sample);
+        }
+
+        #[test]
+        fn response_output_text_done_event_round_trips_through_serde() {
+            let sample = json!({
+                "type": "response.output_text.done",
+                "sequence_number": 5,
+                "item_id": "msg-1",
+                "output_index": 0,
+                "content_index": 0,
+                "text": "Hello world"
+            });
+
+            let parsed: ResponseStreamEvent = serde_json::from_value(sample.clone()).unwrap();
+            let serialized = serde_json::to_value(parsed).unwrap();
+            assert_eq!(serialized, sample);
+        }
+
+        #[test]
+        fn response_content_part_done_event_round_trips_through_serde() {
+            let sample = json!({
+                "type": "response.content_part.done",
+                "sequence_number": 6,
+                "item_id": "msg-1",
+                "output_index": 0,
+                "content_index": 0,
+                "part": {
+                    "type": "output_text",
+                    "text": "Hello world",
+                    "annotations": []
+                }
+            });
+
+            let parsed: ResponseStreamEvent = serde_json::from_value(sample.clone()).unwrap();
+            let serialized = serde_json::to_value(parsed).unwrap();
+            assert_eq!(serialized, sample);
+        }
+
+        #[test]
+        fn response_output_item_done_event_round_trips_through_serde() {
+            let sample = json!({
+                "type": "response.output_item.done",
+                "sequence_number": 7,
+                "output_index": 0,
+                "item": {
+                    "id": "msg-1",
+                    "type": "message",
+                    "status": "completed",
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "output_text",
+                            "text": "Hello world",
+                            "annotations": []
+                        }
+                    ],
+                    "annotations": []
+                }
+            });
+
+            let parsed: ResponseStreamEvent = serde_json::from_value(sample.clone()).unwrap();
+            let serialized = serde_json::to_value(parsed).unwrap();
+            assert_eq!(serialized, sample);
+        }
+
+        #[test]
+        fn response_completed_event_round_trips_through_serde() {
+            let sample = json!({
+                "type": "response.completed",
+                "sequence_number": 8,
+                "response": {
+                    "id": "resp-1",
+                    "object": "response",
+                    "created_at": 1234567890,
+                    "status": "completed",
+                    "model": "gpt-4.1-mini",
+                    "output": [
+                        {
+                            "id": "msg-1",
+                            "type": "message",
+                            "status": "completed",
+                            "role": "assistant",
+                            "content": [
+                                {
+                                    "type": "output_text",
+                                    "text": "Hello world",
+                                    "annotations": []
+                                }
+                            ],
+                            "annotations": []
+                        }
+                    ],
+                    "usage": {
+                        "input_tokens": 5,
+                        "output_tokens": 2,
+                        "total_tokens": 7
+                    }
+                }
+            });
+
+            let parsed: ResponseStreamEvent = serde_json::from_value(sample.clone()).unwrap();
+            let serialized = serde_json::to_value(parsed).unwrap();
+            assert_eq!(serialized, sample);
+        }
+
+        #[test]
+        fn response_request_accepts_output_text_input_parts() {
+            let request = ResponseRequest::builder()
+                .model("gpt-4.1-mini".to_string())
+                .input(ResponseInput::Items(vec![
+                    ResponseInputItem::builder()
+                        .role("assistant".to_string())
+                        .content(ResponseInputMessageContent::Parts(vec![
+                            ResponseInputContentPart::builder()
+                                .content_type("output_text".to_string())
+                                .text("Previous answer".to_string())
+                                .build(),
+                        ]))
+                        .build(),
+                ]))
+                .build();
+
+            let messages = request.to_messages().unwrap();
+            assert_eq!(
+                messages,
+                vec![Message::openai(
+                    ChatMessage::builder()
+                        .role("assistant".to_string())
+                        .content(Some(MessageContent::Parts(vec![ContentPart::Text {
+                            text: "Previous answer".to_string(),
+                        }])))
+                        .build(),
+                )]
+            );
+        }
+
+        #[test]
+        fn response_request_converts_to_chat_messages() {
+            let request = ResponseRequest::builder()
+                .model("gpt-4.1-mini".to_string())
+                .input(ResponseInput::Items(vec![
+                    ResponseInputItem::builder()
+                        .role("user".to_string())
+                        .content(ResponseInputMessageContent::Parts(vec![
+                            ResponseInputContentPart::builder()
+                                .content_type("input_text".to_string())
+                                .text("Hello".to_string())
+                                .build(),
+                            ResponseInputContentPart::builder()
+                                .content_type("input_text".to_string())
+                                .text(" world".to_string())
+                                .build(),
+                        ]))
+                        .build(),
+                ]))
+                .instructions(Some("Be concise.".to_string()))
+                .build();
+
+            let messages = request.to_messages().unwrap();
+            assert_eq!(
+                messages,
+                vec![
+                    Message::openai(ChatMessage::system("Be concise.")),
+                    Message::openai(
+                        ChatMessage::builder()
+                            .role("user".to_string())
+                            .content(Some(MessageContent::Parts(vec![
+                                ContentPart::Text {
+                                    text: "Hello".to_string()
+                                },
+                                ContentPart::Text {
+                                    text: " world".to_string()
+                                },
+                            ])))
+                            .build(),
+                    ),
+                ]
+            );
+        }
     }
 }
