@@ -1,5 +1,6 @@
 //! LLM-specific runtime code like tokenization and kv-cache logic which has to live outside
 //! the model graph.
+pub mod api;
 mod error;
 pub mod run;
 pub mod types;

@@ -240,6 +240,31 @@ impl ModelEngine {
         )
     }
 
+    /// Renders an OpenAI responses request through the model chat template.
+    pub fn prepare_openai_response_request(
+        &self,
+        request: &types::openai::responses::ResponseRequest,
+    ) -> Result<PreparedPrompt> {
+        let messages = request.to_messages()?;
+        let tools = request
+            .tools
+            .as_deref()
+            .filter(|tools| !tools.is_empty())
+            .map(|tools| {
+                tools
+                    .iter()
+                    .map(minijinja::Value::from_serialize)
+                    .collect::<Vec<_>>()
+            });
+        self.prepare_chat_messages(
+            &messages,
+            RenderChatTemplateOptions {
+                thinking: types::ThinkingPolicy::Disabled,
+                tools: tools.as_deref(),
+            },
+        )
+    }
+
     fn prepare_chat_messages(
         &self,
         messages: &[types::Message],
