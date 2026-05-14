@@ -389,10 +389,43 @@ pub mod responses {
     }
 
     /// A single item in a structured Responses API input array.
-    #[derive(Debug, Clone, Serialize, Deserialize, TypedBuilder, PartialEq)]
-    pub struct ResponseInputItem {
+    #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+    #[serde(untagged)]
+    pub enum ResponseInputItem {
+        Message(ResponseInputMessageItem),
+        FunctionCallOutput(ResponseInputFunctionCallOutputItem),
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+    pub struct ResponseInputMessageItem {
+        #[serde(rename = "type", default = "default_response_input_message_type")]
+        pub item_type: ResponseInputMessageItemType,
         pub role: String,
         pub content: ResponseInputMessageContent,
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+    pub struct ResponseInputFunctionCallOutputItem {
+        #[serde(rename = "type")]
+        pub item_type: ResponseInputFunctionCallOutputItemType,
+        pub call_id: String,
+        pub output: String,
+    }
+
+    #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+    #[serde(rename_all = "snake_case")]
+    pub enum ResponseInputMessageItemType {
+        Message,
+    }
+
+    #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+    #[serde(rename_all = "snake_case")]
+    pub enum ResponseInputFunctionCallOutputItemType {
+        FunctionCallOutput,
+    }
+
+    fn default_response_input_message_type() -> ResponseInputMessageItemType {
+        ResponseInputMessageItemType::Message
     }
 
     /// Content payload for a structured input message.
@@ -404,11 +437,12 @@ pub mod responses {
     }
 
     /// A supported content part in structured response input.
-    #[derive(Debug, Clone, Serialize, Deserialize, TypedBuilder, PartialEq, Eq)]
-    pub struct ResponseInputContentPart {
-        #[serde(rename = "type")]
-        pub content_type: String,
-        pub text: String,
+    #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+    #[serde(tag = "type", rename_all = "snake_case")]
+    pub enum ResponseInputContentPart {
+        InputText { text: String },
+        OutputText { text: String },
+        InputImage { image_url: super::ImageUrl },
     }
 
     impl ResponseRequest {
@@ -448,10 +482,23 @@ pub mod responses {
         type Error = LLMError;
 
         fn try_from(value: ResponseInputItem) -> Result<Self, Self::Error> {
-            Ok(super::ChatMessage::builder()
-                .role(value.role)
-                .content(Some(value.content.try_into()?))
-                .build())
+            match value {
+                ResponseInputItem::Message(ResponseInputMessageItem { role, content, .. }) => {
+                    Ok(super::ChatMessage::builder()
+                        .role(role)
+                        .content(Some(content.try_into()?))
+                        .build())
+                }
+                ResponseInputItem::FunctionCallOutput(ResponseInputFunctionCallOutputItem {
+                    call_id,
+                    output,
+                    ..
+                }) => Ok(super::ChatMessage::builder()
+                    .role("tool".to_string())
+                    .content(Some(super::MessageContent::Text(output)))
+                    .tool_call_id(Some(call_id))
+                    .build()),
+            }
         }
     }
 
@@ -475,11 +522,12 @@ pub mod responses {
         type Error = LLMError;
 
         fn try_from(value: ResponseInputContentPart) -> Result<Self, Self::Error> {
-            match value.content_type.as_str() {
-                "input_text" | "output_text" => Ok(Self::Text { text: value.text }),
-                other => Err(LLMError::UnsupportedWireConversion(format!(
-                    "Unsupported responses input content type `{other}`"
-                ))),
+            match value {
+                ResponseInputContentPart::InputText { text }
+                | ResponseInputContentPart::OutputText { text } => Ok(Self::Text { text }),
+                ResponseInputContentPart::InputImage { image_url } => {
+                    Ok(Self::ImageUrl { image_url })
+                }
             }
         }
     }
@@ -619,7 +667,7 @@ pub mod responses {
     mod tests {
         use super::*;
         use crate::types::Message;
-        use crate::types::openai::{ChatMessage, ContentPart, MessageContent};
+        use crate::types::openai::{ChatMessage, ContentPart, ImageUrl, MessageContent};
         use serde_json::json;
 
         #[test]
@@ -679,28 +727,27 @@ pub mod responses {
                 ResponseRequest::builder()
                     .model("gpt-4.1-mini".to_string())
                     .input(ResponseInput::Items(vec![
-                        ResponseInputItem::builder()
-                            .role("developer".to_string())
-                            .content(ResponseInputMessageContent::Parts(vec![
-                                ResponseInputContentPart::builder()
-                                    .content_type("input_text".to_string())
-                                    .text("You are helpful.".to_string())
-                                    .build(),
-                                ResponseInputContentPart::builder()
-                                    .content_type("input_text".to_string())
-                                    .text("Answer briefly.".to_string())
-                                    .build(),
-                            ]))
-                            .build(),
-                        ResponseInputItem::builder()
-                            .role("user".to_string())
-                            .content(ResponseInputMessageContent::Parts(vec![
-                                ResponseInputContentPart::builder()
-                                    .content_type("input_text".to_string())
-                                    .text("Tell a story about a unicorn.".to_string())
-                                    .build(),
-                            ]))
-                            .build(),
+                        ResponseInputItem::Message(ResponseInputMessageItem {
+                            item_type: ResponseInputMessageItemType::Message,
+                            role: "developer".to_string(),
+                            content: ResponseInputMessageContent::Parts(vec![
+                                ResponseInputContentPart::InputText {
+                                    text: "You are helpful.".to_string(),
+                                },
+                                ResponseInputContentPart::InputText {
+                                    text: "Answer briefly.".to_string(),
+                                },
+                            ]),
+                        }),
+                        ResponseInputItem::Message(ResponseInputMessageItem {
+                            item_type: ResponseInputMessageItemType::Message,
+                            role: "user".to_string(),
+                            content: ResponseInputMessageContent::Parts(vec![
+                                ResponseInputContentPart::InputText {
+                                    text: "Tell a story about a unicorn.".to_string(),
+                                },
+                            ]),
+                        }),
                     ]))
                     .instructions(Some("You are a nice LLM".to_string()))
                     .tools(Some(vec![json!({
@@ -952,17 +999,17 @@ pub mod responses {
         fn response_request_accepts_output_text_input_parts() {
             let request = ResponseRequest::builder()
                 .model("gpt-4.1-mini".to_string())
-                .input(ResponseInput::Items(vec![
-                    ResponseInputItem::builder()
-                        .role("assistant".to_string())
-                        .content(ResponseInputMessageContent::Parts(vec![
-                            ResponseInputContentPart::builder()
-                                .content_type("output_text".to_string())
-                                .text("Previous answer".to_string())
-                                .build(),
-                        ]))
-                        .build(),
-                ]))
+                .input(ResponseInput::Items(vec![ResponseInputItem::Message(
+                    ResponseInputMessageItem {
+                        item_type: ResponseInputMessageItemType::Message,
+                        role: "assistant".to_string(),
+                        content: ResponseInputMessageContent::Parts(vec![
+                            ResponseInputContentPart::OutputText {
+                                text: "Previous answer".to_string(),
+                            },
+                        ]),
+                    },
+                )]))
                 .build();
 
             let messages = request.to_messages().unwrap();
@@ -980,24 +1027,117 @@ pub mod responses {
         }
 
         #[test]
+        fn response_request_accepts_message_items_without_type() {
+            let parsed: ResponseRequest = serde_json::from_value(json!({
+                "model": "gpt-4.1-mini",
+                "input": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "input_text", "text": "Hello"}
+                        ]
+                    }
+                ]
+            }))
+            .unwrap();
+
+            assert_eq!(
+                parsed,
+                ResponseRequest::builder()
+                    .model("gpt-4.1-mini".to_string())
+                    .input(ResponseInput::Items(vec![ResponseInputItem::Message(
+                        ResponseInputMessageItem {
+                            item_type: ResponseInputMessageItemType::Message,
+                            role: "user".to_string(),
+                            content: ResponseInputMessageContent::Parts(vec![
+                                ResponseInputContentPart::InputText {
+                                    text: "Hello".to_string(),
+                                },
+                            ]),
+                        },
+                    )]))
+                    .build()
+            );
+        }
+
+        #[test]
+        fn response_request_accepts_input_image_parts() {
+            let parsed: ResponseRequest = serde_json::from_value(json!({
+                "model": "gpt-4.1-mini",
+                "input": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "input_text", "text": "Describe this image"},
+                            {"type": "input_image", "image_url": {"url": "https://example.com/image.png"}}
+                        ]
+                    }
+                ]
+            }))
+            .unwrap();
+
+            assert_eq!(
+                parsed,
+                ResponseRequest::builder()
+                    .model("gpt-4.1-mini".to_string())
+                    .input(ResponseInput::Items(vec![ResponseInputItem::Message(
+                        ResponseInputMessageItem {
+                            item_type: ResponseInputMessageItemType::Message,
+                            role: "user".to_string(),
+                            content: ResponseInputMessageContent::Parts(vec![
+                                ResponseInputContentPart::InputText {
+                                    text: "Describe this image".to_string(),
+                                },
+                                ResponseInputContentPart::InputImage {
+                                    image_url: ImageUrl {
+                                        url: "https://example.com/image.png".to_string(),
+                                    },
+                                },
+                            ]),
+                        },
+                    )]))
+                    .build()
+            );
+
+            let messages = parsed.to_messages().unwrap();
+            assert_eq!(
+                messages,
+                vec![Message::openai(
+                    ChatMessage::builder()
+                        .role("user".to_string())
+                        .content(Some(MessageContent::Parts(vec![
+                            ContentPart::Text {
+                                text: "Describe this image".to_string(),
+                            },
+                            ContentPart::ImageUrl {
+                                image_url: ImageUrl {
+                                    url: "https://example.com/image.png".to_string(),
+                                },
+                            },
+                        ])))
+                        .build(),
+                )]
+            );
+        }
+
+        #[test]
         fn response_request_converts_to_chat_messages() {
             let request = ResponseRequest::builder()
                 .model("gpt-4.1-mini".to_string())
-                .input(ResponseInput::Items(vec![
-                    ResponseInputItem::builder()
-                        .role("user".to_string())
-                        .content(ResponseInputMessageContent::Parts(vec![
-                            ResponseInputContentPart::builder()
-                                .content_type("input_text".to_string())
-                                .text("Hello".to_string())
-                                .build(),
-                            ResponseInputContentPart::builder()
-                                .content_type("input_text".to_string())
-                                .text(" world".to_string())
-                                .build(),
-                        ]))
-                        .build(),
-                ]))
+                .input(ResponseInput::Items(vec![ResponseInputItem::Message(
+                    ResponseInputMessageItem {
+                        item_type: ResponseInputMessageItemType::Message,
+                        role: "user".to_string(),
+                        content: ResponseInputMessageContent::Parts(vec![
+                            ResponseInputContentPart::InputText {
+                                text: "Hello".to_string(),
+                            },
+                            ResponseInputContentPart::InputText {
+                                text: " world".to_string(),
+                            },
+                        ]),
+                    },
+                )]))
                 .instructions(Some("Be concise.".to_string()))
                 .build();
 
@@ -1020,6 +1160,52 @@ pub mod responses {
                             .build(),
                     ),
                 ]
+            );
+        }
+
+        #[test]
+        fn response_request_supports_function_call_output_items() {
+            let parsed: ResponseRequest = serde_json::from_value(json!({
+                "model": "gpt-4.1-mini",
+                "input": [
+                    {
+                        "type": "function_call_output",
+                        "call_id": "call_123",
+                        "output": "{\"result\":\"ok\"}"
+                    }
+                ]
+            }))
+            .unwrap();
+
+            assert_eq!(
+                parsed,
+                ResponseRequest::builder()
+                    .model("gpt-4.1-mini".to_string())
+                    .input(ResponseInput::Items(vec![
+                        ResponseInputItem::FunctionCallOutput(
+                            ResponseInputFunctionCallOutputItem {
+                                item_type:
+                                    ResponseInputFunctionCallOutputItemType::FunctionCallOutput,
+                                call_id: "call_123".to_string(),
+                                output: "{\"result\":\"ok\"}".to_string(),
+                            }
+                        )
+                    ]))
+                    .build()
+            );
+
+            let messages = parsed.to_messages().unwrap();
+            assert_eq!(
+                messages,
+                vec![Message::openai(
+                    ChatMessage::builder()
+                        .role("tool".to_string())
+                        .content(Some(MessageContent::Text(
+                            "{\"result\":\"ok\"}".to_string()
+                        )))
+                        .tool_call_id(Some("call_123".to_string()))
+                        .build(),
+                )]
             );
         }
     }
