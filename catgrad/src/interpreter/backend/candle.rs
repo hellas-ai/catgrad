@@ -302,6 +302,7 @@ impl CandleTensor {
         } else {
             lhs.to_dtype(compute_dtype).unwrap()
         };
+        let lhs = lhs.contiguous().unwrap();
         let out = qmatmul.forward(&lhs).unwrap();
         if out.dtype() == output_dtype {
             out
