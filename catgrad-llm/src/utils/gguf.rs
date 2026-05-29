@@ -679,6 +679,171 @@ pub fn build_granite_config_from_gguf(content: &gguf_file::Content) -> Result<se
     Ok(serde_json::Value::Object(map))
 }
 
+fn lfm2_gguf_intermediate_size(content: &gguf_file::Content) -> Result<u64> {
+    let (name, tensor_info) = content
+        .tensor_infos
+        .iter()
+        .find(|(name, _)| name.ends_with(".ffn_gate.weight"))
+        .ok_or(LLMError::InvalidModelConfig(
+            "missing LFM2 dense feed-forward tensor in GGUF".to_string(),
+        ))?;
+    let dims = tensor_info.shape.dims().to_vec();
+    let [rows, _cols] = dims.as_slice() else {
+        return Err(LLMError::InvalidModelConfig(format!(
+            "unexpected LFM2 dense feed-forward tensor shape for `{name}`: {dims:?}"
+        )));
+    };
+    Ok(*rows as u64)
+}
+
+fn lfm2_gguf_num_key_value_heads(content: &gguf_file::Content) -> Result<u64> {
+    let value = gguf_metadata_value(content, "lfm2.attention.head_count_kv")?;
+    if let Ok(num_key_value_heads) = gguf_value_to_u64(value) {
+        return Ok(num_key_value_heads);
+    }
+
+    let mut nonzero_counts = gguf_value_to_usizes(value)?
+        .into_iter()
+        .filter(|count| *count > 0)
+        .collect::<Vec<_>>();
+    nonzero_counts.sort_unstable();
+    nonzero_counts.dedup();
+    match nonzero_counts.as_slice() {
+        [num_key_value_heads] => Ok(*num_key_value_heads as u64),
+        [] => Err(LLMError::InvalidModelConfig(
+            "LFM2 GGUF attention.head_count_kv metadata has no nonzero entries".to_string(),
+        )),
+        _ => Err(LLMError::InvalidModelConfig(format!(
+            "LFM2 GGUF attention.head_count_kv metadata has inconsistent nonzero entries: {nonzero_counts:?}"
+        ))),
+    }
+}
+
+fn lfm2_gguf_layer_types(
+    content: &gguf_file::Content,
+    num_hidden_layers: u64,
+) -> Result<Vec<&'static str>> {
+    let mut layer_types = Vec::with_capacity(num_hidden_layers as usize);
+    for layer_id in 0..num_hidden_layers {
+        let attn_name = format!("blk.{layer_id}.attn_q.weight");
+        let conv_name = format!("blk.{layer_id}.shortconv.in_proj.weight");
+        if content.tensor_infos.contains_key(&attn_name) {
+            layer_types.push("full_attention");
+        } else if content.tensor_infos.contains_key(&conv_name) {
+            layer_types.push("conv");
+        } else {
+            return Err(LLMError::InvalidModelConfig(format!(
+                "unable to determine LFM2 layer type for block {layer_id}"
+            )));
+        }
+    }
+    Ok(layer_types)
+}
+
+pub fn build_lfm2_config_from_gguf(content: &gguf_file::Content) -> Result<serde_json::Value> {
+    let architecture = gguf_architecture(content)?;
+    if architecture.as_str() != "lfm2" {
+        return Err(LLMError::UnsupportedModel(format!(
+            "GGUF architecture {architecture}"
+        )));
+    }
+
+    let hidden_size = gguf_value_to_u64(gguf_metadata_value(content, "lfm2.embedding_length")?)?;
+    let num_hidden_layers = gguf_value_to_u64(gguf_metadata_value(content, "lfm2.block_count")?)?;
+    let num_attention_heads =
+        gguf_value_to_u64(gguf_metadata_value(content, "lfm2.attention.head_count")?)?;
+    let num_key_value_heads = lfm2_gguf_num_key_value_heads(content)?;
+    let rope_theta = gguf_value_to_f32(gguf_metadata_value(content, "lfm2.rope.freq_base")?)?;
+    let norm_eps = gguf_value_to_f32(gguf_metadata_value(
+        content,
+        "lfm2.attention.layer_norm_rms_epsilon",
+    )?)?;
+    let vocab_size = content
+        .metadata
+        .get("lfm2.vocab_size")
+        .map(gguf_value_to_u64)
+        .transpose()?
+        .unwrap_or(gguf_tokens(content)?.len() as u64);
+    let conv_l_cache = gguf_value_to_u64(gguf_metadata_value(content, "lfm2.shortconv.l_cache")?)?;
+    let intermediate_size = lfm2_gguf_intermediate_size(content)?;
+    let layer_types = lfm2_gguf_layer_types(content, num_hidden_layers)?;
+    let eos_token_id = content
+        .metadata
+        .get("tokenizer.ggml.eos_token_id")
+        .map(gguf_value_to_u64)
+        .transpose()?;
+    let bos_token_id = content
+        .metadata
+        .get("tokenizer.ggml.bos_token_id")
+        .map(gguf_value_to_u64)
+        .transpose()?;
+    let pad_token_id = content
+        .metadata
+        .get("tokenizer.ggml.padding_token_id")
+        .map(gguf_value_to_u64)
+        .transpose()?;
+    let max_position_embeddings = gguf_context_length(content, "lfm2")?;
+
+    let mut rope_parameters = serde_json::Map::new();
+    rope_parameters.insert("rope_type".to_string(), serde_json::json!("default"));
+    rope_parameters.insert("rope_theta".to_string(), serde_json::json!(rope_theta));
+
+    let mut map = serde_json::Map::new();
+    map.insert(
+        "architectures".to_string(),
+        serde_json::json!(["Lfm2ForCausalLM"]),
+    );
+    map.insert("model_type".to_string(), serde_json::json!("lfm2"));
+    map.insert("hidden_size".to_string(), serde_json::json!(hidden_size));
+    map.insert(
+        "intermediate_size".to_string(),
+        serde_json::json!(intermediate_size),
+    );
+    map.insert(
+        "block_auto_adjust_ff_dim".to_string(),
+        serde_json::json!(false),
+    );
+    map.insert(
+        "num_hidden_layers".to_string(),
+        serde_json::json!(num_hidden_layers),
+    );
+    map.insert(
+        "num_attention_heads".to_string(),
+        serde_json::json!(num_attention_heads),
+    );
+    map.insert(
+        "num_key_value_heads".to_string(),
+        serde_json::json!(num_key_value_heads),
+    );
+    map.insert("norm_eps".to_string(), serde_json::json!(norm_eps));
+    map.insert("conv_bias".to_string(), serde_json::json!(false));
+    map.insert("conv_L_cache".to_string(), serde_json::json!(conv_l_cache));
+    map.insert("rope_theta".to_string(), serde_json::json!(rope_theta));
+    map.insert(
+        "rope_parameters".to_string(),
+        serde_json::Value::Object(rope_parameters),
+    );
+    map.insert("vocab_size".to_string(), serde_json::json!(vocab_size));
+    map.insert("layer_types".to_string(), serde_json::json!(layer_types));
+    map.insert("tie_embedding".to_string(), serde_json::json!(true));
+    if let Some(max_position_embeddings) = max_position_embeddings {
+        map.insert(
+            "max_position_embeddings".to_string(),
+            serde_json::json!(max_position_embeddings),
+        );
+    }
+    if let Some(bos_token_id) = bos_token_id {
+        map.insert("bos_token_id".to_string(), serde_json::json!(bos_token_id));
+    }
+    if let Some(pad_token_id) = pad_token_id {
+        map.insert("pad_token_id".to_string(), serde_json::json!(pad_token_id));
+    }
+    if let Some(eos_token_id) = eos_token_id {
+        map.insert("eos_token_id".to_string(), serde_json::json!(eos_token_id));
+    }
+    Ok(serde_json::Value::Object(map))
+}
+
 fn gguf_path(name: &str, components: Vec<&str>) -> Result<catgrad::prelude::Path> {
     path(components).map_err(|err| {
         LLMError::InvalidModelConfig(format!("invalid GGUF param path for `{name}`: {}", err.0))
@@ -1032,9 +1197,14 @@ fn gguf_llama_like_rope_unpermute_heads(
     architecture: &str,
     name: &str,
 ) -> Result<Option<usize>> {
+    if architecture == "lfm2" && name.ends_with("attn_k.weight") {
+        return lfm2_gguf_num_key_value_heads(content).map(|value| Some(value as usize));
+    }
+
     let metadata_prefix = match architecture {
         "llama" => "llama",
         "granite" => "granite",
+        "lfm2" => "lfm2",
         _ => return Ok(None),
     };
     let key = if name.ends_with("attn_q.weight") {
@@ -1143,6 +1313,57 @@ fn map_granite_gguf_tensor_name(name: &str) -> Result<Option<(catgrad::prelude::
     Ok(Some((gguf_path(name, components)?, false)))
 }
 
+fn map_lfm2_gguf_tensor_name(name: &str) -> Result<Option<(catgrad::prelude::Path, bool)>> {
+    if name == "rope_freqs.weight" {
+        return Ok(None);
+    }
+    if name == "token_embd.weight" {
+        return Ok(Some((
+            gguf_path(name, vec!["model", "embed_tokens", "weight"])?,
+            false,
+        )));
+    }
+    if name == "token_embd_norm.weight" {
+        return Ok(Some((
+            gguf_path(name, vec!["model", "embedding_norm", "weight"])?,
+            false,
+        )));
+    }
+
+    let parts: Vec<&str> = name.split('.').collect();
+    if parts.len() < 4 || parts[0] != "blk" {
+        return Err(LLMError::InvalidModelConfig(format!(
+            "unsupported GGUF lfm2 tensor name `{name}`"
+        )));
+    }
+    let layer = parts[1];
+    let suffix = match parts[2..].as_ref() {
+        ["attn_norm", "weight"] => vec!["operator_norm", "weight"],
+        ["ffn_norm", "weight"] => vec!["ffn_norm", "weight"],
+        ["attn_q", "weight"] => vec!["self_attn", "q_proj", "weight"],
+        ["attn_k", "weight"] => vec!["self_attn", "k_proj", "weight"],
+        ["attn_v", "weight"] => vec!["self_attn", "v_proj", "weight"],
+        ["attn_output", "weight"] => vec!["self_attn", "out_proj", "weight"],
+        ["attn_q_norm", "weight"] => vec!["self_attn", "q_layernorm", "weight"],
+        ["attn_k_norm", "weight"] => vec!["self_attn", "k_layernorm", "weight"],
+        ["shortconv", "in_proj", "weight"] => vec!["conv", "in_proj", "weight"],
+        ["shortconv", "out_proj", "weight"] => vec!["conv", "out_proj", "weight"],
+        ["shortconv", "conv", "weight"] => vec!["conv", "conv", "weight"],
+        ["ffn_gate", "weight"] => vec!["feed_forward", "w1", "weight"],
+        ["ffn_up", "weight"] => vec!["feed_forward", "w3", "weight"],
+        ["ffn_down", "weight"] => vec!["feed_forward", "w2", "weight"],
+        _ => {
+            return Err(LLMError::InvalidModelConfig(format!(
+                "unsupported GGUF lfm2 tensor name `{name}`"
+            )));
+        }
+    };
+
+    let mut components = vec!["model", "layers", layer];
+    components.extend(suffix);
+    Ok(Some((gguf_path(name, components)?, false)))
+}
+
 fn gguf_architecture_dispatch(
     architecture: &str,
     name: &str,
@@ -1151,6 +1372,7 @@ fn gguf_architecture_dispatch(
         "llama" => map_llama_gguf_tensor_name(name),
         "qwen35" => map_qwen35_gguf_tensor_name(name),
         "granite" => map_granite_gguf_tensor_name(name),
+        "lfm2" => map_lfm2_gguf_tensor_name(name),
         _ => Err(LLMError::UnsupportedModel(format!(
             "GGUF architecture {architecture}"
         ))),
@@ -1159,7 +1381,9 @@ fn gguf_architecture_dispatch(
 
 fn gguf_tied_lm_head_path(architecture: &str) -> Result<catgrad::prelude::Path> {
     match architecture {
-        "llama" | "qwen35" | "granite" => gguf_path("lm_head.weight", vec!["lm_head", "weight"]),
+        "llama" | "qwen35" | "granite" | "lfm2" => {
+            gguf_path("lm_head.weight", vec!["lm_head", "weight"])
+        }
         _ => Err(LLMError::UnsupportedModel(format!(
             "GGUF architecture {architecture}"
         ))),
@@ -1173,6 +1397,7 @@ fn gguf_is_dense_only_tensor(architecture: &str, name: &str) -> bool {
 
     match architecture {
         "llama" | "granite" => name.ends_with("attn_q.weight") || name.ends_with("attn_k.weight"),
+        "lfm2" => true,
         "qwen35" => {
             name.ends_with("ssm_dt.bias")
                 || name.ends_with("ssm_a")
@@ -1267,7 +1492,7 @@ pub fn load_gguf_weights(
             );
             type_map.insert(key, tensor_type);
 
-            if tied_quantized_output && name == "token_embd.weight" {
+            if tied_quantized_output && architecture != "lfm2" && name == "token_embd.weight" {
                 let lm_head_key = gguf_tied_lm_head_path(&architecture)?;
                 data_map.insert(
                     lm_head_key.clone(),
@@ -1317,6 +1542,13 @@ pub fn load_gguf_weights(
             tensor = tensor.contiguous().map_err(|err| {
                 LLMError::InvalidModelConfig(format!(
                     "failed to make transposed GGUF tensor `{name}` contiguous: {err}"
+                ))
+            })?;
+        }
+        if architecture == "lfm2" && name.ends_with("shortconv.conv.weight") {
+            tensor = tensor.unsqueeze(1).map_err(|err| {
+                LLMError::InvalidModelConfig(format!(
+                    "failed to reshape GGUF tensor `{name}` for lfm2 shortconv: {err}"
                 ))
             })?;
         }
@@ -1412,7 +1644,7 @@ pub fn load_gguf_weights(
         );
         type_map.insert(key, tensor_type);
 
-        if tied_quantized_output && name == "token_embd.weight" {
+        if tied_quantized_output && architecture != "lfm2" && name == "token_embd.weight" {
             let lm_head_key = gguf_tied_lm_head_path(&architecture)?;
             data_map.insert(
                 lm_head_key.clone(),
@@ -1483,6 +1715,7 @@ pub fn load_gguf_model(
         "llama" => build_llama_config_from_gguf(&content)?,
         "qwen35" => build_qwen35_config_from_gguf(&content)?,
         "granite" => build_granite_config_from_gguf(&content)?,
+        "lfm2" => build_lfm2_config_from_gguf(&content)?,
         architecture => {
             return Err(LLMError::UnsupportedModel(format!(
                 "GGUF architecture {architecture}"
