@@ -88,6 +88,10 @@ pub fn cos(builder: &Builder, value: Var) -> Var {
     var::fn_operation(builder, &[value], Object::Tensor, op!["tensor", "cos"])
 }
 
+pub fn exp(builder: &Builder, value: Var) -> Var {
+    var::fn_operation(builder, &[value], Object::Tensor, op!["tensor", "exp"])
+}
+
 pub fn log(builder: &Builder, value: Var) -> Var {
     var::fn_operation(builder, &[value], Object::Tensor, op!["tensor", "log"])
 }

@@ -256,6 +256,7 @@ pub enum ScalarOp {
     EQ,    // 2 → 1
     Cos,   // 1 → 1
     Sin,   // 1 → 1
+    Exp,   // 1 → 1
     Log,   // 1 → 1
     Floor, // 1 → 1
     Where, // 3 → 1
@@ -278,6 +279,7 @@ impl ScalarOp {
             ScalarOp::EQ => (2, 1),
             ScalarOp::Cos => (1, 1),
             ScalarOp::Sin => (1, 1),
+            ScalarOp::Exp => (1, 1),
             ScalarOp::Log => (1, 1),
             ScalarOp::Floor => (1, 1),
             ScalarOp::Where => (3, 1),

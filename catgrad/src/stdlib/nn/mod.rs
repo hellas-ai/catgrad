@@ -5,7 +5,7 @@
 //! higher level LLM building blocks or APIs.
 
 use crate::prelude::{ops::*, *};
-use std::f32::consts::{E, PI};
+use std::f32::consts::PI;
 
 use crate::typecheck::*;
 
@@ -119,13 +119,6 @@ pub fn sqrt(builder: &Builder, x: Var) -> Var {
     let e = constant(builder, 0.5, &sh);
     let e = cast(builder, e, dtype(builder, x.clone()));
     pow(builder, x, e)
-}
-
-pub fn exp(builder: &Builder, x: Var) -> Var {
-    let sh = shape(builder, x.clone());
-    let e = constant(builder, E, &sh);
-    let e = cast(builder, e, dtype(builder, x.clone()));
-    pow(builder, e, x)
 }
 
 pub fn sigmoid(builder: &Builder, x: Var) -> Var {
