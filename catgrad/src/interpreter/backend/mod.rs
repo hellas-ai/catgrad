@@ -72,6 +72,7 @@ pub trait Backend: Clone + Debug {
     fn where_cond(&self, args: TaggedTensorTuple<Self, 3>) -> TaggedTensor<Self>;
     fn sin(&self, x: TaggedTensor<Self>) -> TaggedTensor<Self>;
     fn cos(&self, x: TaggedTensor<Self>) -> TaggedTensor<Self>;
+    fn exp(&self, x: TaggedTensor<Self>) -> TaggedTensor<Self>;
     fn log(&self, x: TaggedTensor<Self>) -> TaggedTensor<Self>;
     fn floor(&self, x: TaggedTensor<Self>) -> TaggedTensor<Self>;
     fn neg(&self, x: TaggedTensor<Self>) -> TaggedTensor<Self>;

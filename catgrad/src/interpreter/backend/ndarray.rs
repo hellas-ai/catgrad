@@ -374,6 +374,14 @@ impl Backend for NdArrayBackend {
         }
     }
 
+    fn exp(&self, x: TaggedTensor<Self>) -> TaggedTensor<Self> {
+        use TaggedTensorTuple::*;
+        match x {
+            F32([arr]) => from_f32(arr.unwrap_f32().exp()),
+            _ => panic!("Invalid input types for exp"),
+        }
+    }
+
     fn log(&self, x: TaggedTensor<Self>) -> TaggedTensor<Self> {
         use TaggedTensorTuple::*;
         match x {

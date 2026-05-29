@@ -189,6 +189,10 @@ impl Backend for ShapeOnlyBackend {
         x
     }
 
+    fn exp(&self, x: TaggedTensor<Self>) -> TaggedTensor<Self> {
+        x
+    }
+
     fn log(&self, x: TaggedTensor<Self>) -> TaggedTensor<Self> {
         x
     }

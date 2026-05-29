@@ -792,6 +792,17 @@ impl Backend for CandleBackend {
         }
     }
 
+    fn exp(&self, x: TaggedTensor<Self>) -> TaggedTensor<Self> {
+        use TaggedTensorTuple::*;
+        match x {
+            F32([arr]) => F32([Self::unary_eager(arr, DType::F32, Self::exp)]),
+            F16([arr]) => F16([Self::unary_eager(arr, DType::F16, Self::exp)]),
+            BF16([arr]) => BF16([Self::unary_eager(arr, DType::BF16, Self::exp)]),
+            FP8([arr]) => FP8([Self::unary_eager(arr, DType::F8E4M3, Self::exp)]),
+            _ => panic!("Invalid type for exp"),
+        }
+    }
+
     fn log(&self, x: TaggedTensor<Self>) -> TaggedTensor<Self> {
         use TaggedTensorTuple::*;
         match x {
@@ -1339,6 +1350,10 @@ impl CandleBackend {
 
     fn cos(x: &Tensor) -> CandleTensor {
         x.cos().unwrap().into()
+    }
+
+    fn exp(x: &Tensor) -> CandleTensor {
+        x.exp().unwrap().into()
     }
 
     fn log(x: &Tensor) -> CandleTensor {
