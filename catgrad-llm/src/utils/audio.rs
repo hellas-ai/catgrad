@@ -1,5 +1,5 @@
 use crate::{LLMError, Result};
-use catgrad_llm_models::utils::{AUDIO_FEATURE_SIZE, PreparedAudioFeatures};
+use catgrad_llm_models::utils::{AUDIO_FEATURE_SIZE, ModelRuntimeContext, PreparedAudioFeatures};
 use hound::{SampleFormat, WavReader};
 use rustfft::{FftPlanner, num_complex::Complex32};
 use std::path::Path;
@@ -13,6 +13,15 @@ pub const AUDIO_FFT_LENGTH: usize = 512;
 pub const AUDIO_MEL_FLOOR: f32 = 1e-3;
 const GEMMA4_AUDIO_MAX_SAMPLES: usize = 480_000;
 const GEMMA4_AUDIO_PAD_TO_MULTIPLE_OF: usize = 128;
+
+#[derive(Debug, Clone)]
+pub struct PreparedAudioInput {
+    pub features: Vec<f32>,
+    pub shape: Vec<usize>,
+    pub mask: Vec<f32>,
+    pub mask_shape: Vec<usize>,
+    pub runtime_context: ModelRuntimeContext,
+}
 
 pub fn load_wav_file(path: &Path) -> Result<Vec<f32>> {
     let mut reader =
@@ -162,9 +171,41 @@ pub fn prepare_audio_features(path: &Path) -> Result<PreparedAudioFeatures> {
 pub fn prepare_gemma4_audio_input(
     audio_path: &Path,
     config_json: &serde_json::Value,
-) -> Result<crate::models::gemma4::Gemma4PreparedAudioInput> {
-    let prepared = prepare_audio_features(audio_path)?;
-    Ok(crate::models::gemma4::prepare_gemma4_audio_input_from_features(prepared, config_json)?)
+) -> Result<PreparedAudioInput> {
+    match catgrad_llm_models::utils::get_model_architecture(config_json)? {
+        "Gemma4ForConditionalGeneration" => {
+            let prepared = prepare_audio_features(audio_path)?;
+            let prepared = crate::models::gemma4::prepare_gemma4_audio_input_from_features(
+                prepared,
+                config_json,
+            )?;
+            Ok(PreparedAudioInput {
+                features: prepared.features,
+                shape: prepared.shape,
+                mask: prepared.mask,
+                mask_shape: prepared.mask_shape,
+                runtime_context: ModelRuntimeContext::Gemma4Audio(prepared.runtime_audio),
+            })
+        }
+        "Gemma4UnifiedForConditionalGeneration" => {
+            let waveform = load_wav_file(audio_path)?;
+            let prepared =
+                crate::models::gemma4_unified::prepare_gemma4_unified_audio_input_from_waveform(
+                    &waveform,
+                    config_json,
+                )?;
+            Ok(PreparedAudioInput {
+                features: prepared.features,
+                shape: prepared.shape,
+                mask: prepared.mask,
+                mask_shape: prepared.mask_shape,
+                runtime_context: ModelRuntimeContext::Gemma4UnifiedAudio(prepared.runtime_audio),
+            })
+        }
+        arch => Err(LLMError::InvalidModelConfig(format!(
+            "Model architecture {arch} does not support audio input"
+        ))),
+    }
 }
 
 fn hann_window() -> Vec<f32> {

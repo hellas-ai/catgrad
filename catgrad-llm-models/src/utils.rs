@@ -35,6 +35,8 @@ pub enum ModelRuntimeContext {
     Qwen3_5Vision(models::qwen3_5::Qwen3_5RuntimeVisionConfig),
     Gemma4Vision(models::gemma4::Gemma4RuntimeVisionConfig),
     Gemma4Audio(models::gemma4::Gemma4RuntimeAudioConfig),
+    Gemma4UnifiedVision(models::gemma4_unified::Gemma4UnifiedRuntimeVisionConfig),
+    Gemma4UnifiedAudio(models::gemma4_unified::Gemma4UnifiedRuntimeAudioConfig),
     Lfm2Vision(models::lfm2::Lfm2RuntimeVisionConfig),
 }
 
@@ -89,6 +91,19 @@ pub fn prepare_multimodal_image_input(
                     shape: prepared.shape,
                 }),
                 runtime_context: Some(ModelRuntimeContext::Gemma4Vision(prepared.runtime_vision)),
+            })
+        }
+        "Gemma4UnifiedForConditionalGeneration" => {
+            let prepared =
+                models::gemma4_unified::prepare_gemma4_unified_image_input(image, config_json)?;
+            Ok(PreparedMultimodalInput {
+                image: Some(PreparedImageInput {
+                    data: prepared.patches,
+                    shape: prepared.shape,
+                }),
+                runtime_context: Some(ModelRuntimeContext::Gemma4UnifiedVision(
+                    prepared.runtime_vision,
+                )),
             })
         }
         "Lfm2VlForConditionalGeneration" => {
@@ -194,6 +209,25 @@ pub fn get_model(
                 },
                 dtype,
             )?),
+            "Gemma4UnifiedForConditionalGeneration" => {
+                Box::new(models::gemma4_unified::Gemma4UnifiedModel::new(
+                    "model.language_model",
+                    config_json,
+                    match runtime_context {
+                        Some(ModelRuntimeContext::Gemma4UnifiedVision(runtime_vision)) => {
+                            Some(runtime_vision)
+                        }
+                        _ => None,
+                    },
+                    match runtime_context {
+                        Some(ModelRuntimeContext::Gemma4UnifiedAudio(runtime_audio)) => {
+                            Some(runtime_audio)
+                        }
+                        _ => None,
+                    },
+                    dtype,
+                )?)
+            }
             "Mistral3ForConditionalGeneration" => Box::new(models::mistral3::Mistral3Model::new(
                 "language_model",
                 config_json,
