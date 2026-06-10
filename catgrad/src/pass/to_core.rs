@@ -105,6 +105,7 @@ pub(crate) fn core_declarations() -> HashMap<lang::Path, core::Operation> {
         (path!["tensor", "exp"], Operation::Tensor(Map(Exp))),
         (path!["tensor", "log"], Operation::Tensor(Map(Log))),
         (path!["tensor", "floor"], Operation::Tensor(Map(Floor))),
+        (path!["tensor", "round"], Operation::Tensor(Map(Round))),
         (path!["tensor", "lt"], Operation::Tensor(Map(LT))),
         (path!["tensor", "gt"], Operation::Tensor(Map(GT))),
         (path!["tensor", "gte"], Operation::Tensor(Map(GTE))),

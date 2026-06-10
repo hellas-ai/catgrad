@@ -398,6 +398,14 @@ impl Backend for NdArrayBackend {
         }
     }
 
+    fn round(&self, x: TaggedTensor<Self>) -> TaggedTensor<Self> {
+        use TaggedTensorTuple::*;
+        match x {
+            F32([arr]) => from_f32(Self::round_f32(arr.unwrap_f32())),
+            _ => panic!("Invalid input types for round"),
+        }
+    }
+
     fn max(&self, x: TaggedTensor<Self>) -> TaggedTensor<Self> {
         use TaggedTensorTuple::*;
         match x {
@@ -633,6 +641,10 @@ impl NdArrayBackend {
         ndarray::Zip::from(&x)
             .and(&y)
             .map_collect(|&a, &b| a.powf(b))
+    }
+
+    fn round_f32(x: ArrayD<f32>) -> ArrayD<f32> {
+        x.mapv(f32::round_ties_even)
     }
 
     fn pow_u32(x: ArrayD<u32>, y: ArrayD<u32>) -> ArrayD<u32> {

@@ -259,6 +259,7 @@ pub enum ScalarOp {
     Exp,   // 1 → 1
     Log,   // 1 → 1
     Floor, // 1 → 1
+    Round, // 1 → 1
     Where, // 3 → 1
 }
 
@@ -282,6 +283,7 @@ impl ScalarOp {
             ScalarOp::Exp => (1, 1),
             ScalarOp::Log => (1, 1),
             ScalarOp::Floor => (1, 1),
+            ScalarOp::Round => (1, 1),
             ScalarOp::Where => (3, 1),
         }
     }
