@@ -75,6 +75,7 @@ pub trait Backend: Clone + Debug {
     fn exp(&self, x: TaggedTensor<Self>) -> TaggedTensor<Self>;
     fn log(&self, x: TaggedTensor<Self>) -> TaggedTensor<Self>;
     fn floor(&self, x: TaggedTensor<Self>) -> TaggedTensor<Self>;
+    fn round(&self, x: TaggedTensor<Self>) -> TaggedTensor<Self>;
     fn neg(&self, x: TaggedTensor<Self>) -> TaggedTensor<Self>;
     fn broadcast(&self, x: TaggedTensor<Self>, shape: Shape) -> TaggedTensor<Self>;
     fn reshape(&self, x: TaggedTensor<Self>, new_shape: Shape) -> TaggedTensor<Self>;

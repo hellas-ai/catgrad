@@ -100,6 +100,10 @@ pub fn floor(builder: &Builder, value: Var) -> Var {
     var::fn_operation(builder, &[value], Object::Tensor, op!["tensor", "floor"])
 }
 
+pub fn round(builder: &Builder, value: Var) -> Var {
+    var::fn_operation(builder, &[value], Object::Tensor, op!["tensor", "round"])
+}
+
 ////////////////////////////////////////////////////////////////////////////////
 // Declarations
 

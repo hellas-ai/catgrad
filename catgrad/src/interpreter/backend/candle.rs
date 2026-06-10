@@ -826,6 +826,17 @@ impl Backend for CandleBackend {
         }
     }
 
+    fn round(&self, x: TaggedTensor<Self>) -> TaggedTensor<Self> {
+        use TaggedTensorTuple::*;
+        match x {
+            F32([arr]) => F32([Self::unary_eager(arr, DType::F32, Self::round)]),
+            F16([arr]) => F16([Self::unary_eager(arr, DType::F16, Self::round)]),
+            BF16([arr]) => BF16([Self::unary_eager(arr, DType::BF16, Self::round)]),
+            FP8([arr]) => FP8([Self::unary_eager(arr, DType::F8E4M3, Self::round)]),
+            _ => panic!("Invalid type for round"),
+        }
+    }
+
     fn max(&self, x: TaggedTensor<Self>) -> TaggedTensor<Self> {
         use TaggedTensorTuple::*;
         match x {
@@ -1365,6 +1376,23 @@ impl CandleBackend {
         x.floor().unwrap().into()
     }
 
+    fn round(x: &Tensor) -> CandleTensor {
+        let dtype = x.dtype();
+        let shape = x.dims().to_vec();
+        let device = x.device().clone();
+        let result_vec: Vec<f32> = Self::float_tensor_to_f32_vec(x)
+            .into_iter()
+            .map(f32::round_ties_even)
+            .collect();
+        let result_tensor = Tensor::from_vec(result_vec, shape, &device).unwrap();
+        let result_tensor = if dtype == DType::F32 {
+            result_tensor
+        } else {
+            result_tensor.to_dtype(dtype).unwrap()
+        };
+        result_tensor.into()
+    }
+
     // Candle's pow function does not support negative base and silently generates NaNs
     // so we do element-wise powf https://github.com/huggingface/candle/issues/1640
     fn pow(x: &Tensor, y: &Tensor) -> CandleTensor {
@@ -1574,4 +1602,34 @@ fn test_indexed_select_rhs_matmul_matches_materialized_gather() {
         actual.flatten_all().unwrap().to_vec1::<f32>().unwrap(),
         expected.flatten_all().unwrap().to_vec1::<f32>().unwrap()
     );
+}
+
+#[test]
+fn test_round_matches_python_ties_even() {
+    let tensor = Tensor::new(
+        &[1.2f32, 1.8, 2.5, 3.5, -1.2, -1.8, -2.5, -3.5],
+        &candle_core::Device::Cpu,
+    )
+    .unwrap()
+    .reshape(&[2, 4])
+    .unwrap();
+
+    let actual = CandleBackend::round(&tensor).materialize();
+    let expected = [1.0f32, 2.0, 2.0, 4.0, -1.0, -2.0, -2.0, -4.0];
+
+    assert_eq!(actual.dims(), &[2, 4]);
+    for (i, (&actual, &expected)) in actual
+        .flatten_all()
+        .unwrap()
+        .to_vec1::<f32>()
+        .unwrap()
+        .iter()
+        .zip(expected.iter())
+        .enumerate()
+    {
+        assert_eq!(
+            actual, expected,
+            "Mismatch at index {i}: got {actual}, expected {expected}"
+        );
+    }
 }

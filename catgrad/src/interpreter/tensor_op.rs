@@ -21,6 +21,7 @@ pub(crate) fn tensor_op<B: Backend>(
         TensorOp::Map(ScalarOp::Exp) => unary_op(backend, args, ssa, B::exp),
         TensorOp::Map(ScalarOp::Log) => unary_op(backend, args, ssa, B::log),
         TensorOp::Map(ScalarOp::Floor) => unary_op(backend, args, ssa, B::floor),
+        TensorOp::Map(ScalarOp::Round) => unary_op(backend, args, ssa, B::round),
         TensorOp::Map(ScalarOp::Neg) => unary_op(backend, args, ssa, B::neg),
         TensorOp::Map(ScalarOp::Mul) => binop(backend, args, ssa, B::mul),
         TensorOp::Map(ScalarOp::Div) => binop(backend, args, ssa, B::div),
